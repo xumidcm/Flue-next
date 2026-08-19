@@ -26,7 +26,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.AlertDialog
+import com.flue.launcher.ui.style.FlueAlertDialog
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
@@ -63,15 +63,15 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.flue.launcher.i18n.FlueComponentActivity
-import com.flue.launcher.ui.common.flueElasticNestedScroll
+import com.flue.launcher.ui.style.flueOverscroll
 import com.flue.launcher.ui.common.isFlueScreenRound
 import com.flue.launcher.ui.input.flueRotaryScrollable
 import com.flue.launcher.ui.input.ROTARY_SCROLL_MULTIPLIER
 import com.flue.launcher.ui.input.requestFocusAfterFirstFrame
 import com.flue.launcher.ui.settings.miuix.MiuixSettingsCard
 import com.flue.launcher.ui.settings.miuix.MiuixSettingsRow
-import com.flue.launcher.ui.settings.miuix.MiuixSlider
-import com.flue.launcher.ui.settings.miuix.MiuixSwitch
+import com.flue.launcher.ui.style.FlueSlider
+import com.flue.launcher.ui.style.FlueSwitch
 import com.flue.launcher.ui.theme.LauncherTheme
 import com.flue.launcher.ui.theme.ProvideGlobalUiScale
 import com.flue.launcher.ui.theme.UiStyle
@@ -163,20 +163,36 @@ private fun CanvasAdjustScreen(
     }
 
     // 三层继承与设置页同源：覆盖表里有这张表盘就用它自己的，否则用全局默认。
-    val followsDefault = descriptor.id !in canvasOverrides
+    val persistedFollowsDefault = descriptor.id !in canvasOverrides
     val persisted = canvasOverrides[descriptor.id] ?: canvasDefault
 
-    // draft 是**实时预览**用的那一份：拖动中每帧更新它、喂给渲染器，但不落盘。
-    // 落盘只在手指抬起（onValueChangeFinished）时发生 —— 每帧一次 DataStore 写
-    // 会把滑杆拖卡，这条教训在设置页原来那套滑杆里已经写死了。
-    var draft by remember { mutableStateOf(persisted) }
-    // 落盘值变了（滑杆抬手写回、或者跟随开关切换到了另一层）就把 draft 拉回来对齐。
-    LaunchedEffect(persisted) { draft = persisted }
+    // ── 整页只改草稿，只有「完成」才落盘 ─────────────────────────────────────
+    //
+    // 老师定的预期行为：「如果用户没有点击完成，直接退出去，它就应该不会保存数值。
+    // 只有点击完成才应该保存。」
+    //
+    // 这同时修掉了老师报的另一个 bug：「拉完一个拉杆立刻去拉下一个，再拉回第一个，
+    // 有概率数值被重置回原本的数值」。根因是原来抬手就写 DataStore —— 写是异步的，
+    // 回读的 StateFlow 可能先再吐一次**旧值**，于是
+    // `LaunchedEffect(persisted) { draft = persisted }` 把草稿拽回旧值，
+    // 行内的 `LaunchedEffect(value) { localValue = value }` 再把滑杆拉回去。
+    // 编辑期间根本不写盘，这条竞态就不存在了。
+    //
+    // 草稿按 descriptor.id 记忆：换表盘要重新装载，同一张表盘上的编辑不能被外部回读打断。
+    var draft by remember(descriptor.id) { mutableStateOf(persisted) }
+    // 「跟随全局默认」也是草稿的一部分：它决定这次编辑落到哪一层，
+    // 跟数值一起在「完成」时才生效，否则会出现「数值没保存但层已经换了」。
+    var draftFollowsDefault by remember(descriptor.id) { mutableStateOf(persistedFollowsDefault) }
 
-    val commit: (WatchCanvasSettings) -> Unit = { updated ->
-        draft = updated
-        if (followsDefault) vm.setWatchfaceCanvasDefault(updated)
-        else vm.setWatchfaceCanvasOverride(descriptor.id, updated)
+    val saveDraft: () -> Unit = {
+        if (draftFollowsDefault) {
+            // 先撤掉这张表盘的覆盖（如果有），再写全局默认。顺序反了的话
+            // 覆盖还在，写进默认层的值当场看不见。
+            vm.setWatchfaceCanvasFollowsDefault(descriptor.id, true)
+            vm.setWatchfaceCanvasDefault(draft)
+        } else {
+            vm.setWatchfaceCanvasOverride(descriptor.id, draft)
+        }
     }
 
     val dataProvider = rememberWatchmakerWatchDataProvider(active = true)
@@ -218,16 +234,25 @@ private fun CanvasAdjustScreen(
             CanvasAdjustPanel(
                 faceName = descriptor.displayName,
                 settings = draft,
-                followsDefault = followsDefault,
+                followsDefault = draftFollowsDefault,
                 maxPanelHeight = configuration.screenHeightDp.dp * 0.62f,
                 horizontalMargin = if (round) 20.dp else 10.dp,
                 bottomMargin = if (round) 16.dp else 8.dp,
                 onFollowToggle = { follow ->
-                    vm.setWatchfaceCanvasFollowsDefault(descriptor.id, follow)
+                    draftFollowsDefault = follow
+                    // 打开跟随 = 「用全局默认那一份」，所以数值也要跳到全局默认，
+                    // 不然开关说跟随、画面还是自己那套。
+                    // 关掉跟随则**保留当前画面**当新覆盖的起点（与 ViewModel 里
+                    // 「关跟随时快照当前生效值」同一条道理）。
+                    if (follow) draft = canvasDefault
                 },
-                onPreview = { draft = it },
-                onCommit = commit,
-                onDone = onDismiss,
+                onPreview = { transform -> draft = transform(draft) },
+                // 抬手 / 选铺法 / 输入数值 / 重置都只改草稿；落盘只在「完成」。
+                onCommit = { transform -> draft = transform(draft) },
+                onDone = {
+                    saveDraft()
+                    onDismiss()
+                },
             )
         }
     }
@@ -246,8 +271,20 @@ private fun CanvasAdjustPanel(
     horizontalMargin: Dp,
     bottomMargin: Dp,
     onFollowToggle: (Boolean) -> Unit,
-    onPreview: (WatchCanvasSettings) -> Unit,
-    onCommit: (WatchCanvasSettings) -> Unit,
+    /**
+     * 预览 / 落草稿都收**变换函数**而不是现成的 settings。
+     *
+     * 收现成值的话每一行都得写 `onPreview(settings.copy(zoomX = it))` —— `settings` 是组合期
+     * 捕获的。滑杆的手势协程只在 key 变化时重启（`pointerInput` 的语义），于是它可能一直握着
+     * 第一次组合时的那个 lambda，连同**那一刻的 settings**：调完 zoomX 再调 zoomY，回头再动
+     * zoomX，写回去的是「旧 settings + 新 zoomX」，刚调好的 zoomY 就被按回原值了。
+     * 这是老师报的「第二个数值有概率被强制拉回」。
+     *
+     * 收变换函数之后，基准值由**持有草稿的那一方**在调用时现取，任何一档滑块实现过期都不影响
+     * 正确性（AppleSlider 那侧也另外用 rememberUpdatedState 兜了一层）。
+     */
+    onPreview: ((WatchCanvasSettings) -> WatchCanvasSettings) -> Unit,
+    onCommit: ((WatchCanvasSettings) -> WatchCanvasSettings) -> Unit,
     onDone: () -> Unit,
 ) {
     val style = LauncherTheme.style
@@ -272,7 +309,7 @@ private fun CanvasAdjustPanel(
                 .flueRotaryScrollable(focusRequester, ROTARY_SCROLL_MULTIPLIER) { rotaryDelta ->
                 scope.launch { scrollState.scrollBy(-rotaryDelta) }
             }
-            .flueElasticNestedScroll(scrollState)
+            .flueOverscroll(scrollState)
             .verticalScroll(scrollState)
             .padding(horizontal = 14.dp, vertical = 16.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp),
@@ -301,7 +338,7 @@ private fun CanvasAdjustPanel(
 
         CanvasPresetGrid(
             selected = settings.preset,
-            onSelect = { onCommit(settings.copy(preset = it)) },
+            onSelect = { preset -> onCommit { current -> current.copy(preset = preset) } },
         )
 
         CanvasSliderRow(
@@ -310,8 +347,8 @@ private fun CanvasAdjustPanel(
             range = CANVAS_ZOOM_RANGE,
             steps = CANVAS_ZOOM_STEPS,
             format = ::formatZoom,
-            onPreview = { onPreview(settings.copy(zoomX = it)) },
-            onCommit = { onCommit(settings.copy(zoomX = it)) },
+            onPreview = { value -> onPreview { current -> current.copy(zoomX = value) } },
+            onCommit = { value -> onCommit { current -> current.copy(zoomX = value) } },
         )
         CanvasSliderRow(
             title = stringResource(R.string.settings_watchface_canvas_zoom_y),
@@ -319,8 +356,8 @@ private fun CanvasAdjustPanel(
             range = CANVAS_ZOOM_RANGE,
             steps = CANVAS_ZOOM_STEPS,
             format = ::formatZoom,
-            onPreview = { onPreview(settings.copy(zoomY = it)) },
-            onCommit = { onCommit(settings.copy(zoomY = it)) },
+            onPreview = { value -> onPreview { current -> current.copy(zoomY = value) } },
+            onCommit = { value -> onCommit { current -> current.copy(zoomY = value) } },
         )
         CanvasSliderRow(
             title = stringResource(R.string.settings_watchface_canvas_offset_x),
@@ -328,8 +365,8 @@ private fun CanvasAdjustPanel(
             range = CANVAS_OFFSET_RANGE,
             steps = CANVAS_OFFSET_STEPS,
             format = ::formatOffset,
-            onPreview = { onPreview(settings.copy(offsetX = it)) },
-            onCommit = { onCommit(settings.copy(offsetX = it)) },
+            onPreview = { value -> onPreview { current -> current.copy(offsetX = value) } },
+            onCommit = { value -> onCommit { current -> current.copy(offsetX = value) } },
         )
         CanvasSliderRow(
             title = stringResource(R.string.settings_watchface_canvas_offset_y),
@@ -337,14 +374,16 @@ private fun CanvasAdjustPanel(
             range = CANVAS_OFFSET_RANGE,
             steps = CANVAS_OFFSET_STEPS,
             format = ::formatOffset,
-            onPreview = { onPreview(settings.copy(offsetY = it)) },
-            onCommit = { onCommit(settings.copy(offsetY = it)) },
+            onPreview = { value -> onPreview { current -> current.copy(offsetY = value) } },
+            onCommit = { value -> onCommit { current -> current.copy(offsetY = value) } },
         )
 
         CanvasActionRow(
             resetLabel = stringResource(R.string.settings_watchface_canvas_reset),
             doneLabel = stringResource(R.string.canvas_adjust_done),
-            onReset = { onCommit(WatchCanvasSettings.DEFAULT) },
+            // 「重置」＝退回出厂铺法（铺满），而不是退回中性 FIT ——
+            // 全局默认已经是铺满，重置给 FIT 会得到一个不是默认的「默认」。
+            onReset = { onCommit { WatchCanvasSettings.GLOBAL_DEFAULT } },
             onDone = onDone,
         )
     }
@@ -443,7 +482,7 @@ private fun CanvasSwitchRow(
                 title = title,
                 subtitle = subtitle,
                 onClick = { onToggle(!checked) },
-                trailing = { MiuixSwitch(checked = checked, onCheckedChange = onToggle) },
+                trailing = { FlueSwitch(checked = checked, onCheckedChange = onToggle) },
             )
         }
         return
@@ -463,60 +502,14 @@ private fun CanvasSwitchRow(
             Text(text = subtitle, color = style.secondaryTextColor, fontSize = 11.sp)
         }
         Spacer(modifier = Modifier.size(10.dp))
-        CanvasHandDrawnSwitch(checked = checked, onToggle = onToggle)
+        FlueSwitch(checked = checked, onCheckedChange = onToggle)
     }
 }
 
-/**
- * 手搓开关。全项目的开关都是手搓的（设置页两条分支都没用
- * `androidx.compose.material3.Switch`），这里跟上同一套做法，并按老师要求
- * 「尺寸加大 + 点按震动」：轨道 44×26dp，切换时走 ToggleOn/ToggleOff 触感。
- */
-@Composable
-private fun CanvasHandDrawnSwitch(
-    checked: Boolean,
-    onToggle: (Boolean) -> Unit,
-) {
-    val style = LauncherTheme.style
-    val haptics = LocalHapticFeedback.current
-    val knobProgress by animateFloatAsState(
-        targetValue = if (checked) 1f else 0f,
-        animationSpec = spring(
-            dampingRatio = 0.82f,
-            stiffness = 760f,
-        ),
-        label = "canvasSwitchKnob",
-    )
-    val trackColor = if (checked) style.positiveColor else style.secondaryTextColor.copy(alpha = 0.45f)
-    Box(
-        modifier = Modifier
-            .size(width = 44.dp, height = 26.dp)
-            .clip(CircleShape)
-            .background(trackColor)
-            .pointerInput(checked) {
-                detectTapGestures {
-                    haptics.performHapticFeedback(
-                        if (checked) HapticFeedbackType.ToggleOff else HapticFeedbackType.ToggleOn
-                    )
-                    onToggle(!checked)
-                }
-            }
-    ) {
-        Box(
-            modifier = Modifier
-                .padding(start = 3.dp, top = 3.dp)
-                .size(20.dp)
-                // 行程 = 44 - 20 - 3*2 = 18dp。
-                .graphicsLayer { translationX = 18.dp.toPx() * knobProgress }
-                .clip(CircleShape)
-                .background(Color.White)
-        )
-    }
-}
 
 /**
  * 滑杆一律用预设组件（老师要求「滑动条用预设不自绘」）：MIUIX 走
- * [MiuixSlider]，另外两套走官方 M3 [Slider]（MD3 侧因此自动吃到
+ * [FlueSlider]（MIUIX 档是 miuix 库真组件，另两档见各自实现；MD3 侧因此自动吃到
  * Expressive 的形状与动效，因为 `MaterialExpressiveTheme` 已在主题层生效）。
  *
  * [onPreview] 每帧调、只改内存里的 draft 喂给渲染器；[onCommit] 只在抬手时调、
@@ -566,7 +559,7 @@ private fun CanvasSliderRow(
                 },
             )
             Box(modifier = Modifier.padding(horizontal = 16.dp).padding(bottom = 14.dp)) {
-                MiuixSlider(
+                FlueSlider(
                     value = localValue,
                     onValueChange = { localValue = it; onPreview(it) },
                     valueRange = range,
@@ -601,16 +594,12 @@ private fun CanvasSliderRow(
                 modifier = Modifier.canvasValueClickable { showInput = true },
             )
         }
-        Slider(
+        FlueSlider(
             value = localValue,
             onValueChange = { localValue = it; onPreview(it) },
             valueRange = range,
             steps = steps,
             onValueChangeFinished = { onCommit(localValue) },
-            colors = SliderDefaults.colors(
-                thumbColor = style.accentColor,
-                activeTrackColor = style.accentColor,
-            ),
         )
     }
 }
@@ -633,9 +622,9 @@ private fun CanvasValueInputDialog(
     // （`1.20×` / `-200 px`），剥出来还要处理空格、小数位被展示格式锁死，
     // 而这里要的就是可编辑的原始值。
     var draft by remember { mutableStateOf(canvasInputInitialText(current)) }
-    val parsed = draft.trim().toFloatOrNull()
-    val valid = parsed != null && parsed in range
-    AlertDialog(
+    val parsed = canvasInputValueOrNull(draft)
+    val valid = parsed != null
+    FlueAlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(title) },
         text = {
@@ -649,7 +638,7 @@ private fun CanvasValueInputDialog(
                         keyboardType = KeyboardType.Decimal,
                         imeAction = ImeAction.Done,
                     ),
-                    keyboardActions = KeyboardActions(onDone = { if (valid) onConfirm(parsed!!) }),
+                    keyboardActions = KeyboardActions(onDone = { parsed?.let(onConfirm) }),
                     modifier = Modifier.fillMaxWidth(),
                 )
                 Text(
@@ -661,7 +650,7 @@ private fun CanvasValueInputDialog(
             }
         },
         confirmButton = {
-            TextButton(onClick = { if (valid) onConfirm(parsed!!) }, enabled = valid) {
+            TextButton(onClick = { parsed?.let(onConfirm) }, enabled = valid) {
                 Text(stringResource(R.string.canvas_adjust_done))
             }
         },
@@ -800,6 +789,17 @@ private fun canvasInputInitialText(value: Float): String =
     } else {
         "%.2f".format(Locale.US, value)
     }
+
+/**
+ * 手输数值的校验：**只**要求能解析成有限数，故意不拿滑块量程当闸门 ——
+ * 老师要的是「输入 8 但滑块只到 5 就点不了确定」这件事消失。真正的上下限
+ * 只在渲染侧收敛一次（见 `WatchmakerRuntimeContracts.watchCanvasTransform`），
+ * 这里再加一道会变成两套限制，改一处漏一处。
+ *
+ * NaN / ±Infinity 仍然拒掉 —— 它们会让画布矩阵退化成空帧。
+ */
+internal fun canvasInputValueOrNull(raw: String): Float? =
+    raw.trim().toFloatOrNull()?.takeIf { it.isFinite() }
 
 private fun canvasPresetTitleRes(preset: WatchCanvasPreset): Int = when (preset) {
     WatchCanvasPreset.FIT -> R.string.settings_watchface_canvas_preset_fit

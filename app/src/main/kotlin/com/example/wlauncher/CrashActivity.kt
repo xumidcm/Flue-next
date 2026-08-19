@@ -36,7 +36,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.flue.launcher.ui.common.flueElasticNestedScroll
+import com.flue.launcher.ui.style.flueOverscroll
 import com.flue.launcher.util.RecentsVisibility
 import java.io.File
 import java.util.Locale
@@ -116,7 +116,7 @@ fun CrashScreen(
         modifier = Modifier
             .fillMaxSize()
             .background(Color.Black)
-            .flueElasticNestedScroll(scrollState)
+            .flueOverscroll(scrollState)
             .verticalScroll(scrollState)
             .padding(horizontal = 24.dp, vertical = 32.dp)
     ) {

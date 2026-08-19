@@ -865,6 +865,45 @@ private fun String?.isWatchmakerProtectionEnabled(): Boolean = when (this?.trim(
     else -> false
 }
 
+/**
+ * 归档里的 `watch.xml` 有没有声明 WatchMaker 的 `protection`。
+ *
+ * ## 为什么需要这个判据
+ *
+ * 「标准受保护表盘」和 Flue 里另一套 `jbwatch` 渲染路径在**文件结构上完全一样**：
+ * 都是一个被剥空的 `watch.xml` 骨架 ＋ 一个编码过的 `watch.pxml`。所以按文件名判断
+ * 归档类型必然分不开这两者。
+ *
+ * 真正的分界线是这个属性：[WatchArchiveInstaller] 只有看到 `protection` 才会去解
+ * `watch.pxml`（见上面 `inspectDefinition`）。声明了就交给标准渲染器——那条路支持
+ * 全部图层类型、能编辑、能调画布；没声明的包标准安装器只会读到一个零图层的骨架，
+ * 那才该落回 jbwatch。
+ *
+ * 曾经的症状：Flue 自己导出的受保护表盘（一定带 `protection="y"`）经浏览器下载后
+ * 手动导入，被按文件名判成 jbwatch，于是名字退化成文件名「.watch」、卡顿、既不能
+ * 编辑也不能调画布；同一个包走 Flue 商店安装却完全正常 —— 因为商店那条路直接调
+ * [WatchArchiveInstaller]，根本不经过按文件名的归档嗅探。
+ *
+ * 读不出来（坏 zip、超大 XML、解析失败）时返回 false：这是个「往哪条路走」的提示，
+ * 不是安全闸门，真正的校验在安装器里。
+ */
+fun watchArchiveDeclaresProtection(
+    archive: File,
+    limits: WatchArchiveLimits = WatchArchiveLimits(),
+): Boolean = runCatching {
+    ZipFile(archive).use { zip ->
+        val entry = zip.entries().asSequence().firstOrNull { candidate ->
+            !candidate.isDirectory &&
+                candidate.name.replace('\\', '/').substringAfterLast('/')
+                    .equals(WATCH_XML_FILE_NAME, ignoreCase = true)
+        } ?: return@use false
+        val definition = zip.getInputStream(entry).use { input ->
+            WatchmakerDefinitionParser().parse(input, limits.maximumXmlOrScriptBytes)
+        }
+        definition.rootAttributes.valueForIgnoreCase("protection").isWatchmakerProtectionEnabled()
+    }
+}.getOrDefault(false)
+
 private fun Map<String, String>.valueForIgnoreCase(name: String): String? =
     entries.firstOrNull { (key, _) -> key.equals(name, ignoreCase = true) }?.value
 

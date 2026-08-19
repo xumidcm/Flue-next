@@ -155,7 +155,32 @@ data class LauncherStyle(
     val launchMaskEnterSpec: FiniteAnimationSpec<Float>,
     val launchMaskExitSpec: FiniteAnimationSpec<Float>,
     val pressScaleSpec: FiniteAnimationSpec<Float>,
-    val switchThumbTravel: Float
+    val switchThumbTravel: Float,
+    /**
+     * 圆屏胶囊圆角的上限。`null` = 不设上限，取满半高。
+     *
+     * 三档取值互不相同，这是三套形状语言各自成立的地方：**APPLE 32dp**（标准 56dp 行取满
+     * 28dp 半高，是真胶囊；被内容撑高的行停在 32dp 大圆角，不再拉成长药丸）、**MD3 28dp**、
+     * **MIUIX 22dp**（HyperOS 的平滑大圆角档）。
+     *
+     * 三档都给了上限还有一个附带作用：弧深不再随行高无限增长，所以
+     * [com.flue.launcher.ui.style.flueRowHorizontalPadding] 可以按名义行高查表，
+     * 不需要为长文字行做内在测量。
+     *
+     * 由 A2 的 [RoundElementShape] 与 `FlueCapsuleGeometry.capsuleRadiusPx` 消费。
+     */
+    val capsuleMaxRadius: Dp? = null,
+    /**
+     * 开关整体的视觉缩放。
+     *
+     * 留这个口子是为 Apple 档的按压放大（照 Kyant 那套，`pressedScale = 1.5`）留余量：
+     * 窄圆屏上 64dp 轨道占屏宽近 28%，得整体收一档才放得下。
+     */
+    val switchVisualScale: Float = 1f,
+    /** 开关的最小触摸目标。视觉可以缩，可点区域不缩。 */
+    val switchTouchTarget: Dp = 48.dp,
+    /** 该风格加载指示器的默认边长。三套的视觉密度不同，默认值也就不同。 */
+    val loadingIndicatorSize: Dp = 28.dp,
 )
 
 private val LocalLauncherStyle = compositionLocalOf { appleWatchLauncherStyle(darkMode = true) }
@@ -166,32 +191,62 @@ val UiStyle.isMaterial: Boolean
 val UiStyle.isMiuix: Boolean
     get() = this == UiStyle.MIUIX
 
+/**
+ * APPLE_WATCH 档配色。
+ *
+ * ## 老师报的「配色很诡异」，问题出在三处
+ *
+ * 1. **强调色是青色**（`ActiveCyan`）。Apple 的系统强调是蓝（`systemBlue`），青色是
+ *    Flue 自己的旧配色，摆在一套照 watchOS 做的形状语言里就是不搭。
+ * 2. **浅色档的几个令牌是深色档的值**：`outlineColor` 在浅色下仍是**白色 8%**（画在白卡上
+ *    等于没有分隔线），`secondaryTextColor` 两档共用一个浅灰（浅色底下几乎读不出来），
+ *    `appListPressedOverlay` 也是白色。这不是审美问题，是漏改。
+ * 3. **卡片是半透明白**（`0x1FFFFFFF`）。iOS 的分组列表卡片是**不透明**的
+ *    （深色 `secondarySystemBackground`、浅色纯白），半透明叠在渐变遮罩上会脏。
+ *
+ * 所以这一档换成 iOS / watchOS 的系统色：蓝 `#0A84FF`/`#007AFF`、开关绿
+ * `#30D158`/`#34C759`、深色卡片 `#1C1C1E`、浅色卡片纯白、分组底 `#F2F2F7`。
+ *
+ * `appListBaseColor` **刻意仍用半透明**：应用列表的图标底衬要能透出背景图（K 那批背景
+ * 功能就靠它），换成不透明会把自定义背景整片盖掉。
+ */
 fun appleWatchLauncherStyle(darkMode: Boolean): LauncherStyle {
-    val card = if (darkMode) Color(0x1FFFFFFF) else Color(0x16000000)
+    // 卡片：iOS 分组列表的表面色，两档都不透明。
+    val card = if (darkMode) Color(0xFF1C1C1E) else Color.White
+    // 图标底衬仍是半透明 —— 要透出应用列表背景图。
+    val listBase = if (darkMode) Color(0x1FFFFFFF) else Color(0x14000000)
+    val accent = if (darkMode) Color(0xFF0A84FF) else Color(0xFF007AFF)
+    val secondaryText = if (darkMode) Color(0x99EBEBF5) else Color(0x993C3C43)
     return LauncherStyle(
         uiStyle = UiStyle.APPLE_WATCH,
-        screenBackground = if (darkMode) Color.Black else Color(0xFFF7F7FA),
+        // watchOS 是纯黑底（OLED 上卡片边界自己就出来了）；浅色取 iOS 分组背景。
+        screenBackground = if (darkMode) Color.Black else Color(0xFFF2F2F7),
         screenScrim = Brush.verticalGradient(
             listOf(
-                Color.Black.copy(alpha = if (darkMode) 0.0f else 0.05f),
+                Color.Black.copy(alpha = if (darkMode) 0.0f else 0.04f),
                 Color.Transparent,
-                Color.Black.copy(alpha = if (darkMode) 0.34f else 0.10f)
+                Color.Black.copy(alpha = if (darkMode) 0.34f else 0.08f)
             )
         ),
         cardColor = card,
-        pressedCardColor = if (darkMode) Color(0xFF1A1A1D) else Color(0xFFE8E8ED),
-        selectedCardColor = WatchColors.ActiveCyan.copy(alpha = if (darkMode) 0.16f else 0.20f),
-        outlineColor = Color.White.copy(alpha = if (darkMode) 0.05f else 0.08f),
+        pressedCardColor = if (darkMode) Color(0xFF2C2C2E) else Color(0xFFE5E5EA),
+        selectedCardColor = accent.copy(alpha = if (darkMode) 0.22f else 0.14f),
+        // 浅色档必须用**黑**做分隔线：原来两档都是白色，浅色下画在白卡上等于没画。
+        outlineColor = if (darkMode) Color.White.copy(alpha = 0.10f) else Color.Black.copy(alpha = 0.10f),
         titleColor = if (darkMode) Color.White else Color(0xFF101216),
         bodyColor = if (darkMode) Color.White else Color(0xFF101216),
-        secondaryTextColor = WatchColors.TextTertiary,
-        accentColor = WatchColors.ActiveCyan,
-        positiveColor = WatchColors.ActiveGreen,
-        topBarChipColor = Color.White.copy(alpha = if (darkMode) 0.08f else 0.10f),
+        secondaryTextColor = secondaryText,
+        accentColor = accent,
+        positiveColor = if (darkMode) Color(0xFF30D158) else Color(0xFF34C759),
+        topBarChipColor = if (darkMode) Color.White.copy(alpha = 0.08f) else Color.Black.copy(alpha = 0.06f),
         topBarTextColor = if (darkMode) Color.White else Color(0xFF16181D),
-        appListBaseColor = card,
+        appListBaseColor = listBase,
         appListFadeColor = Color.Black.copy(alpha = if (darkMode) 0.72f else 0.08f),
-        appListPressedOverlay = Color.White.copy(alpha = if (darkMode) 0.08f else 0.04f),
+        appListPressedOverlay = if (darkMode) {
+            Color.White.copy(alpha = 0.08f)
+        } else {
+            Color.Black.copy(alpha = 0.06f)
+        },
         // 26dp 与通知卡对齐（原 24dp），panel 30dp 用于媒体卡等大块表面。
         cardShape = RoundedCornerShape(26.dp),
         compactShape = RoundedCornerShape(18.dp),
@@ -208,7 +263,21 @@ fun appleWatchLauncherStyle(darkMode: Boolean): LauncherStyle {
         launchMaskEnterSpec = tween(durationMillis = 140),
         launchMaskExitSpec = tween(durationMillis = 180),
         pressScaleSpec = spring(stiffness = 820f, dampingRatio = 0.74f),
-        switchThumbTravel = 22f
+        switchThumbTravel = 22f,
+        // 三套里最接近真胶囊的一档：56dp 标准行取满 28dp 半高，就是 watchOS 的读法。
+        //
+        // 上限不是 null 而是 32dp —— 老师报的「带滑竿的胶囊撑到边缘 / 长文字把胶囊撑得很难看」
+        // 就出在这里。设置页那 10 处容器全部显式传 RoundElementRole.CAPSULE，那一档**跳过**
+        // RowCapsuleShape 的宽高比护栏直接取半高：100dp 高的滑块行拿到 50dp 半径（两端各一个
+        // 50dp 半圆，正好啃在滑轨上），两行文字撑到 76dp 的行拿到 38dp。
+        //
+        // 32dp 这个值让「标准单行仍是真胶囊、被内容撑高的行退成大圆角」同时成立，
+        // 而且半径有了上限之后**弧深不再随行高增长** —— 内边距可以继续按名义行高查表，
+        // 不必为长文字去做内在测量（那条路已经在表盘市场三点菜单上崩过一次）。
+        capsuleMaxRadius = 32.dp,
+        switchVisualScale = 1f,
+        switchTouchTarget = 48.dp,
+        loadingIndicatorSize = 28.dp,
     )
 }
 
@@ -260,7 +329,13 @@ fun materialLauncherStyle(darkMode: Boolean): LauncherStyle {
         launchMaskEnterSpec = tween(durationMillis = 220),
         launchMaskExitSpec = tween(durationMillis = 220),
         pressScaleSpec = spring(stiffness = 560f, dampingRatio = 0.82f),
-        switchThumbTravel = 20f
+        switchThumbTravel = 20f,
+        // M3 有自己的 shape scale，圆屏也停在 28dp（compactShape 的 24dp 略放）。
+        capsuleMaxRadius = 28.dp,
+        switchVisualScale = 1f,
+        switchTouchTarget = 48.dp,
+        // Expressive 的 LoadingIndicator 形变靠形状读出来，小于 32dp 就看不清。
+        loadingIndicatorSize = 32.dp,
     )
 }
 
@@ -318,7 +393,12 @@ fun miuixLauncherStyle(darkMode: Boolean): LauncherStyle {
         launchMaskEnterSpec = tween(durationMillis = 180),
         launchMaskExitSpec = tween(durationMillis = 200),
         pressScaleSpec = spring(stiffness = 600f, dampingRatio = 0.9f),
-        switchThumbTravel = 22f
+        switchThumbTravel = 22f,
+        // HyperOS 是大圆角而非胶囊：22dp 与 panelShape 对齐，再大就成药丸了。
+        capsuleMaxRadius = 22.dp,
+        switchVisualScale = 1f,
+        switchTouchTarget = 48.dp,
+        loadingIndicatorSize = 28.dp,
     )
 }
 
@@ -367,17 +447,32 @@ object LauncherTheme {
 internal data class RowCapsuleShape(
     private val fallback: Shape,
     private val threshold: Float = 2.4f,
+    /**
+     * 胶囊圆角上限（像素）。`null` = 取满半高（真胶囊，仅 APPLE_WATCH）。
+     *
+     * MIUIX / MD3 有了上限之后，圆屏行是「大圆角」而不是药丸 —— 三套风格的形状语言
+     * 才各自成立。取值来自 [LauncherStyle.capsuleMaxRadius]。
+     */
+    private val maxRadiusPx: Float? = null,
 ) : Shape {
     /** 给定尺寸下是否取真胶囊（= 半高圆角）。抽出来是为了可单测阈值行为。 */
     fun isCapsuleAt(size: Size): Boolean =
         size.height > 0f && size.width >= size.height * threshold
+
+    /** 实际采用的圆角半径。与 `FlueCapsuleGeometry.capsuleRadiusPx` 同一套夹取规则。 */
+    fun radiusAt(size: Size): Float = com.flue.launcher.ui.style.FlueCapsuleGeometry
+        .capsuleRadiusPx(
+            rowHeightPx = size.height,
+            widthPx = size.width,
+            maxRadiusPx = maxRadiusPx,
+        )
 
     override fun createOutline(
         size: Size,
         layoutDirection: LayoutDirection,
         density: Density,
     ): Outline = if (isCapsuleAt(size)) {
-        Outline.Rounded(RoundRect(size.toRect(), CornerRadius(size.height / 2f)))
+        Outline.Rounded(RoundRect(size.toRect(), CornerRadius(radiusAt(size))))
     } else {
         fallback.createOutline(size, layoutDirection, density)
     }
@@ -394,6 +489,7 @@ enum class RoundElementRole {
 internal data class RoundElementShape(
     private val fallback: Shape,
     private val role: RoundElementRole,
+    private val maxRadiusPx: Float? = null,
 ) : Shape {
     override fun createOutline(
         size: Size,
@@ -401,12 +497,24 @@ internal data class RoundElementShape(
         density: Density,
     ): Outline = when (role) {
         RoundElementRole.CAPSULE -> if (size.height > 0f) {
-            Outline.Rounded(RoundRect(size.toRect(), CornerRadius(size.height / 2f)))
+            Outline.Rounded(
+                RoundRect(
+                    size.toRect(),
+                    CornerRadius(
+                        com.flue.launcher.ui.style.FlueCapsuleGeometry.capsuleRadiusPx(
+                            rowHeightPx = size.height,
+                            widthPx = size.width,
+                            maxRadiusPx = maxRadiusPx,
+                        ),
+                    ),
+                ),
+            )
         } else {
             fallback.createOutline(size, layoutDirection, density)
         }
         RoundElementRole.PANEL -> fallback.createOutline(size, layoutDirection, density)
-        RoundElementRole.AUTO -> RowCapsuleShape(fallback).createOutline(size, layoutDirection, density)
+        RoundElementRole.AUTO -> RowCapsuleShape(fallback, maxRadiusPx = maxRadiusPx)
+            .createOutline(size, layoutDirection, density)
     }
 }
 
@@ -426,7 +534,11 @@ fun LauncherStyle.roundAwareCardShape(
     role: RoundElementRole = RoundElementRole.AUTO,
 ): Shape =
     if (com.flue.launcher.ui.common.isFlueScreenRound()) {
-        RoundElementShape(fallback = cardShape, role = role)
+        RoundElementShape(
+            fallback = cardShape,
+            role = role,
+            maxRadiusPx = capsuleMaxRadiusPx(),
+        )
     } else {
         cardShape
     }
@@ -438,10 +550,27 @@ fun LauncherStyle.roundAwareCompactShape(
     role: RoundElementRole = RoundElementRole.AUTO,
 ): Shape =
     if (com.flue.launcher.ui.common.isFlueScreenRound()) {
-        RoundElementShape(fallback = compactShape, role = role)
+        RoundElementShape(
+            fallback = compactShape,
+            role = role,
+            maxRadiusPx = capsuleMaxRadiusPx(),
+        )
     } else {
         compactShape
     }
+
+/**
+ * [capsuleMaxRadius] 换算成像素。
+ *
+ * `Shape.createOutline` 拿到的是像素，而令牌是 `Dp`，换算必须在组合期做（那里有
+ * `LocalDensity`）。`null` 原样透传 —— 它表示「不设上限」，不是 0。
+ */
+@Composable
+@ReadOnlyComposable
+private fun LauncherStyle.capsuleMaxRadiusPx(): Float? {
+    val radius = capsuleMaxRadius ?: return null
+    return with(androidx.compose.ui.platform.LocalDensity.current) { radius.toPx() }
+}
 
 fun styleAwareEnterTransition(style: LauncherStyle): EnterTransition = EnterTransition.None
 

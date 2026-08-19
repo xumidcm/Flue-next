@@ -9,6 +9,14 @@ import org.junit.Test
 
 class ScaleBlurModifierTest {
     @Test
+    fun android12FallsBackToLegacyBlurWhenAdvancedMaterialIsDisabled() {
+        assertEquals(OverlayBlurBackend.LEGACY, overlayBlurBackend(30, advancedMaterialEnabled = true))
+        assertEquals(OverlayBlurBackend.SYSTEM, overlayBlurBackend(31, advancedMaterialEnabled = true))
+        assertEquals(OverlayBlurBackend.LEGACY, overlayBlurBackend(31, advancedMaterialEnabled = false))
+        assertEquals(OverlayBlurBackend.LEGACY, overlayBlurBackend(35, advancedMaterialEnabled = false))
+    }
+
+    @Test
     fun legacyPreparedBlurUsesReducedThreePassPolicy() {
         assertEquals(12, LEGACY_BACKDROP_BLUR_DOWNSAMPLE_DIVISOR)
         assertEquals(3, LEGACY_BACKDROP_BLUR_PASSES)

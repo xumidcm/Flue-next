@@ -229,8 +229,10 @@ class WatchFormatConverter(
         val document = newWatchDocument(
             title = title,
             shape = rootElement.getAttribute("shape").ifBlank { "R" },
-            width = rootElement.getAttribute("width").toIntOrNull() ?: 512,
-            height = rootElement.getAttribute("height").toIntOrNull() ?: 512,
+        )
+        val canvas = WffCanvasMapping.of(
+            rootElement.getAttribute("width").toIntOrNull(),
+            rootElement.getAttribute("height").toIntOrNull(),
         )
         val warnings = mutableListOf<String>()
         val unsupported = mutableListOf<String>()
@@ -246,11 +248,11 @@ class WatchFormatConverter(
             val type = node.tagName.lowercase(Locale.ROOT)
             val layer = when {
                 type in setOf("image", "bitmap", "picture") ->
-                    appendWffImage(extracted.root, imagesDir, document, node, warnings)
+                    appendWffImage(extracted.root, imagesDir, document, node, canvas, warnings)
                 type in setOf("text", "label", "textview") ->
-                    appendWffText(document, node)
+                    appendWffText(document, node, canvas)
                 type in setOf("arc", "progress", "ring") ->
-                    appendWffProgress(document, node)
+                    appendWffProgress(document, node, canvas)
                 else -> null
             }
             if (layer != null) converted++ else unsupported += node.tagName
@@ -374,6 +376,7 @@ class WatchFormatConverter(
         imagesDir: File,
         document: Document,
         source: Element,
+        canvas: WffCanvasMapping,
         warnings: MutableList<String>,
     ): Element? {
         val raw = source.getAttribute("src").ifBlank {
@@ -391,31 +394,58 @@ class WatchFormatConverter(
         asset.copyTo(File(imagesDir, targetName), overwrite = true)
         val layer = document.createElement("Layer")
         layer.setAttribute("type", "image")
-        layer.setAttribute("path", "images/$targetName")
-        copyIfPresent(source, layer, "x", "y", "width", "height", "rotation", "opacity", "color")
+        // 规范里 `path` 是 images/ **内部**的文件名，不带目录段（1.0 §7.1）。
+        // 写成 "images/xxx.png" 的话官方渲染器会去找 images/images/xxx.png。
+        layer.setAttribute("path", targetName)
+        canvas.copyGeometry(source, layer)
+        copyIfPresent(source, layer, "rotation", "opacity")
+        copyColors(source, layer)
         document.documentElement.appendChild(layer)
         return layer
     }
 
-    private fun appendWffText(document: Document, source: Element): Element {
+    private fun appendWffText(document: Document, source: Element, canvas: WffCanvasMapping): Element {
         val layer = document.createElement("Layer")
         layer.setAttribute("type", "text")
         val text = source.getAttribute("text").ifBlank {
             source.getAttribute("value").ifBlank { source.textContent.orEmpty().trim() }
         }
         layer.setAttribute("text", text)
-        copyIfPresent(source, layer, "x", "y", "width", "height", "rotation", "opacity", "color")
-        source.getAttribute("size").takeIf(String::isNotBlank)?.let { layer.setAttribute("text_size", it) }
+        canvas.copyGeometry(source, layer)
+        copyIfPresent(source, layer, "rotation", "opacity")
+        copyColors(source, layer)
+        source.getAttribute("size").takeIf(String::isNotBlank)
+            ?.toFloatOrNull()
+            // 字号也在画布空间里，跟着一起缩放，否则源画布不是 512 的表盘字全变形。
+            ?.let { layer.setAttribute("text_size", canvas.formatLength(it)) }
         document.documentElement.appendChild(layer)
         return layer
     }
 
-    private fun appendWffProgress(document: Document, source: Element): Element {
+    private fun appendWffProgress(document: Document, source: Element, canvas: WffCanvasMapping): Element {
         val layer = document.createElement("Layer")
         layer.setAttribute("type", if (source.tagName.equals("ring", true)) "ring" else "progress")
-        copyIfPresent(source, layer, "x", "y", "width", "height", "rotation", "opacity", "color", "radius", "value")
+        canvas.copyGeometry(source, layer)
+        canvas.copyScaledLength(source, layer, "radius")
+        copyIfPresent(source, layer, "rotation", "opacity", "value")
+        copyColors(source, layer)
         document.documentElement.appendChild(layer)
         return layer
+    }
+
+    /**
+     * 颜色属性一律归一成规范的裸 6 位 hex。
+     *
+     * WFF 写的是 Android 风格的 `#AARRGGBB`。官方 WatchMaker / CloX 只认
+     * `RRGGBB`（1.0 §7 每张表的 `hex RRGGBB`），带 `#` 的值解析失败后图层吃兜底色 ——
+     * 本地看不出来，因为 Flue 的 `normalizeWatchColorLiteral` 会顺手剥掉 `#`。
+     * 解不出来的值原样保留：那可能是主题引用之类我们不认识的东西，改坏比留着更糟。
+     */
+    private fun copyColors(source: Element, target: Element) {
+        listOf("color", "color2", "color3", "color4").forEach { name ->
+            val raw = source.getAttribute(name).takeIf(String::isNotBlank) ?: return@forEach
+            target.setAttribute(name, wffColorToWatchmakerHex(raw) ?: raw)
+        }
     }
 
     private fun compatibilityReport(
@@ -536,15 +566,18 @@ class WatchFormatConverter(
             it.mkdirs()
         }
 
-    private fun newWatchDocument(title: String, shape: String, width: Int, height: Int): Document {
+    private fun newWatchDocument(title: String, shape: String): Document {
         val factory = javax.xml.parsers.DocumentBuilderFactory.newInstance()
         factory.isNamespaceAware = false
         val document = factory.newDocumentBuilder().newDocument()
         val root = document.createElement("Watch")
         root.setAttribute("name", title)
         root.setAttribute("shape", shape)
-        root.setAttribute("width", width.toString())
-        root.setAttribute("height", height.toString())
+        // 不写 width / height：`WM_FORMAT_1.0.md` §3 的根属性表里没有这两项，§4 把
+        // 画布固定成 512×512。写了它们既不会被官方渲染器读到，还会让 Flue 自己的
+        // `WatchCanvasSize.fromRootAttributes` 按源格式的像素尺寸改设计空间比例，
+        // 于是「同一份 XML 在 Flue 里和在 WatchMaker 里布局不同」。源尺寸的信息
+        // 改由 [WffCanvasMapping] 在换算坐标时就地消化掉。
         document.appendChild(root)
         return document
     }
@@ -757,3 +790,99 @@ private fun org.w3c.dom.NodeList.asSequenceElements(): Sequence<Element> = NodeL
 private fun fmt(value: Double): String =
     if (value == value.toLong().toDouble()) value.toLong().toString()
     else String.format(Locale.US, "%.2f", value)
+
+/**
+ * WFF 画布 → WatchMaker 画布的坐标换算。
+ *
+ * 两套坐标系没有一处相同，而转换器过去是**逐字照抄** x/y/width/height 的：
+ *  * WFF 的原点在**左上角**，单位是源画布像素；WatchMaker 的原点在**画布中心**
+ *    （`WM_FORMAT_1.0.md` §4），画布恒为 512×512。照抄的结果是整块表盘往右下角
+ *    偏半个屏幕。
+ *  * WFF 的 `x`/`y` 是元素**左上角**，WatchMaker 的是元素**中心**。少偏移半个
+ *    元素尺寸。
+ *  * 源画布常见 450×450 / 368×448，不是 512。照抄等于把尺寸缩放比例交给渲染器猜。
+ *
+ * 过去靠往根节点写 `width`/`height` 让 Flue 自己的渲染器把设计空间改成源尺寸，
+ * 勉强抵掉了第三条 —— 但那两个属性不在规范里，别的渲染器读不到，而且偏移那两条
+ * 一直是错的。所以改成在这里一次算清：等比缩放（长边铺满 512，短边留白，绝不
+ * 拉扁）＋ 平移到中心原点 ＋ 左上角补半个尺寸。
+ */
+internal class WffCanvasMapping private constructor(
+    private val sourceWidth: Float,
+    private val sourceHeight: Float,
+) {
+    /** 等比缩放系数。长边铺满 512。 */
+    private val scale: Float = WATCHMAKER_CANVAS / maxOf(sourceWidth, sourceHeight)
+
+    /** 把 x/y/width/height 一起换算过去；解析不出数字的值原样保留。 */
+    fun copyGeometry(source: Element, target: Element) {
+        val width = source.number("width")
+        val height = source.number("height")
+        copyLeadingEdge(source, target, "x", size = width, extent = sourceWidth)
+        copyLeadingEdge(source, target, "y", size = height, extent = sourceHeight)
+        copyScaledLength(source, target, "width")
+        copyScaledLength(source, target, "height")
+    }
+
+    /** 纯长度属性（半径、字号…）只缩放，不平移。 */
+    fun copyScaledLength(source: Element, target: Element, name: String) {
+        val raw = source.getAttribute(name).takeIf(String::isNotBlank) ?: return
+        val value = raw.toFloatOrNull() ?: run {
+            target.setAttribute(name, raw)
+            return
+        }
+        target.setAttribute(name, formatLength(value))
+    }
+
+    fun formatLength(value: Float): String = fmt((value * scale).toDouble())
+
+    private fun copyLeadingEdge(
+        source: Element,
+        target: Element,
+        name: String,
+        size: Float?,
+        extent: Float,
+    ) {
+        val raw = source.getAttribute(name).takeIf(String::isNotBlank) ?: return
+        val leading = raw.toFloatOrNull() ?: run {
+            target.setAttribute(name, raw)
+            return
+        }
+        val center = leading + (size ?: 0f) / 2f
+        target.setAttribute(name, fmt(((center - extent / 2f) * scale).toDouble()))
+    }
+
+    private fun Element.number(name: String): Float? =
+        getAttribute(name).takeIf(String::isNotBlank)?.toFloatOrNull()
+
+    companion object {
+        /** WatchMaker 的固定画布边长，见 1.0 §4。 */
+        const val WATCHMAKER_CANVAS = 512f
+
+        /**
+         * 源画布尺寸缺失或非法时按 512×512 处理 —— 那样 [scale] 为 1，换算退化成
+         * 「只做中心原点平移」，仍然比原来照抄要对。
+         */
+        fun of(width: Int?, height: Int?): WffCanvasMapping {
+            val safeWidth = width?.takeIf { it > 0 }?.toFloat()
+            val safeHeight = height?.takeIf { it > 0 }?.toFloat()
+            return WffCanvasMapping(
+                sourceWidth = safeWidth ?: safeHeight ?: WATCHMAKER_CANVAS,
+                sourceHeight = safeHeight ?: safeWidth ?: WATCHMAKER_CANVAS,
+            )
+        }
+    }
+}
+
+/**
+ * `#AARRGGBB` / `#RRGGBB` / `AARRGGBB` → 规范要求的裸 `RRGGBB` 小写。
+ *
+ * 认不出来就返回 null，让调用方原样保留：WFF 里这个位置也可能是我们不认识的
+ * 主题引用，猜错比留着更糟。
+ */
+internal fun wffColorToWatchmakerHex(raw: String): String? {
+    val value = raw.trim().removePrefix("#")
+    if (!Regex("^[0-9a-fA-F]{6}(?:[0-9a-fA-F]{2})?$").matches(value)) return null
+    // 8 位是 ARGB：丢掉 alpha，规范的颜色属性只有 RRGGBB，透明度走 opacity。
+    return value.takeLast(6).lowercase(Locale.US)
+}

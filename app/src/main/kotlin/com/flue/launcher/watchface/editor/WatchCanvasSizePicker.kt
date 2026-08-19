@@ -11,7 +11,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.material3.AlertDialog
+import com.flue.launcher.ui.style.FlueAlertDialog
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
@@ -97,7 +97,7 @@ fun CanvasSizePickerDialog(
         }
     }
 
-    AlertDialog(
+    FlueAlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(stringResource(R.string.watch_editor_canvas_size)) },
         text = {

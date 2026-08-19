@@ -38,7 +38,10 @@ import androidx.compose.foundation.lazy.grid.itemsIndexed
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.material3.AlertDialog
+import com.flue.launcher.R
+import com.flue.launcher.ui.common.glassSurface
+import com.flue.launcher.ui.style.FlueAlertDialog
+import com.flue.launcher.ui.theme.LauncherTheme
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
@@ -47,19 +50,21 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
@@ -75,6 +80,7 @@ import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.Velocity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -84,7 +90,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.foundation.gestures.scrollBy
 import com.flue.launcher.data.model.AppInfo
 import com.flue.launcher.data.model.iconForDisplay
-import com.flue.launcher.ui.common.flueElasticNestedScroll
+import com.flue.launcher.ui.style.flueOverscroll
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -106,12 +112,19 @@ fun AppFolderOverlay(
     listMode: Boolean,
     iconShape: Shape = if (listMode) RoundedCornerShape(18.dp) else CircleShape,
     blurEnabled: Boolean,
-    twoToneIconsEnabled: Boolean,
     /**
      * 与列表侧 NativeAppListRowView.syncShadowElevation 同源：静置 8dp。
      * 文件夹里的图标此前没有这层修饰，和外面并排看是"扁"的。
      */
     iconShadowEnabled: Boolean = true,
+    /**
+     * 玻璃高光开关，与快捷启动 dock / 通知条共用设置里那一项。
+     *
+     * 文件夹面板以前是「clip + 实色 0.92」的纯色板，整屏只有它没有玻璃边缘 ——
+     * 而它恰好浮在应用列表上方，和同样浮着的 dock、通知条并排看就是材质断层
+     *（老师报的「给它的边缘也加上玻璃高光」）。
+     */
+    glassHighlightEnabled: Boolean = true,
     onAppClick: (AppInfo, Offset) -> Unit,
     onReorderItems: (List<AppInfo>) -> Unit,
     onMoveItemOut: (AppInfo) -> Unit,
@@ -399,8 +412,12 @@ fun AppFolderOverlay(
         animationSpec = spring(dampingRatio = 0.78f, stiffness = 520f),
         label = "folder_overlay_scale"
     )
-    SideEffect {
-        onTransitionProgress(alpha)
+    // 与长按菜单同一个坑：SideEffect 里的 State 读进不了重组作用域，动画推进不会重跑它，
+    // 于是模糊进度只在 showing 变化那两次组合里更新过（详见 ShortcutPopup 那段长注释）。
+    // snapshotFlow 真正订阅 alpha，每帧上报。
+    val reportProgress by rememberUpdatedState(onTransitionProgress)
+    LaunchedEffect(Unit) {
+        snapshotFlow { alpha }.collect { reportProgress(it) }
     }
 
     val folderItemKeys = visibleItems.mapTo(linkedSetOf()) { it.componentKey }
@@ -413,9 +430,9 @@ fun AppFolderOverlay(
         .toList()
 
     if (renameDialogVisible) {
-        AlertDialog(
+        FlueAlertDialog(
             onDismissRequest = { renameDialogVisible = false },
-            title = { Text("重命名文件夹") },
+            title = { Text(stringResource(R.string.shortcut_menu_rename_folder_title)) },
             text = {
                 OutlinedTextField(
                     value = renameText,
@@ -430,33 +447,35 @@ fun AppFolderOverlay(
                         renameDialogVisible = false
                     }
                 ) {
-                    Text("完成")
+                    Text(stringResource(R.string.action_done))
                 }
             },
             dismissButton = {
                 TextButton(onClick = { renameDialogVisible = false }) {
-                    Text("取消")
+                    Text(stringResource(R.string.action_cancel))
                 }
             }
         )
     }
 
     if (addDialogVisible) {
-        AlertDialog(
+        FlueAlertDialog(
             onDismissRequest = {
                 addDialogVisible = false
                 selectedAddKeys = emptySet()
             },
-            title = { Text("添加应用") },
+            // 标题与入口用同一份文案：这个弹窗预勾了当前成员，做的是「管理」而不是
+            // 单纯「添加」，两处叫法不一致会让人以为是两个不同的入口。
+            title = { Text(stringResource(R.string.folder_manage_apps)) },
             text = {
                 if (editableCandidates.isEmpty()) {
-                    Text("没有可添加的应用")
+                    Text(stringResource(R.string.folder_manage_apps_empty))
                 } else {
                     LazyColumn(
                         state = addListState,
                         modifier = Modifier
                             .heightIn(max = 320.dp)
-                            .flueElasticNestedScroll(addListState),
+                            .flueOverscroll(addListState),
                         verticalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
                         items(editableCandidates, key = { it.componentKey }) { app ->
@@ -464,7 +483,7 @@ fun AppFolderOverlay(
                             Row(
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .clip(RoundedCornerShape(16.dp))
+                                    .clip(LauncherTheme.style.rowShape)
                                     .background(
                                         if (selected) {
                                             MaterialTheme.colorScheme.primary.copy(alpha = 0.12f)
@@ -483,7 +502,7 @@ fun AppFolderOverlay(
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
                                 Image(
-                                    bitmap = app.iconForDisplay(twoToneIconsEnabled),
+                                    bitmap = app.iconForDisplay(),
                                     contentDescription = app.label,
                                     modifier = Modifier
                                         .size(38.dp)
@@ -515,7 +534,11 @@ fun AppFolderOverlay(
             },
             confirmButton = {
                 TextButton(
-                    enabled = selectedAddKeys.isNotEmpty(),
+                    // 刻意**不**挡住「零勾选」：全部取消勾选再点完成就是解散这个文件夹。
+                    //
+                    // 底下那条路本来就通 —— setFolderItems 收到空列表时会走
+                    //「剩余 ≤1 项就解散」的分支，把原成员放回一级列表并关掉面板。
+                    // 以前 enabled 把这个唯一的出口锁死了，于是想解散只能去长按菜单里找。
                     onClick = {
                         val selectedItems = editableCandidates.filter { it.componentKey in selectedAddKeys }
                         onSetFolderItems(selectedItems)
@@ -523,7 +546,15 @@ fun AppFolderOverlay(
                         addDialogVisible = false
                     }
                 ) {
-                    Text("完成")
+                    Text(
+                        if (selectedAddKeys.isEmpty()) {
+                            // 零勾选时按钮改说「解散文件夹」：点下去的后果和「完成」
+                            // 差得太远，不该用同一个词。
+                            stringResource(R.string.shortcut_menu_dissolve_folder)
+                        } else {
+                            stringResource(R.string.action_done)
+                        }
+                    )
                 }
             },
             dismissButton = {
@@ -533,7 +564,7 @@ fun AppFolderOverlay(
                         addDialogVisible = false
                     }
                 ) {
-                    Text("取消")
+                    Text(stringResource(R.string.action_cancel))
                 }
             }
         )
@@ -560,8 +591,10 @@ fun AppFolderOverlay(
                 (maxHeight * 0.76f).coerceAtLeast(210.dp)
             }
             val gridMaxHeight = (panelMaxHeight - 76.dp).coerceAtLeast(150.dp)
-            val panelColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.92f)
             val panelTextColor = MaterialTheme.colorScheme.onSurface
+            // 形状走风格令牌，不再写死 28 / 14dp：同一档里面板、卡、行的圆角必须
+            // 出自同一套表，否则叠在一起就看出参差（老师报的 AW 卡片圆角不统一）。
+            val launcherStyle = LauncherTheme.style
             val manageButtonColor = MaterialTheme.colorScheme.primary
             val manageButtonBackground = MaterialTheme.colorScheme.primary.copy(alpha = 0.12f)
             Column(
@@ -573,8 +606,21 @@ fun AppFolderOverlay(
                         scaleY = scale
                     }
                     .onGloballyPositioned { panelBounds = it.boundsInRoot() }
-                    .clip(RoundedCornerShape(28.dp))
-                    .background(panelColor)
+                    // 投影落在形状外面，让面板从列表里「浮」起来而不是贴上去。
+                    // 必须排在 glassSurface 前面且 clip = false —— 一旦被裁就看不见了
+                    //（与 FlueDialog 那条同源）。
+                    .shadow(18.dp, launcherStyle.panelShape, clip = false)
+                    // 厚玻璃：这块面板压着的是**应用列表**（别的内容），不是表盘背衬。
+                    // 按 GlassTier 的判据，压内容的表面必须用 Thick —— 薄档透过去
+                    // 会让面板里的图标和底下那一排列表图标糊在一起。
+                    //
+                    // 面板底色不再单独写 surface@0.92：厚玻璃令牌自带等效底色，
+                    // 两套叠在一起会比设计值更不透明。
+                    .glassSurface(
+                        launcherStyle.panelShape,
+                        launcherStyle.glassThick,
+                        highlightEnabled = glassHighlightEnabled,
+                    )
                     .clickable(indication = null, interactionSource = blockInteraction) { }
                     .padding(horizontal = 16.dp, vertical = 16.dp)
                     .align(Alignment.Center)
@@ -591,7 +637,7 @@ fun AppFolderOverlay(
                         color = panelTextColor,
                         modifier = Modifier
                             .weight(1f)
-                            .clip(RoundedCornerShape(14.dp))
+                            .clip(launcherStyle.rowShape)
                             .clickable {
                                 renameText = folder.label
                                 renameDialogVisible = true
@@ -604,7 +650,7 @@ fun AppFolderOverlay(
                     )
                     Spacer(Modifier.width(8.dp))
                     Text(
-                        text = "管理应用",
+                        text = stringResource(R.string.folder_manage_apps),
                         color = if (editableCandidates.isEmpty()) {
                             panelTextColor.copy(alpha = 0.38f)
                         } else {
@@ -851,7 +897,7 @@ fun AppFolderOverlay(
                                         }
                                 ) {
                                     Image(
-                                        bitmap = app.iconForDisplay(twoToneIconsEnabled),
+                                        bitmap = app.iconForDisplay(),
                                         contentDescription = app.label,
                                         contentScale = ContentScale.Crop,
                                         modifier = Modifier.fillMaxSize()
@@ -895,7 +941,7 @@ fun AppFolderOverlay(
                     }
             ) {
                 Image(
-                    bitmap = draggedApp.iconForDisplay(twoToneIconsEnabled),
+                    bitmap = draggedApp.iconForDisplay(),
                     contentDescription = draggedApp.label,
                     contentScale = ContentScale.Crop,
                     modifier = Modifier.fillMaxSize()

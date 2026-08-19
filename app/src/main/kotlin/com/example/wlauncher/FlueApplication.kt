@@ -62,6 +62,12 @@ class FlueRepositories(context: Context) {
 }
 
 class SharedLauncherState {
-    val themeMode = MutableStateFlow(ThemeMode.SYSTEM)
+    /**
+     * 默认深色（老师定）。
+     *
+     * 这里与 `LauncherViewModel` 读偏好时的兜底值**必须一致** —— 不一致的话冷启动会先按
+     * 一种主题画一帧、读到偏好再跳成另一种，就是一次刺眼的闪白。
+     */
+    val themeMode = MutableStateFlow(ThemeMode.DARK)
     val uiStyle = MutableStateFlow(DEFAULT_UI_STYLE)
 }

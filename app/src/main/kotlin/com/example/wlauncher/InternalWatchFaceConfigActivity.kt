@@ -69,10 +69,12 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.flue.launcher.ui.home.BuiltInWatchFacePreview
 import com.flue.launcher.ui.home.FIXED_PREVIEW_CLOCK
-import com.flue.launcher.ui.common.flueElasticNestedScroll
+import com.flue.launcher.ui.style.flueOverscroll
 import com.flue.launcher.ui.input.flueRotaryScrollable
 import com.flue.launcher.ui.input.ROTARY_SCROLL_MULTIPLIER
 import com.flue.launcher.ui.input.requestFocusAfterFirstFrame
+import com.flue.launcher.ui.style.FlueSlider
+import com.flue.launcher.ui.style.FlueSwitch
 import com.flue.launcher.ui.theme.LauncherTheme
 import com.flue.launcher.ui.theme.ProvideGlobalUiScale
 import com.flue.launcher.ui.theme.WatchColors
@@ -349,7 +351,7 @@ private fun InternalWatchFaceConfigScreen(
                 .flueRotaryScrollable(focusRequester, ROTARY_SCROLL_MULTIPLIER) { rotaryDelta ->
                     scope.launch { scrollState.scrollBy(-rotaryDelta) }
                 }
-                .flueElasticNestedScroll(scrollState)
+                .flueOverscroll(scrollState)
                 .verticalScroll(scrollState)
                 .padding(horizontal = 18.dp, vertical = 22.dp),
             horizontalAlignment = Alignment.CenterHorizontally
@@ -378,7 +380,7 @@ private fun InternalWatchFaceConfigScreen(
             modifier = Modifier
                 .fillMaxWidth()
                 .aspectRatio(1f)
-                .clip(RoundedCornerShape(30.dp))
+                .clip(launcherStyle.panelShape)
                 .background(Color(0xFF10141D)),
             contentAlignment = Alignment.Center
         ) {
@@ -590,7 +592,7 @@ private fun InternalWatchFaceConfigScreen(
             fontWeight = FontWeight.SemiBold,
             modifier = Modifier.fillMaxWidth()
         )
-            Slider(
+            FlueSlider(
             value = localClockSize,
             onValueChange = {
                 localClockSize = it
@@ -601,10 +603,6 @@ private fun InternalWatchFaceConfigScreen(
             },
             valueRange = 28f..92f,
             steps = 15,
-            colors = SliderDefaults.colors(
-                thumbColor = WatchColors.ActiveCyan,
-                activeTrackColor = WatchColors.ActiveCyan
-            )
         )
 
             Spacer(modifier = Modifier.height(8.dp))
@@ -760,6 +758,7 @@ private fun ActionButton(
     onClick: () -> Unit
 ) {
     var pressed by remember { mutableStateOf(false) }
+    val launcherStyle = LauncherTheme.style
     val pressScale by animateFloatAsState(
         targetValue = if (pressed) 0.958f else 1f,
         animationSpec = androidx.compose.animation.core.tween(durationMillis = 170),
@@ -772,7 +771,7 @@ private fun ActionButton(
                 scaleX = pressScale
                 scaleY = pressScale
             }
-            .clip(RoundedCornerShape(18.dp))
+            .clip(launcherStyle.rowShape)
             .background(if (enabled) WatchColors.SurfaceGlass else WatchColors.InactiveGray)
             .pointerInput(enabled, onLongClick) {
                 if (!enabled) return@pointerInput
@@ -927,7 +926,7 @@ private fun CustomTextField(
         ),
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(18.dp))
+            .clip(launcherStyle.rowShape)
     )
 }
 
@@ -944,7 +943,7 @@ private fun ColorRgbSliderGroup(
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(18.dp))
+            .clip(launcherStyle.rowShape)
             .background(WatchColors.SurfaceGlass)
             .padding(horizontal = 14.dp, vertical = 12.dp)
     ) {
@@ -984,15 +983,13 @@ private fun ColorChannelSlider(
         fontSize = 12.sp,
         modifier = Modifier.padding(top = 8.dp)
     )
-    Slider(
+    FlueSlider(
         value = value.toFloat(),
         onValueChange = { onValueChange(it.toInt().coerceIn(0, 255)) },
         valueRange = 0f..255f,
-        steps = 254,
-        colors = SliderDefaults.colors(
-            thumbColor = WatchColors.ActiveCyan,
-            activeTrackColor = WatchColors.ActiveCyan
-        )
+        // 254 格的逐格触觉会变成持续震动，这里只要吸附不要反馈 —— 交给 FlueSlider 的
+        // 无刻度分支（端点各给一次）。
+        steps = 0,
     )
 }
 
@@ -1094,7 +1091,7 @@ private fun SmallChoiceChip(
                 scaleX = pressScale
                 scaleY = pressScale
             }
-            .clip(RoundedCornerShape(16.dp))
+            .clip(launcherStyle.rowShape)
             .background(if (selected) WatchColors.ActiveCyan.copy(alpha = 0.22f) else WatchColors.SurfaceGlass)
             .clickable(interactionSource = interaction, indication = null, onClick = onClick)
             .padding(vertical = 12.dp),
@@ -1139,7 +1136,7 @@ private fun ToggleRow(
                 scaleX = pressScale
                 scaleY = pressScale
             }
-            .clip(RoundedCornerShape(18.dp))
+            .clip(launcherStyle.rowShape)
             .background(WatchColors.SurfaceGlass)
             .clickable(interactionSource = interaction, indication = null, onClick = onToggle)
             .padding(horizontal = 16.dp, vertical = 14.dp),
@@ -1150,24 +1147,12 @@ private fun ToggleRow(
             text = label,
             color = launcherStyle.bodyColor,
             fontSize = 15.sp,
-            fontWeight = FontWeight.Medium
+            fontWeight = FontWeight.Medium,
+            // weight：Row 里没权重的子节点按顺序拿全部可用宽度，长标签会把后面的开关
+            // 挤到 0 宽（AW 档轨道有 64dp，被挤扁就是「开关右边显示不完全」）。
+            modifier = Modifier.weight(1f, fill = false).padding(end = 10.dp),
         )
-        Box(
-            modifier = Modifier
-                .width(46.dp)
-                .height(26.dp)
-                .clip(RoundedCornerShape(13.dp))
-                .background(trackColor),
-            contentAlignment = Alignment.CenterStart
-        ) {
-            Box(
-                modifier = Modifier
-                    .padding(start = knobOffset)
-                    .width(20.dp)
-                    .height(20.dp)
-                    .clip(RoundedCornerShape(10.dp))
-                    .background(Color.White)
-            )
-        }
+        // 开关走抽象入口：三档风格各自的外观 + 触觉都在那一层，这里不再手画。
+        FlueSwitch(checked = enabled, onCheckedChange = { onToggle() })
     }
 }

@@ -29,6 +29,7 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.material3.Slider
@@ -53,9 +54,11 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
@@ -80,10 +83,21 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.AlertDialog
+import com.flue.launcher.ui.style.FlueAlertDialog
+import com.flue.launcher.ui.style.FlueButton
+import com.flue.launcher.ui.style.FlueCard
+import com.flue.launcher.ui.style.FlueOutlinedButton
 import androidx.compose.material3.Button
-import com.flue.launcher.ui.settings.miuix.MiuixLoadingIndicator
+import androidx.compose.material3.Checkbox
+import com.flue.launcher.ui.style.FlueLoadingIndicator
+import com.flue.launcher.ui.style.FlueExpressiveFloatingToolbar
 import com.flue.launcher.ui.settings.miuix.MiuixIcons as FlueMiuixIcons
+import com.flue.launcher.ui.settings.WatchAppPickerDialog
+import com.flue.launcher.ui.settings.WatchTapActionPresetDialog
+// 官方 miuix 图标集。本文件里 MiuixIcons 这个名字已经被上面那份自绘图标占了，
+// 所以照 SettingsActivity 的写法加 Official 前缀区分，避免两套图标混着看不出来源。
+import top.yukonga.miuix.kmp.icon.MiuixIcons as OfficialMiuixIcons
+import top.yukonga.miuix.kmp.icon.extended.Clear as OfficialClear
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
@@ -119,6 +133,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.font.FontFamily
@@ -152,6 +167,7 @@ import top.yukonga.miuix.kmp.icon.extended.Delete
 import top.yukonga.miuix.kmp.icon.extended.ExpandLess
 import top.yukonga.miuix.kmp.icon.extended.ExpandMore
 import top.yukonga.miuix.kmp.icon.extended.File
+import top.yukonga.miuix.kmp.icon.extended.Folder
 import top.yukonga.miuix.kmp.icon.extended.Layers
 import top.yukonga.miuix.kmp.icon.extended.Ok
 import top.yukonga.miuix.kmp.icon.extended.Redo
@@ -163,14 +179,18 @@ import com.flue.launcher.ui.theme.LauncherTheme
 import com.flue.launcher.ui.theme.ProvideGlobalUiScale
 import com.flue.launcher.ui.theme.WatchLauncherTheme
 import com.flue.launcher.util.RecentsVisibility
+import com.flue.launcher.ui.common.FlueColorPickerDialog
 import com.flue.launcher.ui.common.chordScaleForListItem
 import com.flue.launcher.ui.common.chordScaleForPosition
 import com.flue.launcher.ui.common.chordScaleItem
+import com.flue.launcher.ui.common.flueContentSizeSpring
 import com.flue.launcher.ui.common.roundScrollablePadding
-import com.flue.launcher.ui.common.flueElasticNestedScroll
+import com.flue.launcher.ui.store.StoreRoundList
+import com.flue.launcher.ui.style.flueOverscroll
 import com.flue.launcher.ui.common.isFlueScreenRound
 import com.flue.launcher.ui.common.InternalFileBrowserHost
 import com.flue.launcher.ui.common.InternalFileBrowserRequest
+import com.flue.launcher.ui.common.WfToolsPromoRow
 import com.flue.launcher.viewmodel.LauncherViewModel
 import com.flue.launcher.watchface.WatchFaceDescriptor
 import com.flue.launcher.watchface.WatchFaceType
@@ -178,6 +198,7 @@ import com.flue.launcher.watchface.editor.WATCH_EDITOR_EXPRESSION_GROUPS
 import com.flue.launcher.watchface.editor.WatchCanvasSize
 import com.flue.launcher.watchface.editor.WatchEditorHandle
 import com.flue.launcher.watchface.editor.WatchEditorImageCropper
+import com.flue.launcher.watchface.editor.WatchEditorImageFormat
 import com.flue.launcher.watchface.editor.WatchEditorImageSourceInfo
 import com.flue.launcher.watchface.editor.WatchEditorLayer
 import com.flue.launcher.watchface.editor.WatchEditorLayerKey
@@ -189,6 +210,10 @@ import com.flue.launcher.watchface.editor.WatchEditorCropHandle
 import com.flue.launcher.watchface.editor.WatchEditorCropRect
 import com.flue.launcher.watchface.editor.WatchEditorSelectionBox
 import com.flue.launcher.watchface.editor.WatchEditorSession
+import com.flue.launcher.watchface.editor.watchXmlAssetPath
+import com.flue.launcher.ui.theme.WatchColors
+import com.flue.launcher.ui.editor.EditorResourceThumbnail
+import com.flue.launcher.watchface.editor.WatchEditorResourceEntry
 import com.flue.launcher.watchface.editor.WatchEditorSnapshot
 import com.flue.launcher.watchface.editor.WatchEditorSourceRect
 import com.flue.launcher.watchface.editor.WatchEditorSnapping
@@ -244,6 +269,8 @@ import com.flue.launcher.watchface.store.WatchStoreAuthSession
 import com.flue.launcher.watchface.store.WatchStoreAuthStore
 import com.flue.launcher.watchface.store.WatchStoreCategory
 import com.flue.launcher.watchface.store.WatchStoreCredentialStore
+import com.flue.launcher.watchface.store.WatchStoreFeatureFlagCache
+import com.flue.launcher.watchface.store.WatchStoreFeatureFlags
 import com.flue.launcher.watchface.store.WatchStoreHttpException
 import com.flue.launcher.watchface.store.WatchStorePayloadTooLargeException
 import com.flue.launcher.watchface.store.WatchStoreScreenType
@@ -376,10 +403,17 @@ private fun WatchEditorRoute(
     var errorMessage by remember { mutableStateOf<String?>(null) }
     var showDiscardDialog by remember { mutableStateOf(false) }
     var showSaveDialog by remember { mutableStateOf(false) }
+    var showExportOptions by remember { mutableStateOf(false) }
+    var pendingExportProtected by rememberSaveable { mutableStateOf(false) }
+    var pendingExportToDirectory by rememberSaveable { mutableStateOf(false) }
     var showUploadSaveRequiredDialog by remember { mutableStateOf(false) }
     var openUploadAfterSave by remember { mutableStateOf(false) }
     var showStoreUpload by remember { mutableStateOf(false) }
     var globalScriptDraft by remember(session) { mutableStateOf<String?>(null) }
+    // 资源管理器：null = 未打开。打开时一次性把清单读出来（要摸文件大小，走 IO）。
+    var resourceInventory by remember(session) {
+        mutableStateOf<List<WatchEditorResourceEntry>?>(null)
+    }
     var pendingSaveName by remember { mutableStateOf("") }
     // 作者信息（老师指定）：保存时若用户没改过，自动填已登录账户名，
     // 未登录填 "flue"；改过就按用户输入原样写入。
@@ -397,6 +431,12 @@ private fun WatchEditorRoute(
     // IO completion is one frame too early and exposes the old source geometry.
     var pendingTransformRefreshToken by remember(session) { mutableStateOf<Int?>(null) }
     val transformGate = remember(session) { WatchEditorTransformGate() }
+    // 绑了表达式的变换属性拖不动（见 WatchEditorSession.boundTransformAttributes）。
+    // 不提示的话表现就是「松手后弹回」，像 bug；每层只提示一次，免得连续拖动时
+    // Toast 刷屏。
+    var boundTransformNoticeShownFor by remember(session) {
+        mutableStateOf<WatchEditorLayerKey?>(null)
+    }
     // Bumped whenever attributes change from OUTSIDE the live property fields
     // (undo, canvas drag, image import…) so the drafts reset; live typing keeps
     // its own in-progress state.
@@ -447,9 +487,17 @@ private fun WatchEditorRoute(
      *
      * 截图走 renderFaceBitmap（离屏、不依赖 View 上屏），失败就静默跳过：
      * 预览图刷新不该阻断保存本身。
+     *
+     * 出图**之前**必须先把视频首帧烘进缓存：视频层的首帧是异步解码的，离屏出图
+     * 只画一次，缺帧那一层就永远缺 —— 视频当背景的表盘存出来的预览图几乎全黑
+     * （老师报的「保存表盘里包含视频会导致整个预览图直接黑掉」）。预热自己会把
+     * MediaMetadataRetriever 切到 IO，不占主线程。
      */
     suspend fun refreshDraftPreview(active: WatchEditorSession) {
         val renderer = previewRenderer ?: return
+        withContext(Dispatchers.Main.immediate) {
+            runCatching { renderer.prewarmVideoFirstFrames() }
+        }
         // 渲染必须在主线程（读 View 持有的解码缓存），压缩再切 IO。
         val bitmap = withContext(Dispatchers.Main.immediate) {
             runCatching { renderer.renderFaceBitmap(PREVIEW_IMAGE_SIZE_PX) }.getOrNull()
@@ -510,11 +558,14 @@ private fun WatchEditorRoute(
                     onApplied = {},
             onError = { errorMessage = it.message ?: context.getString(R.string.watch_editor_error_property_update) },
                 )
+                // 导出前也要刷 preview.jpg：它在包里是 required（1.0 §1），不刷的话
+                // 导出的包带的还是原作者那张旧预览。
+                refreshDraftPreview(active)
                 val result = runCatching {
                     withContext(Dispatchers.IO) {
                         val temporary = File.createTempFile("flue_watch_export_", ".watch", context.cacheDir)
                         try {
-                            active.exportWatch(temporary)
+                            active.exportWatch(temporary, protectedExport = pendingExportProtected)
                             context.contentResolver.openOutputStream(uri, "w")?.use { output ->
                                 temporary.inputStream().use { input -> input.copyTo(output) }
                 } ?: error(context.getString(R.string.watch_editor_error_export_destination))
@@ -533,6 +584,12 @@ private fun WatchEditorRoute(
                 busyMessage = null
             }
         }
+    }
+
+    fun requestExportOptions(toDirectory: Boolean) {
+        if (busyMessage != null || session == null || snapshot == null) return
+        pendingExportToDirectory = toDirectory
+        showExportOptions = true
     }
 
     fun handleFontUri(uri: Uri?) {
@@ -584,17 +641,29 @@ private fun WatchEditorRoute(
             errorMessage = null
             runCatching {
                 withContext(Dispatchers.IO) {
-                    val resourcePath = if (sourceRect == null) {
+                    // BMP 必须转 PNG，哪怕用户没裁剪。
+                    //
+                    // 规范的 images/ 只列了 png / jpg（1.0 §1），受保护导出的加壳映射
+                    // （`protectedImagePath`）也只认 png/jpg/jpeg —— 一张 .bmp 会原样、
+                    // 不加壳地进包，别的渲染器多半解不出来，而 BMP 本来就是**未压缩**
+                    // 的，一张 512×512 就是 1 MB，白占归档预算。Android 能解 BMP，所以
+                    // 这个问题只在把表盘拿出 Flue 时才暴露。
+                    val mustReencode = request.sourceInfo.format == WatchEditorImageFormat.BMP
+                    val resourcePath = if (sourceRect == null && !mustReencode) {
                         val stream = context.contentResolver.openInputStream(request.uri)
                     ?: throw IllegalStateException(context.getString(R.string.watch_editor_error_read_image))
                         // Lossless path: raw GIFs always come here, as do static
                         // images whose crop frame was never changed.
                         active.importResource(stream, request.sourceInfo.importName)
                     } else {
+                        // 没有裁剪框（只是为了转码 BMP）时，用整张图当区域。
+                        val region = sourceRect ?: WatchEditorImageCropper
+                            .readBounds(context.contentResolver, request.uri)
+                            .let { WatchEditorSourceRect(0, 0, it.width, it.height) }
                         val bitmap = WatchEditorImageCropper.cropRegion(
                             context.contentResolver,
                             request.uri,
-                            sourceRect,
+                            region,
                         )
                         val stream = try {
                             WatchEditorImageCropper.toPngStream(bitmap)
@@ -607,7 +676,14 @@ private fun WatchEditorRoute(
                             ?: "image"
                         active.importResource(stream, "$stem.png")
                     }
-                    active.updateLayerAttribute(key, "path", resourcePath)
+                    // 裸文件名：规范的 path 是「images/ 内的文件名」，
+                    // 见 watchXmlAssetPath 的注释。
+                    active.updateLayerAttribute(key, "path", watchXmlAssetPath(resourcePath, "images"))
+                    // width / height 对 image / image_gif 是必填（1.0 §7.1，商店也这么查）。
+                    // 只能在这里补：素材已落盘，真实像素尺寸此刻才知道。
+                    resolveDraftImageSize(active.draftDirectory, resourcePath)?.let { (w, h) ->
+                        active.applyImportedImageSize(key, w.toInt(), h.toInt())
+                    }
                     active.flushDraftForPreview()
                     active.snapshot()
                 }
@@ -661,12 +737,14 @@ private fun WatchEditorRoute(
     }
     val bitmapFontPicker = rememberLauncherForActivityResult(OpenMultipleDocuments(), ::handleBitmapFontUris)
 
-    fun exportToDirectory(directory: File) {
+    fun exportToDirectory(directory: File, protectedExport: Boolean = false) {
         val active = session ?: return
         val current = snapshot ?: return
         scope.launch {
             busyMessage = context.getString(R.string.watch_editor_status_exporting)
             errorMessage = null
+            // 同上：导出到目录也要带上最新的 preview.jpg。
+            refreshDraftPreview(active)
             runCatching {
                 withContext(Dispatchers.IO) {
                     require(directory.isDirectory && directory.canWrite()) {
@@ -676,7 +754,7 @@ private fun WatchEditorRoute(
                     var output = File(directory, "$base.watch")
                     var suffix = 2
                     while (output.exists()) output = File(directory, "${base}_$suffix.watch").also { suffix++ }
-                    active.exportWatch(output)
+                    active.exportWatch(output, protectedExport = protectedExport)
                     active.snapshot()
                 }
             }.onSuccess { next ->
@@ -744,7 +822,10 @@ private fun WatchEditorRoute(
                         key,
                         mapOf(
                             "type" to "image_gif",
-                            "path" to paths.joinToString("`"),
+                            "path" to paths.joinToString("`") {
+                                // 裸文件名，见 watchXmlAssetPath。
+                                watchXmlAssetPath(it, "images")
+                            },
                             "gif_delay" to active.snapshot().layers
                                 .firstOrNull { it.key == key }
                                 ?.attributes
@@ -753,6 +834,11 @@ private fun WatchEditorRoute(
                                 .ifBlank { "100" },
                         ),
                     )
+                    // 序列帧同样要 width / height（1.0 §7.2 的 image_gif 必填）。
+                    // 取第一帧的尺寸：一套帧序列的每帧本来就该同尺寸。
+                    paths.firstOrNull()
+                        ?.let { resolveDraftImageSize(active.draftDirectory, it) }
+                        ?.let { (w, h) -> active.applyImportedImageSize(key, w.toInt(), h.toInt()) }
                     active.flushDraftForPreview()
                     active.snapshot()
                 }
@@ -1134,12 +1220,29 @@ private fun WatchEditorRoute(
                     EditorInternalImportKind.VIDEO -> handleVideoUri(uris.firstOrNull())
                     EditorInternalImportKind.FONT -> handleFontUri(uris.firstOrNull())
                     EditorInternalImportKind.BITMAP_FONT -> handleBitmapFontUris(uris)
-                    EditorInternalImportKind.EXPORT_DIRECTORY -> uris.firstOrNull()?.path?.let { exportToDirectory(File(it)) }
+                    EditorInternalImportKind.EXPORT_DIRECTORY -> uris.firstOrNull()?.path?.let {
+                        exportToDirectory(File(it), protectedExport = pendingExportProtected)
+                        pendingExportProtected = false
+                        pendingExportToDirectory = false
+                    }
                     EditorInternalImportKind.WATCH -> handleWatchArchiveUri(uris.firstOrNull())
                     EditorInternalImportKind.CONVERSION -> handleConversionUri(uris.firstOrNull())
                 }
             },
         )
+    }
+
+    fun beginExport(protectedExport: Boolean, toDirectory: Boolean) {
+        pendingExportProtected = protectedExport
+        pendingExportToDirectory = toDirectory
+        showExportOptions = false
+        if (toDirectory) {
+            openInternalFileBrowser(EditorInternalImportKind.EXPORT_DIRECTORY)
+        } else {
+            val current = snapshot ?: return
+            val name = safeWatchFileName(current.rootAttributes["name"])
+            exportDocument.launch("$name${if (protectedExport) "_protected" else ""}.watch")
+        }
     }
 
     val blankFaceIsRound = isFlueScreenRound()
@@ -1222,7 +1325,7 @@ private fun WatchEditorRoute(
     BackHandler(onBack = ::requestClose)
 
     if (showDiscardDialog) {
-        AlertDialog(
+        FlueAlertDialog(
             onDismissRequest = { showDiscardDialog = false },
                 title = { Text(stringResource(R.string.watch_editor_discard_title)) },
                 text = { Text(stringResource(R.string.watch_editor_discard_message)) },
@@ -1240,8 +1343,45 @@ private fun WatchEditorRoute(
         )
     }
 
+    if (showExportOptions) {
+        FlueAlertDialog(
+            onDismissRequest = { showExportOptions = false },
+            title = { Text(stringResource(R.string.watch_editor_export_mode_title)) },
+            text = { Text(stringResource(R.string.watch_editor_export_mode_message)) },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        beginExport(
+                            protectedExport = false,
+                            toDirectory = pendingExportToDirectory,
+                        )
+                    },
+                ) {
+                    Text(stringResource(R.string.watch_editor_export_plain))
+                }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = {
+                        beginExport(
+                            protectedExport = true,
+                            toDirectory = pendingExportToDirectory,
+                        )
+                    },
+                ) {
+                    Text(stringResource(R.string.watch_editor_export_protected))
+                }
+            },
+            extraAction = {
+                TextButton(onClick = { showExportOptions = false }) {
+                    Text(stringResource(R.string.watch_editor_cancel))
+                }
+            },
+        )
+    }
+
     if (showSaveDialog) {
-        AlertDialog(
+        FlueAlertDialog(
             onDismissRequest = {
                 showSaveDialog = false
                 openUploadAfterSave = false
@@ -1339,7 +1479,7 @@ private fun WatchEditorRoute(
                                             context.cacheDir,
                                         )
                                         try {
-                                            active.exportWatch(archive)
+                                            active.exportWatch(archive, protectedExport = active.isProtected)
                                             val descriptor = vm.importWatchmakerWatchFaceFile(archive)
                                                 .getOrThrow()
                                             val opened = WatchEditorSession.open(context, descriptor)
@@ -1417,7 +1557,7 @@ private fun WatchEditorRoute(
 
     if (showUploadSaveRequiredDialog) {
         val canSaveCurrent = session?.canSaveCurrentRevision == true
-        AlertDialog(
+        FlueAlertDialog(
             onDismissRequest = { showUploadSaveRequiredDialog = false },
             title = { Text(stringResource(R.string.watch_editor_upload_save_required_title)) },
             text = { Text(stringResource(R.string.watch_editor_upload_save_required_message)) },
@@ -1437,21 +1577,24 @@ private fun WatchEditorRoute(
                 }
             },
             dismissButton = {
-                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                    if (canSaveCurrent) {
-                        TextButton(
-                            onClick = {
-                                showUploadSaveRequiredDialog = false
-                                requestSave(saveAs = true, uploadAfterSave = true)
-                            },
-                        ) {
-                            Text(stringResource(R.string.watch_editor_save_as))
-                        }
-                    }
-                    TextButton(onClick = { showUploadSaveRequiredDialog = false }) {
-                        Text(stringResource(R.string.watch_editor_cancel))
+                TextButton(onClick = { showUploadSaveRequiredDialog = false }) {
+                    Text(stringResource(R.string.watch_editor_cancel))
+                }
+            },
+            // 「另存为」是第三个动作：走 extraAction 独占一行胶囊，不和「取消」共用一枚。
+            extraAction = if (canSaveCurrent) {
+                {
+                    TextButton(
+                        onClick = {
+                            showUploadSaveRequiredDialog = false
+                            requestSave(saveAs = true, uploadAfterSave = true)
+                        },
+                    ) {
+                        Text(stringResource(R.string.watch_editor_save_as))
                     }
                 }
+            } else {
+                null
             },
         )
     }
@@ -1516,6 +1659,19 @@ private fun WatchEditorRoute(
                                         active.updateLayerAttributes(pendingKey, changes)
                                     }
                                     val initial = active.beginLayerTransformGesture(key)
+                                    active.layerBoundTransformAttributes(key)
+                                        .takeIf { it.isNotEmpty() && boundTransformNoticeShownFor != key }
+                                        ?.let { bound ->
+                                            boundTransformNoticeShownFor = key
+                                            Toast.makeText(
+                                                context,
+                                                context.getString(
+                                                    R.string.watch_editor_transform_bound_fmt,
+                                                    bound.sorted().joinToString("、"),
+                                                ),
+                                                Toast.LENGTH_SHORT,
+                                            ).show()
+                                        }
                                     transformPreview = WatchEditorTransformPreview(key, initial)
                                     initial
                                 }.onFailure { error ->
@@ -1609,7 +1765,7 @@ private fun WatchEditorRoute(
                         },
                         onAddLayer = { type ->
                             runSessionOperation(context.getString(R.string.watch_editor_status_add_layer), operation = { editor ->
-                                editor.addLayer(type, defaultAttributes(type))
+                                editor.addLayer(type, defaultAttributes(type, editor.snapshot().formatVersion))
                             })
                         },
                         onMoveLayer = { key, target ->
@@ -1699,8 +1855,7 @@ private fun WatchEditorRoute(
                             requestSave(saveAs = false)
                         },
                         onExport = {
-                            val name = safeWatchFileName(current.rootAttributes["name"])
-                            exportDocument.launch("$name.watch")
+                            requestExportOptions(toDirectory = false)
                         },
                         onUpdateShape = { shapeCode ->
                             runSessionOperation(context.getString(R.string.watch_editor_status_update_shape), operation = { editor ->
@@ -1722,6 +1877,22 @@ private fun WatchEditorRoute(
                                         withContext(Dispatchers.IO) { active.globalScript() }
                                     }.onSuccess { script ->
                                         globalScriptDraft = script
+                                    }.onFailure { error ->
+                                        errorMessage = context.localizedEditorError(
+                                            R.string.watch_editor_error_operation,
+                                            error,
+                                        )
+                                    }
+                                }
+                            }
+                        },
+                        onManageResources = {
+                            if (busyMessage == null) {
+                                scope.launch {
+                                    runCatching {
+                                        withContext(Dispatchers.IO) { active.resourceInventory() }
+                                    }.onSuccess { inventory ->
+                                        resourceInventory = inventory
                                     }.onFailure { error ->
                                         errorMessage = context.localizedEditorError(
                                             R.string.watch_editor_error_operation,
@@ -1767,7 +1938,7 @@ private fun WatchEditorRoute(
                                 ),
                             )
                         },
-                        onExportLong = { openInternalFileBrowser(EditorInternalImportKind.EXPORT_DIRECTORY) },
+                        onExportLong = { requestExportOptions(toDirectory = true) },
                         onImportWatchLong = {
                             openInternalFileBrowser(EditorInternalImportKind.WATCH)
                         },
@@ -1850,6 +2021,31 @@ private fun WatchEditorRoute(
                             },
                         )
                     }
+                    resourceInventory?.let { inventory ->
+                        EditorResourceManagerOverlay(
+                            entries = inventory,
+                            busy = busyMessage != null,
+                            draftDirectory = active.draftDirectory,
+                            onDelete = { path ->
+                                runSessionOperation(
+                                    status = context.getString(R.string.watch_editor_status_deleting_resource),
+                                    operation = { editor ->
+                                        editor.deleteResource(path)
+                                        selectedLayerKey
+                                    },
+                                    // 删完就地刷新清单，否则那一行还留在屏幕上。
+                                    onComplete = {
+                                        scope.launch {
+                                            runCatching {
+                                                withContext(Dispatchers.IO) { active.resourceInventory() }
+                                            }.onSuccess { resourceInventory = it }
+                                        }
+                                    },
+                                )
+                            },
+                            onDismiss = { resourceInventory = null },
+                        )
+                    }
                     InternalFileBrowserHost(
                         request = internalFileBrowserRequest,
                         onDismiss = { internalFileBrowserRequest = null },
@@ -1918,7 +2114,7 @@ private fun resolveLayerAssetThumbnail(
 private fun resolveVideoFirstFrameThumbnail(
     file: File,
     sizePx: Int,
-): androidx.compose.ui.graphics.ImageBitmap? = runCatching {
+): androidx.compose.ui.graphics.ImageBitmap = runCatching {
     val retriever = MediaMetadataRetriever()
     try {
         retriever.setDataSource(file.absolutePath)
@@ -1932,7 +2128,7 @@ private fun resolveVideoFirstFrameThumbnail(
         // release() 自身可能抛（损坏文件），不能让它盖掉上面的结果。
         runCatching { retriever.release() }
     }
-}.getOrNull()
+}.getOrNull() ?: watchEditorBlackVideoThumbnail(sizePx).asImageBitmap()
 
 /**
  * Resolves an image layer's `path` attribute against the draft directory the
@@ -1999,6 +2195,7 @@ private fun WatchEditorScreen(
     onUpdateShape: (String) -> Unit,
     onUpdateBackground: (String?) -> Unit,
     onEditGlobalScript: () -> Unit,
+    onManageResources: () -> Unit,
     onUploadToStore: () -> Unit,
     onImportWatch: () -> Unit,
     onImportWatchLong: () -> Unit,
@@ -2045,6 +2242,8 @@ private fun WatchEditorScreen(
         bodySensorsPermissionGranted = hasEditorBodySensorsPermission(context)
     }
     val isRound = isFlueScreenRound()
+    val toolbarMaxWidthDp = LocalConfiguration.current.screenWidthDp.toFloat()
+    val toolbarViewportDp = watchEditorToolbarViewportWidth(isRound, toolbarMaxWidthDp)
     val roundContentMode = roundEditorContentMode(
         isRound = isRound,
         panelFullscreen = editorLayout == WatchEditorLayout.PANEL_FULL,
@@ -2161,6 +2360,8 @@ private fun WatchEditorScreen(
             gravityBackdropBlurEnabled = gravityBackdropBlurEnabled,
             designExtentWidth = WatchCanvasSize.DEFAULT.designExtentWidth,
             designExtentHeight = WatchCanvasSize.DEFAULT.designExtentHeight,
+            // 视频层的圆形裁剪判据，与渲染器给 Canvas 段那一刀同源（表盘声明的形状）。
+            faceIsRound = watchFaceShape(snapshot.rootAttributes["shape"]) == WatchFaceShape.ROUND,
         )
     }
 
@@ -2277,58 +2478,69 @@ private fun WatchEditorScreen(
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
-                    IconButton(
-                        onClick = { previewPlaying = !previewPlaying },
-                        modifier = Modifier.size(36.dp),
+                    FlueExpressiveFloatingToolbar(
+                        modifier = Modifier
+                            .padding(start = 4.dp)
+                            // Material3's minimum touch target makes five editor actions wider
+                            // than the usable chord on a round display. Keep the toolbar bounded
+                            // and let the user sweep across the actions instead of painting into
+                            // the curved edge.
+                            .widthIn(max = toolbarViewportDp.dp)
+                            .horizontalScroll(rememberScrollState()),
                     ) {
-                        Icon(
-                            if (previewPlaying) FlueMiuixIcons.Pause else FlueMiuixIcons.Play,
-                            contentDescription = stringResource(
-                                if (previewPlaying) {
-                                    R.string.watch_editor_preview_pause
-                                } else {
-                                    R.string.watch_editor_preview_play
-                                },
-                            ),
-                        )
-                    }
-                    IconButton(
-                        onClick = { editorLayout = WatchEditorLayout.CANVAS_FULL },
-                        modifier = Modifier.size(36.dp),
-                    ) {
-                        Icon(
-                            FlueMiuixIcons.ArrowUp,
-                            contentDescription = stringResource(R.string.watch_editor_canvas_fullscreen),
-                        )
-                    }
-                    IconButton(
-                        onClick = { editorLayout = WatchEditorLayout.PANEL_FULL },
-                        modifier = Modifier.size(36.dp),
-                    ) {
-                        Icon(
-                            FlueMiuixIcons.ArrowDown,
-                            contentDescription = stringResource(R.string.watch_editor_panel_fullscreen),
-                        )
-                    }
-                    IconButton(
-                        onClick = onUndo,
-                        enabled = snapshot.canUndo && busyMessage == null,
-                        modifier = Modifier.size(36.dp),
-                    ) {
-                        Icon(
-                            MiuixIcons.Undo,
-                            contentDescription = stringResource(R.string.watch_editor_undo),
-                        )
-                    }
-                    IconButton(
-                        onClick = onRedo,
-                        enabled = snapshot.canRedo && busyMessage == null,
-                        modifier = Modifier.size(36.dp),
-                    ) {
-                        Icon(
-                            MiuixIcons.Redo,
-                            contentDescription = stringResource(R.string.watch_editor_redo),
-                        )
+                        IconButton(
+                            onClick = { previewPlaying = !previewPlaying },
+                            modifier = Modifier.size(36.dp),
+                        ) {
+                            Icon(
+                                if (previewPlaying) FlueMiuixIcons.Pause else FlueMiuixIcons.Play,
+                                contentDescription = stringResource(
+                                    if (previewPlaying) {
+                                        R.string.watch_editor_preview_pause
+                                    } else {
+                                        R.string.watch_editor_preview_play
+                                    },
+                                ),
+                            )
+                        }
+                        IconButton(
+                            onClick = { editorLayout = WatchEditorLayout.CANVAS_FULL },
+                            modifier = Modifier.size(36.dp),
+                        ) {
+                            Icon(
+                                FlueMiuixIcons.ArrowUp,
+                                contentDescription = stringResource(R.string.watch_editor_canvas_fullscreen),
+                            )
+                        }
+                        IconButton(
+                            onClick = { editorLayout = WatchEditorLayout.PANEL_FULL },
+                            modifier = Modifier.size(36.dp),
+                        ) {
+                            Icon(
+                                FlueMiuixIcons.ArrowDown,
+                                contentDescription = stringResource(R.string.watch_editor_panel_fullscreen),
+                            )
+                        }
+                        IconButton(
+                            onClick = onUndo,
+                            enabled = snapshot.canUndo && busyMessage == null,
+                            modifier = Modifier.size(36.dp),
+                        ) {
+                            Icon(
+                                MiuixIcons.Undo,
+                                contentDescription = stringResource(R.string.watch_editor_undo),
+                            )
+                        }
+                        IconButton(
+                            onClick = onRedo,
+                            enabled = snapshot.canRedo && busyMessage == null,
+                            modifier = Modifier.size(36.dp),
+                        ) {
+                            Icon(
+                                MiuixIcons.Redo,
+                                contentDescription = stringResource(R.string.watch_editor_redo),
+                            )
+                        }
                     }
                 }
             }
@@ -2511,7 +2723,7 @@ private fun WatchEditorScreen(
                                 },
                             )
                         }
-                        .flueElasticNestedScroll(layerListState),
+                        .flueOverscroll(layerListState),
                     contentPadding = editorListContentPadding(layerListTopInViewport()),
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
@@ -2588,13 +2800,13 @@ private fun WatchEditorScreen(
                             }
                             val textThumbnail = remember(
                                 thumbnailRenderer,
-                                layer.order,
+                                layer.definitionIndex,
                                 layer.attributes,
                                 previewToken,
                                 textThumbnailClockTick,
                             ) {
                                 if (layer.type.lowercase(Locale.ROOT).contains("text")) {
-                                    thumbnailRenderer?.resolveTextLayerPreview(layer.order)
+                                    thumbnailRenderer?.resolveTextLayerPreview(layer.definitionIndex)
                                         ?: layer.attributes["text"].orEmpty()
                                             .ifBlank { layer.attributes["value"].orEmpty() }
                                             .takeUnless { it.contains('{') || it.contains('}') }
@@ -2604,7 +2816,7 @@ private fun WatchEditorScreen(
                             }
                             val renderedTextThumbnail = remember(
                                 thumbnailRenderer,
-                                layer.order,
+                                layer.definitionIndex,
                                 layer.attributes,
                                 previewToken,
                                 textThumbnailClockTick,
@@ -2614,7 +2826,7 @@ private fun WatchEditorScreen(
                                     setOf("text", "text_curved", "text_ring")
                                 ) {
                                     thumbnailRenderer
-                                        ?.renderTextLayerThumbnail(layer.order, thumbSizePx)
+                                        ?.renderTextLayerThumbnail(layer.definitionIndex, thumbSizePx)
                                         ?.asImageBitmap()
                                 } else {
                                     null
@@ -2686,13 +2898,13 @@ private fun WatchEditorScreen(
                         }
                         val overlayText = remember(
                             thumbnailRenderer,
-                            overlayLayer.order,
+                            overlayLayer.definitionIndex,
                             overlayLayer.attributes,
                             previewToken,
                             textThumbnailClockTick,
                         ) {
                             if (overlayLayer.type.lowercase(Locale.ROOT).contains("text")) {
-                                thumbnailRenderer?.resolveTextLayerPreview(overlayLayer.order)
+                                thumbnailRenderer?.resolveTextLayerPreview(overlayLayer.definitionIndex)
                                     ?: overlayLayer.attributes["text"].orEmpty()
                                         .ifBlank { overlayLayer.attributes["value"].orEmpty() }
                                         .takeUnless { it.contains('{') || it.contains('}') }
@@ -2702,7 +2914,7 @@ private fun WatchEditorScreen(
                         }
                         val overlayRenderedText = remember(
                             thumbnailRenderer,
-                            overlayLayer.order,
+                            overlayLayer.definitionIndex,
                             overlayLayer.attributes,
                             previewToken,
                             textThumbnailClockTick,
@@ -2712,7 +2924,10 @@ private fun WatchEditorScreen(
                                 setOf("text", "text_curved", "text_ring")
                             ) {
                                 thumbnailRenderer
-                                    ?.renderTextLayerThumbnail(overlayLayer.order, overlayThumbSizePx)
+                                    ?.renderTextLayerThumbnail(
+                                        overlayLayer.definitionIndex,
+                                        overlayThumbSizePx,
+                                    )
                                     ?.asImageBitmap()
                             } else {
                                 null
@@ -2780,7 +2995,7 @@ private fun WatchEditorScreen(
                         .onGloballyPositioned {
                             chordPropertiesListTopInWindow = it.positionInWindow().y
                         }
-                        .flueElasticNestedScroll(propertiesListState),
+                        .flueOverscroll(propertiesListState),
                     contentPadding = editorListContentPadding(propertiesListTopInViewport()),
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
@@ -2795,7 +3010,12 @@ private fun WatchEditorScreen(
                     } else {
                         item("properties") {
                             Box(
-                                modifier = Modifier.chordScaleItem(
+                                modifier = Modifier
+                                    // 属性面板里的段落会随图层类型增减（点击动作、描边、
+                                    // 文字动画…）。不给动画的话换一次选中层，整块面板
+                                    // 的高度就是跳变。与设置页用同一条 spec。
+                                    .animateContentSize(flueContentSizeSpring)
+                                    .chordScaleItem(
                                     listState = propertiesListState,
                                     key = "properties",
                                     screenCenterY = chordCenterY,
@@ -2845,7 +3065,7 @@ private fun WatchEditorScreen(
                         .onGloballyPositioned {
                             chordWatchListTopInWindow = it.positionInWindow().y
                         }
-                        .flueElasticNestedScroll(watchListState),
+                        .flueOverscroll(watchListState),
                     contentPadding = editorListContentPadding(watchListTopInViewport()),
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
@@ -2928,7 +3148,7 @@ private fun WatchEditorScreen(
                                 listTopInViewport = watchListTopInViewport,
                             ),
                             color = MaterialTheme.colorScheme.surfaceVariant,
-                            shape = RoundedCornerShape(14.dp),
+                            shape = LauncherTheme.style.compactShape,
                         ) {
                             Column(
                                 modifier = Modifier.fillMaxWidth().padding(12.dp),
@@ -2975,7 +3195,7 @@ private fun WatchEditorScreen(
                                 listTopInViewport = watchListTopInViewport,
                             ),
                             color = MaterialTheme.colorScheme.surfaceVariant,
-                            shape = RoundedCornerShape(14.dp),
+                            shape = LauncherTheme.style.compactShape,
                         ) {
                             Column(
                                 modifier = Modifier.fillMaxWidth().padding(12.dp),
@@ -2990,7 +3210,7 @@ private fun WatchEditorScreen(
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 )
-                                OutlinedButton(
+                                FlueOutlinedButton(
                                     onClick = onEditGlobalScript,
                                     enabled = busyMessage == null,
                                     modifier = Modifier.fillMaxWidth(),
@@ -3012,7 +3232,12 @@ private fun WatchEditorScreen(
                             ),
                             verticalArrangement = Arrangement.spacedBy(8.dp),
                         ) {
-                            Button(
+                            // 这一排以前混着 Material 的 Button / OutlinedButton 和
+                            // 我们自己的 Surface 按钮：前者用 ButtonDefaults 的胶囊形，
+                            // 后者用风格令牌，于是 MIUIX 下同一列按钮圆角一个 20dp
+                            // 一个 14dp（老师报的「miuix 下面按钮圆角不统一」）。
+                            // 全部换成 Flue* 之后统一走 rowShape。
+                            FlueButton(
                                 onClick = onSaveAsNew,
                                 enabled = busyMessage == null,
                                 modifier = Modifier.fillMaxWidth(),
@@ -3021,7 +3246,7 @@ private fun WatchEditorScreen(
                                 Spacer(Modifier.width(6.dp))
                                 Text(stringResource(R.string.watch_editor_save_as))
                             }
-                            OutlinedButton(
+                            FlueOutlinedButton(
                                 onClick = onSave,
                                 enabled = busyMessage == null,
                                 modifier = Modifier.fillMaxWidth(),
@@ -3030,7 +3255,7 @@ private fun WatchEditorScreen(
                                 Spacer(Modifier.width(6.dp))
                                 Text(stringResource(R.string.watch_editor_save_current))
                             }
-                            OutlinedButton(
+                            FlueOutlinedButton(
                                 onClick = onRename,
                                 enabled = busyMessage == null,
                                 modifier = Modifier.fillMaxWidth(),
@@ -3060,7 +3285,7 @@ private fun WatchEditorScreen(
                                 onLongClick = onExportLong,
                                 modifier = Modifier.fillMaxWidth(),
                             )
-                            OutlinedButton(
+                            FlueOutlinedButton(
                                 onClick = onUploadToStore,
                                 enabled = busyMessage == null,
                                 modifier = Modifier.fillMaxWidth(),
@@ -3068,6 +3293,16 @@ private fun WatchEditorScreen(
                                 Icon(MiuixIcons.UploadCloud, contentDescription = null)
                                 Spacer(Modifier.width(6.dp))
                                 Text(stringResource(R.string.watch_editor_upload_store))
+                            }
+                            // 资源管理器：包里到底有什么以前完全不可见（老师要的）。
+                            FlueOutlinedButton(
+                                onClick = onManageResources,
+                                enabled = busyMessage == null,
+                                modifier = Modifier.fillMaxWidth(),
+                            ) {
+                                Icon(MiuixIcons.Folder, contentDescription = null)
+                                Spacer(Modifier.width(6.dp))
+                                Text(stringResource(R.string.watch_editor_manage_resources))
                             }
                         }
                     }
@@ -3088,6 +3323,18 @@ private fun WatchEditorScreen(
                                     enabled = editorFisheyeEnabled,
                                     listTopInViewport = watchListTopInViewport,
                                 ),
+                        )
+                    }
+                    item("wftools_promo") {
+                        WfToolsPromoRow(
+                            modifier = Modifier.chordScaleItem(
+                                listState = watchListState,
+                                key = "wftools_promo",
+                                screenCenterY = chordCenterY,
+                                viewportWidth = chordViewportWidth,
+                                enabled = editorFisheyeEnabled,
+                                listTopInViewport = watchListTopInViewport,
+                            ),
                         )
                     }
                 }
@@ -3145,6 +3392,7 @@ private fun EditorGlobalScriptOverlay(
     }
     val byteCount = remember(script.text) { watchEditorScriptByteCount(script.text) }
     val withinLimit = byteCount <= WatchEditorSession.MAX_WATCH_SCRIPT_BYTES
+    val scriptScrollState = rememberScrollState()
     BackHandler(onBack = onCancel)
 
     Surface(
@@ -3152,7 +3400,12 @@ private fun EditorGlobalScriptOverlay(
         color = MaterialTheme.colorScheme.background,
     ) {
         Column(
-            modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 10.dp),
+            modifier = Modifier
+                .fillMaxSize()
+                // 键盘弹起时整页上移，否则输入框被软键盘盖住、看不到自己在打什么
+                //（老师报的「不会被键盘把输入框顶上去」）。
+                .imePadding()
+                .padding(horizontal = 16.dp, vertical = 10.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             Row(
@@ -3181,7 +3434,14 @@ private fun EditorGlobalScriptOverlay(
                 onValueChange = { script = it },
                 textStyle = MaterialTheme.typography.bodyMedium.copy(fontFamily = FontFamily.Monospace),
                 placeholder = { Text(stringResource(R.string.watch_editor_script_placeholder)) },
-                modifier = Modifier.fillMaxWidth().weight(1f),
+                shape = LauncherTheme.style.rowShape,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f)
+                    // 脚本经常几十行，输入框自己不滚。外面套一层带阻尼的滚动，
+                    // 和全局的滚动手感一致（老师报的「滑动没有阻尼」）。
+                    .flueOverscroll(scriptScrollState)
+                    .verticalScroll(scriptScrollState),
             )
             Text(
                 text = stringResource(
@@ -3209,6 +3469,145 @@ private fun EditorGlobalScriptOverlay(
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.error,
                 )
+            }
+        }
+    }
+}
+
+/**
+ * 表盘内部资源管理器。
+ *
+ * ## 为什么需要它
+ *
+ * 包里到底有什么，作者以前完全看不到：换过三版视频就躺着三个 mp4、删过的序列帧、
+ * 早年导入的字体，全都只体现为「当前表盘大小」那一行数字。等到上传被 20MB 上限拦下来
+ * 才发现，而那时也不知道该删哪个（老师要的「表盘内部资源管理器」）。
+ *
+ * ## 只允许删「没人引用」的
+ *
+ * 被图层引用的素材不给删按钮 —— 资源管理器不该成为把表盘删坏的快捷通道。字体、脚本、
+ * 着色器、预览图一律算已引用：它们不是按 `path` 引用的，静态分析看不出来
+ * （见 `WatchEditorSession.resourceInventory`）。删除走的是同一套 stash，可以撤销。
+ */
+@Composable
+private fun EditorResourceManagerOverlay(
+    entries: List<WatchEditorResourceEntry>,
+    busy: Boolean,
+    /**
+     * 草稿目录。缩略图要按绝对路径自己解码 —— 这些素材是应用私有存储里的临时拷贝，
+     * 没有 content URI、也不在媒体库里，任何现成加载器都拿不到（见 EditorResourceThumbnail）。
+     */
+    draftDirectory: File,
+    onDelete: (String) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val style = LauncherTheme.style
+    BackHandler(onBack = onDismiss)
+    val orphanBytes = remember(entries) { entries.filterNot { it.referenced }.sumOf { it.bytes } }
+
+    Surface(
+        modifier = Modifier.fillMaxSize().zIndex(20f),
+        color = MaterialTheme.colorScheme.background,
+    ) {
+        Column(modifier = Modifier.fillMaxSize()) {
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                IconButton(onClick = onDismiss) {
+                    Icon(
+                        MiuixIcons.Back,
+                        contentDescription = stringResource(R.string.watch_editor_back),
+                        tint = style.titleColor,
+                    )
+                }
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        stringResource(R.string.watch_editor_manage_resources),
+                        color = style.titleColor,
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                    Text(
+                        stringResource(
+                            R.string.watch_editor_resources_summary_fmt,
+                            entries.size,
+                            formatEditorFileSize(entries.sumOf { it.bytes }),
+                            formatEditorFileSize(orphanBytes),
+                        ),
+                        color = style.secondaryTextColor,
+                        fontSize = 10.sp,
+                    )
+                }
+            }
+            // StoreRoundList 那一套（圆屏弦宽 + 回弹 + 首尾能拉到圆心）在这里同样适用。
+            StoreRoundList(modifier = Modifier.weight(1f)) {
+                if (entries.isEmpty()) {
+                    item("empty") {
+                        Text(
+                            stringResource(R.string.watch_editor_resources_empty),
+                            color = style.secondaryTextColor,
+                            fontSize = 11.sp,
+                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                        )
+                    }
+                }
+                items(entries, key = { it.relativePath }, contentType = { "resource_row" }) { entry ->
+                    FlueCard(modifier = Modifier.fillMaxWidth(), border = null) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 10.dp, vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            EditorResourceThumbnail(
+                                file = File(draftDirectory, entry.relativePath),
+                                kind = entry.kind,
+                                fileBytes = entry.bytes,
+                            )
+                            Spacer(Modifier.width(8.dp))
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    entry.fileName,
+                                    color = style.titleColor,
+                                    fontSize = 12.sp,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                                Text(
+                                    buildString {
+                                        entry.directory.takeIf(String::isNotEmpty)?.let {
+                                            append(it).append(" · ")
+                                        }
+                                        append(formatEditorFileSize(entry.bytes))
+                                    },
+                                    color = style.secondaryTextColor,
+                                    fontSize = 10.sp,
+                                )
+                            }
+                            if (entry.referenced) {
+                                Text(
+                                    stringResource(R.string.watch_editor_resource_in_use),
+                                    color = style.secondaryTextColor,
+                                    fontSize = 10.sp,
+                                )
+                            } else {
+                                IconButton(
+                                    onClick = { onDelete(entry.relativePath) },
+                                    enabled = !busy,
+                                    modifier = Modifier.size(32.dp),
+                                ) {
+                                    Icon(
+                                        MiuixIcons.Delete,
+                                        contentDescription = stringResource(R.string.action_remove),
+                                        tint = WatchColors.ActiveRed,
+                                        modifier = Modifier.size(17.dp),
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
             }
         }
     }
@@ -3359,7 +3758,7 @@ private fun androidx.compose.foundation.lazy.LazyListScope.editorStatusItems(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                MiuixLoadingIndicator(size = 18.dp)
+                FlueLoadingIndicator(size = 18.dp)
                 Text(busyMessage, style = MaterialTheme.typography.bodySmall)
             }
         }
@@ -3431,6 +3830,16 @@ private fun WatchEditorPreview(
      */
     designExtentWidth: Float = WatchmakerGeometry.DESIGN_SIZE,
     designExtentHeight: Float = WatchmakerGeometry.DESIGN_SIZE,
+    /**
+     * 表盘自己声明的形状是不是圆。
+     *
+     * 只用来裁视频层：Canvas 段自己会按 `definition.shape` 裁内切圆
+     * （`drawPreparedSource` 里那一刀），但视频是独立 SurfaceTexture，吃不到 Canvas 的
+     * clip —— 圆形表盘上视频于是方方正正地铺出圆外（老师报的「开启圆屏之后视频不会被
+     * 遮罩裁切到圆形」）。判据与那一刀同源，用**表盘形状**而不是设备屏形：编辑器画的是
+     * 声明画布，方屏机器上编圆表盘也要看到圆。
+     */
+    faceIsRound: Boolean = false,
 ) {
     val context = LocalContext.current
     var loadError by remember(descriptor.stableKey, refreshToken) { mutableStateOf<String?>(null) }
@@ -3461,7 +3870,9 @@ private fun WatchEditorPreview(
                 layer.type.equals("image_gif", ignoreCase = true) ||
                 '`' in layer.attributes["path"].orEmpty()
         }
-        ?.order
+        // definitionIndex 而不是 order：渲染器按含嵌套的扁平表找层，见
+        // WatchEditorLayer.definitionIndex 的注释。
+        ?.definitionIndex
     val dataProvider = rememberWatchmakerWatchDataProvider(
         active = true,
         permissionRevision = bodySensorsPermissionGranted,
@@ -3478,11 +3889,15 @@ private fun WatchEditorPreview(
         contentAlignment = Alignment.Center,
     ) {
         var faceView by remember { mutableStateOf<WatchmakerWatchFaceView?>(null) }
+        // 实时变换要广播给所有 Canvas 段（见 WatchmakerWatchFaceStageView），
+        // 所以另外记住 stage 本身，不能只拿首段。
+        var faceStage by remember { mutableStateOf<WatchmakerWatchFaceStageView?>(null) }
         AndroidView(
             modifier = Modifier.fillMaxSize(),
             factory = { context ->
                 WatchmakerWatchFaceStageView(context).also { stage ->
                     faceView = stage.renderer
+                    faceStage = stage
                     onFaceViewChanged(stage.renderer)
                 }
             },
@@ -3520,34 +3935,44 @@ private fun WatchEditorPreview(
                     textEntryAnimationEnabled = true,
                     textExitAnimationEnabled = true,
                 )
+                // 分段之后再下发圆形裁剪：视频面是在 syncVideoSegments 里建出来的，
+                // 而 setRoundClip 只在有视频面时才真的裁（见 dispatchDraw）。
+                stage.setRoundClip(faceIsRound)
             },
             onRelease = { stage ->
                 if (faceView === stage.renderer) faceView = null
+                if (faceStage === stage) faceStage = null
                 onFaceViewChanged(null)
                 stage.dispose()
             },
         )
         // 拖动期间把手势变换逐帧喂给渲染器：元素和选中框一起动，
         // 不再是「只有框在动、松手后像素才跳过去」。
-        LaunchedEffect(transformPreview, layers, faceView) {
-            val view = faceView ?: return@LaunchedEffect
+        LaunchedEffect(transformPreview, layers, faceStage) {
+            val stage = faceStage ?: return@LaunchedEffect
             val preview = transformPreview
             if (preview == null) {
-                view.setEditorAnimationInteractionFrozen(false)
-                view.clearLiveLayerTransform()
+                stage.setEditorAnimationInteractionFrozen(false)
+                stage.clearLiveLayerTransform()
                 return@LaunchedEffect
             }
-            val index = layers.firstOrNull { it.key == preview.key }?.order
+            val target = layers.firstOrNull { it.key == preview.key }
+            // definitionIndex 是渲染器那张**含嵌套**扁平表里的下标；以前传的是
+            // order（只数顶层图层），带分组的表盘上两者不等，于是按下标匹配落到别的层，
+            // 像素不跟手。图层有 id 时按 id 匹配本来就对，所以以前只有「没有 id 的层」
+            // 表现出问题 —— 文字层正是通常不写 id 的那一类。
+            val index = target?.definitionIndex
                 ?: layers.indexOfFirst { it.key == preview.key }
             if (index < 0) {
-                view.setEditorAnimationInteractionFrozen(false)
-                view.clearLiveLayerTransform()
+                stage.setEditorAnimationInteractionFrozen(false)
+                stage.clearLiveLayerTransform()
                 return@LaunchedEffect
             }
-            view.setEditorAnimationInteractionFrozen(true)
+            stage.setEditorAnimationInteractionFrozen(true)
             val transform = preview.transform
-            view.setLiveLayerTransform(
+            stage.setLiveLayerTransform(
                 layerIndex = index,
+                layerId = target?.id,
                 x = transform.x,
                 y = transform.y,
                 rotationDegrees = transform.rotation,
@@ -4090,7 +4515,7 @@ private fun EditorImageCropOverlay(
                     color = MaterialTheme.colorScheme.error,
                     style = MaterialTheme.typography.bodySmall,
                 )
-                bitmap == null -> MiuixLoadingIndicator(Modifier.align(Alignment.Center))
+                bitmap == null -> FlueLoadingIndicator(Modifier.align(Alignment.Center))
                 else -> {
                     Image(
                         bitmap = bitmap.asImageBitmap(),
@@ -4279,7 +4704,7 @@ private fun EditorVideoConversionProgressDialog(
     onCancel: () -> Unit,
 ) {
     val safeProgress = progress.coerceIn(0f, 1f)
-    AlertDialog(
+    FlueAlertDialog(
         onDismissRequest = {},
         title = {
             Text(
@@ -4522,7 +4947,7 @@ private fun EditorLongPressImportButton(
         ),
         color = MaterialTheme.colorScheme.surface,
         contentColor = contentColor,
-        shape = RoundedCornerShape(20.dp),
+        shape = LauncherTheme.style.compactShape,
         border = BorderStroke(1.dp, contentColor.copy(alpha = if (enabled) 1f else 0.5f)),
     ) {
         Row(
@@ -4788,11 +5213,7 @@ private fun LayerPropertiesEditor(
                 mutableStateOf(TextFieldValue(currentRaw, TextRange(currentRaw.length)))
             }
             var showAppPicker by remember { mutableStateOf(false) }
-            // 懒加载已安装应用（仅打开选择器时加载）
-            var installedApps by remember {
-                mutableStateOf<List<Triple<String, String, String>>>(emptyList()) // (label, pkg, launchActivity)
-            }
-            var appPickerQuery by remember { mutableStateOf("") }
+            var showPresetPicker by remember { mutableStateOf(false) }
 
             fun applyAction(raw: String) {
                 tapActionText = TextFieldValue(raw, TextRange(raw.length))
@@ -4800,80 +5221,33 @@ private fun LayerPropertiesEditor(
             }
 
             if (showAppPicker) {
-                val filtered = remember(installedApps, appPickerQuery) {
-                    if (appPickerQuery.isBlank()) installedApps
-                    else installedApps.filter {
-                        it.first.contains(appPickerQuery, ignoreCase = true) ||
-                            it.second.contains(appPickerQuery, ignoreCase = true)
-                    }
-                }
-                androidx.compose.runtime.LaunchedEffect(Unit) {
-                    if (installedApps.isEmpty()) {
-                        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-                            val pm = context.packageManager
-                            val launchIntent = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
-                            installedApps = pm
-                                .queryIntentActivities(launchIntent, 0)
-                                .mapNotNull { info ->
-                                    val label = info.loadLabel(pm).toString()
-                                    val pkg = info.activityInfo.packageName
-                                    val activity = info.activityInfo.name
-                                    if (pkg.isNotBlank() && activity.isNotBlank()) {
-                                        Triple(label, pkg, activity)
-                                    } else null
-                                }
-                                .sortedBy { (l, _, _) -> l.lowercase() }
-                        }
-                    }
-                }
-                AlertDialog(
-                    onDismissRequest = { showAppPicker = false; appPickerQuery = "" },
-                    title = { Text(stringResource(R.string.watch_editor_select_app_title)) },
-                    text = {
-                        Column {
-                            androidx.compose.material3.OutlinedTextField(
-                                value = appPickerQuery,
-                                onValueChange = { appPickerQuery = it },
-                                placeholder = {
-                                    Text(stringResource(R.string.watch_editor_search_app_hint))
-                                },
-                                modifier = Modifier.fillMaxWidth(),
-                                singleLine = true,
-                            )
-                            Spacer(Modifier.height(8.dp))
-                            androidx.compose.foundation.lazy.LazyColumn(
-                                modifier = Modifier.height(280.dp),
-                                verticalArrangement = Arrangement.spacedBy(2.dp),
-                            ) {
-                                items(filtered, key = { it.second + "/" + it.third }) { (label, pkg, activity) ->
-                                    Row(
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .clickable {
-                                                applyAction("w_app:$label`$pkg`$activity")
-                                                showAppPicker = false
-                                                appPickerQuery = ""
-                                            }
-                                            .padding(horizontal = 4.dp, vertical = 8.dp),
-                                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                        verticalAlignment = Alignment.CenterVertically,
-                                    ) {
-                                        Text(label, modifier = Modifier.weight(1f))
-                                        Text(
-                                            pkg,
-                                            style = MaterialTheme.typography.labelSmall,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                        )
-                                    }
-                                }
-                            }
-                        }
+                // 与「设置 → 表盘点击动作」共用同一个选择器（名单缓存 + 图标懒取都在里面）。
+                // 以前这里是另一份自搓实现：没有图标、用的是 MaterialTheme 的颜色，
+                // 在 miuix / Apple 档下和周围格格不入。
+                WatchAppPickerDialog(
+                    title = stringResource(R.string.watch_editor_app_picker),
+                    subtitle = stringResource(R.string.watch_editor_tap_action_example),
+                    selected = null,
+                    onPick = { app ->
+                        // WM_TAP_ACTIONS 的 `w_app:` 语法：标签`包名`Activity。
+                        applyAction("w_app:${app.label}`${app.packageName}`${app.activityClass}")
+                        showAppPicker = false
                     },
-                    confirmButton = {
-                        TextButton(onClick = { showAppPicker = false; appPickerQuery = "" }) {
-                            Text(stringResource(R.string.watch_editor_cancel))
-                        }
+                    onDismiss = { showAppPicker = false },
+                )
+            }
+
+            if (showPresetPicker) {
+                // 名单与「设置 → 表盘点击动作」共用一份（见 WatchTapActionPresetDialog 注释）：
+                // 编辑器写进图层的动作名必须正好是设置页能绑定应用的那个键，
+                // 否则表盘写一个键、映射存另一个键，点下去静默无反应。
+                WatchTapActionPresetDialog(
+                    current = tapActionText.text,
+                    onPick = { preset ->
+                        applyAction(preset)
+                        showPresetPicker = false
                     },
+                    onDismiss = { showPresetPicker = false },
                 )
             }
 
@@ -4903,24 +5277,36 @@ private fun LayerPropertiesEditor(
                         placeholder = { Text(stringResource(R.string.watch_editor_tap_action_example)) },
                         singleLine = true,
                     )
-                    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
                         OutlinedButton(
                             onClick = { showAppPicker = true },
                             enabled = enabled,
-                        ) { Text(stringResource(R.string.watch_editor_select_app)) }
+                        ) { Text(stringResource(R.string.watch_editor_more_watch_options)) }
+                        // 这里原来是「日历」「天气」两个写死的按钮，只覆盖 widget_calendar /
+                        // widget_weather 两个动作；上游命名动作一共 26 个（WM_TAP_ACTIONS.md §3），
+                        // 其余的只能手打进输入框 —— 打错一个字母解析器就归到 Unsupported，
+                        // 表盘上点下去只有一句「动作不可用」，编辑时根本看不出是拼错了。
+                        // 换成完整预设名单，日历和天气也还在里面，没丢东西。
                         OutlinedButton(
-                            onClick = { applyAction("widget_calendar") },
+                            onClick = { showPresetPicker = true },
                             enabled = enabled,
-                        ) { Text(stringResource(R.string.watch_editor_calendar)) }
+                        ) { Text(stringResource(R.string.watch_editor_tap_action_preset)) }
+                        // 清除改成纯图标，并且**常驻**（原来是有值才出现）：三个文字按钮在圆屏
+                        // 属性面板里排一行会被右边裁掉，而清除是「撤掉刚才那次误选」的唯一出口，
+                        // 不能是被裁掉的那个；常驻则让这一行宽度不随取值跳动。
                         OutlinedButton(
-                            onClick = { applyAction("widget_weather") },
-                            enabled = enabled,
-                        ) { Text(stringResource(R.string.watch_editor_weather)) }
-                        if (currentRaw.isNotBlank()) {
-                            OutlinedButton(
-                                onClick = { applyAction("") },
-                                enabled = enabled,
-                            ) { Text(stringResource(R.string.watch_editor_clear)) }
+                            onClick = { applyAction("") },
+                            enabled = enabled && tapActionText.text.isNotBlank(),
+                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                        ) {
+                            Icon(
+                                OfficialMiuixIcons.OfficialClear,
+                                contentDescription = stringResource(R.string.watch_editor_clear),
+                                modifier = Modifier.size(16.dp),
+                            )
                         }
                     }
                 }
@@ -5052,7 +5438,7 @@ private fun EditorWatchShapeCard(
     val notSetLabel = stringResource(R.string.watch_editor_not_set)
     Surface(
         color = MaterialTheme.colorScheme.surfaceVariant,
-        shape = RoundedCornerShape(14.dp),
+        shape = LauncherTheme.style.compactShape,
     ) {
         Column(
             modifier = Modifier.fillMaxWidth().padding(12.dp),
@@ -5117,7 +5503,7 @@ private fun EditorWatchBackgroundCard(
     val notSetLabel = stringResource(R.string.watch_editor_not_set)
     Surface(
         color = MaterialTheme.colorScheme.surfaceVariant,
-        shape = RoundedCornerShape(14.dp),
+        shape = LauncherTheme.style.compactShape,
     ) {
         Column(
             modifier = Modifier.fillMaxWidth().padding(12.dp),
@@ -5170,7 +5556,7 @@ private fun EditorWatchCanvasSizeCard(
     val matchesScreenSuffix = stringResource(R.string.watch_editor_canvas_matches_screen_suffix)
     Surface(
         color = MaterialTheme.colorScheme.surfaceVariant,
-        shape = RoundedCornerShape(14.dp),
+        shape = LauncherTheme.style.compactShape,
     ) {
         Column(
             modifier = Modifier.fillMaxWidth().padding(12.dp),
@@ -5220,6 +5606,10 @@ private fun EditorStoreUploadOverlay(
     val authStore = remember { WatchStoreAuthStore(context) }
     val credentialStore = remember { WatchStoreCredentialStore(context) }
     val api = remember { HttpWatchStoreApi() }
+    // 注册入口必须跟商店 / 我的上传共用服务端开关；编辑器不能用登录组件的
+    // 默认 true，否则 `/config.registration_enabled=false` 时仍会露出注册。
+    val featureFlagCache = remember(api) { WatchStoreFeatureFlagCache.of(api) }
+    var featureFlags by remember { mutableStateOf(WatchStoreFeatureFlags()) }
 
     var auth by remember { mutableStateOf<WatchStoreAuthSession?>(null) }
     var authChecked by remember { mutableStateOf(false) }
@@ -5244,7 +5634,8 @@ private fun EditorStoreUploadOverlay(
     // 未登录时留空，等 LaunchedEffect / 登录成功回填。
     var author by remember { mutableStateOf("") }
     var authorEdited by remember { mutableStateOf(false) }
-    var description by remember { mutableStateOf("") }
+    var description by remember { mutableStateOf(snapshot.rootAttributes["description"].orEmpty()) }
+    var tagsText by remember { mutableStateOf(snapshot.rootAttributes["tags"].orEmpty()) }
     var categories by remember { mutableStateOf<List<WatchStoreCategory>?>(null) }
     var categoriesError by remember { mutableStateOf<String?>(null) }
     var categoriesRetryToken by remember { mutableIntStateOf(0) }
@@ -5259,6 +5650,18 @@ private fun EditorStoreUploadOverlay(
                     if (isRound) WatchStoreScreenType.ROUND else WatchStoreScreenType.SQUARE
             },
         )
+    }
+    var uploadProtected by remember {
+        mutableStateOf(
+            snapshot.rootAttributes.entries.any { (name, value) ->
+                name.equals("protection", ignoreCase = true) &&
+                    value.trim().lowercase(Locale.ROOT) in setOf("y", "yes", "true", "1")
+            },
+        )
+    }
+
+    LaunchedEffect(featureFlagCache) {
+        featureFlags = featureFlagCache.flags()
     }
 
     LaunchedEffect(Unit) {
@@ -5355,6 +5758,9 @@ private fun EditorStoreUploadOverlay(
         }
         // 作者留空就退回账户名，再退回 "flue"：上传出去的包一定带作者。
         val effectiveAuthor = author.trim().ifBlank { activeAuth.username }.ifBlank { "flue" }
+        val uploadTags = tagsText.split(',')
+            .map(String::trim)
+            .filter(String::isNotEmpty)
         busy = context.getString(R.string.watch_store_status_exporting_package)
         formError = null
         uploadPercent = null
@@ -5369,6 +5775,7 @@ private fun EditorStoreUploadOverlay(
                                 "designer_name" to effectiveAuthor,
                                 "author" to effectiveAuthor,
                             ),
+                            protectedExport = uploadProtected,
                         )
                         if (archive.length() > HttpWatchStoreApi.MAX_UPLOAD_BYTES) {
                             throw WatchStorePayloadTooLargeException(HttpWatchStoreApi.MAX_UPLOAD_BYTES)
@@ -5381,6 +5788,7 @@ private fun EditorStoreUploadOverlay(
                             description = description.trim(),
                             screenType = screenType,
                             categoryId = categoryId,
+                            tags = uploadTags,
                         ) { sent, total ->
                             val percent = ((sent * 100L) / total.coerceAtLeast(1L))
                                 .toInt()
@@ -5473,7 +5881,7 @@ private fun EditorStoreUploadOverlay(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    MiuixLoadingIndicator(size = 18.dp)
+                    FlueLoadingIndicator(size = 18.dp)
                     Text(
                         message + (uploadPercent?.let { " $it%" }.orEmpty()),
                         style = MaterialTheme.typography.bodySmall,
@@ -5515,6 +5923,7 @@ private fun EditorStoreUploadOverlay(
                         formError = null
                     },
                     enabled = busy == null,
+                    registrationEnabled = featureFlags.registrationEnabled,
                     loadingAction = authAction,
                     onLogin = { authenticate(register = false) },
                     onRegister = { authenticate(register = true) },
@@ -5576,6 +5985,14 @@ private fun EditorStoreUploadOverlay(
                         enabled = busy == null,
                         modifier = Modifier.fillMaxWidth(),
                     )
+                    OutlinedTextField(
+                        value = tagsText,
+                        onValueChange = { tagsText = it.take(500) },
+                        label = { Text(stringResource(R.string.watch_store_tags)) },
+                        singleLine = true,
+                        enabled = busy == null,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
                     Text(
                         stringResource(R.string.watch_store_screen_shape),
                         style = MaterialTheme.typography.bodySmall,
@@ -5619,7 +6036,7 @@ private fun EditorStoreUploadOverlay(
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(8.dp),
                         ) {
-                            MiuixLoadingIndicator(size = 16.dp)
+                            FlueLoadingIndicator(size = 16.dp)
                             Text(
                                 stringResource(R.string.watch_store_status_loading_categories),
                                 style = MaterialTheme.typography.bodySmall,
@@ -5663,6 +6080,34 @@ private fun EditorStoreUploadOverlay(
                             }
                         }
                     }
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(8.dp))
+                            .clickable(enabled = busy == null) {
+                                uploadProtected = !uploadProtected
+                            }
+                            .padding(horizontal = 4.dp, vertical = 4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Checkbox(
+                            checked = uploadProtected,
+                            onCheckedChange = { uploadProtected = it },
+                            enabled = busy == null,
+                        )
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                stringResource(R.string.watch_store_upload_protected),
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = FontWeight.SemiBold,
+                            )
+                            Text(
+                                stringResource(R.string.watch_store_upload_protected_sub),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = style.secondaryTextColor,
+                            )
+                        }
+                    }
                     Button(
                         onClick = { upload() },
                         enabled = busy == null &&
@@ -5693,7 +6138,7 @@ private fun CenteredStatus(message: String, showProgress: Boolean) {
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center,
     ) {
-        if (showProgress) MiuixLoadingIndicator()
+        if (showProgress) FlueLoadingIndicator()
         Spacer(Modifier.height(12.dp))
         Text(message)
     }
@@ -5745,7 +6190,7 @@ private fun WatchFormatChoicePage(
         )
         Spacer(Modifier.height(18.dp))
         Surface(
-            shape = RoundedCornerShape(14.dp),
+            shape = LauncherTheme.style.compactShape,
             color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
         ) {
             Text(
@@ -5769,12 +6214,15 @@ private fun WatchFormatChoiceCard(
     recommended: Boolean,
     onClick: () -> Unit,
 ) {
+    // 卡片形状统一走令牌：同一屏里 14 / 16 / 20dp 混着写，圆角就参差不齐
+    // （老师报的 AW 卡片圆角不统一）。
+    val cardShape = LauncherTheme.style.compactShape
     Surface(
-        shape = RoundedCornerShape(16.dp),
+        shape = cardShape,
         color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.85f),
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(16.dp))
+            .clip(cardShape)
             .clickable(onClick = onClick),
     ) {
         Column(modifier = Modifier.padding(16.dp)) {
@@ -5822,22 +6270,69 @@ private fun draftDescriptor(
     sourceDirPath = session.draftDirectory.absolutePath,
 )
 
-private fun defaultAttributes(type: String): Map<String, String> = when (type) {
+/**
+ * 新建图层的默认属性。
+ *
+ * ## 属性名必须用规范名，不能自己起
+ *
+ * 这张表原先给 `ring` 写 `radius` / `width`、给 `progress` 写 `radius` / `width` / `value`，
+ * 而 WM 1.0 §7.3/§7.4 定的是 `radius_outer` / `radius_inner` / `angle_total` / `angle` 与
+ * `width` / `height` / `pct_complete` —— **我们自己的渲染器读的就是规范名**
+ * （见 `WatchmakerWatchFaceView` 对 `attrs["radius_outer"]` / `attrs["pct_complete"]` 的读取）。
+ * 于是插进来的环和进度条连本地预览都取不到值，只能吃渲染器的兜底默认。
+ *
+ * 更要紧的是社区商店：上游 `watchParser.js` 的 `LAYER_REQUIRED` 会对每个缺失的必填
+ * 属性记一条 validation error，`scan.success` 转 false 之后表盘落进待审并带上
+ * `rejection_reason` —— 也就是老师转述的「上传不规范的被自动拦截」。一个环缺四条、
+ * 一个进度条缺三条，随手插一个就必拦。
+ *
+ * ## 为什么 image / image_gif / video 不补 width / height
+ *
+ * `WatchEditorSession.applyContainedVideoSize` 在图层**已有** width 或 height 时直接
+ * 早退（`overwriteSize = false` 那条分支），靠的就是「没有尺寸 = 还没定过 = 按素材
+ * 比例自动适配」。这里给个默认尺寸，导入的图片和视频就会被钉死在默认值上，不再按
+ * 原始比例铺开。这几类的 `path` 在选素材之前本来就是空的，那属于「图层还没做完」，
+ * 该由上传前的本地预检拦下来，不该靠在这里编一个假尺寸去骗过商店的必填检查。
+ *
+ * ## 颜色为什么是 6 位小写、不带 #
+ *
+ * 规范里所有颜色属性都写成 `hex RRGGBB`（1.0 §5 的根属性表、§7 每个图层表；示例值
+ * `000000` / `ffffff`），上游两个真实样本包也一律裸 6 位。带 `#` 的 8 位 ARGB 是
+ * Android 的写法：Flue 自己的 `normalizeWatchColorLiteral` 会顺手 `removePrefix("#")`
+ * 并接受 8 位，所以本地看不出问题；拿到官方 WatchMaker / CloX 就是解析失败 →
+ * 图层用兜底色，作者以为 Flue 存坏了。编辑器取色器早就写的是裸 6 位
+ * （`editorColorToHex`），只有这张默认表还留着旧写法，两边口径必须一致。
+ */
+internal fun defaultAttributes(
+    type: String,
+    formatVersion: WatchFormatVersion = WatchFormatVersion.V1,
+): Map<String, String> = when (type) {
+    // font 是 LAYER_REQUIRED 里 text 的必填项之一，空字符串同样算缺失。
+    // 取 "Roboto-Regular"：这既是上游示例表盘（examplewf/all-datapoint.watch）用的名字，
+    // 也正好是 Android 的系统默认字体族 —— 空白草稿里没有 fonts/ 目录，任何渲染器
+    // 解析不到这个引用都会落回系统默认，落点仍是 Roboto Regular，观感不变。
     "text" -> mapOf(
         "text" to "Flue",
         "text_size" to "48",
-        "color" to "#FFFFFFFF",
+        "font" to "Roboto-Regular",
+        "color" to WATCH_DEFAULT_COLOR,
         "x" to "0",
         "y" to "0",
     )
-    "shape" -> mapOf(
-        "shape" to "circle",
-        "width" to "120",
-        "height" to "120",
-        "color" to "#FF4A90E2",
-        "x" to "0",
-        "y" to "0",
-    )
+    // shape 的合法值在 1.0 §7.11 是**首字母大写**的枚举（Square / Circle / Triangle /
+    // Star / Pentagon / Hexagon / Heart），官方渲染器拿这个名字去拼内置遮罩
+    // `shape_<小写>.png`。这里以前写小写 "circle"：Flue 自己 lowercase 之后照样画得
+    // 出来，别的渲染器按原样查表就查不到，图层直接不显示。
+    // 2.0 还要额外写出那张遮罩的 path（§11），值就是 `shape_<小写名>.png`。
+    "shape" -> buildMap {
+        put("shape", "Circle")
+        if (formatVersion == WatchFormatVersion.V2) put("path", "shape_circle.png")
+        put("width", "120")
+        put("height", "120")
+        put("color", "4a90e2")
+        put("x", "0")
+        put("y", "0")
+    }
     "image" -> mapOf("x" to "0", "y" to "0", "opacity" to "100")
     "image_gif" -> mapOf(
         "x" to "0",
@@ -5845,25 +6340,33 @@ private fun defaultAttributes(type: String): Map<String, String> = when (type) {
         "opacity" to "100",
         "gif_delay" to "100",
     )
+    // 120 外径 / 108 内径 = 12 单位厚，与旧默认想表达的粗细一致；angle 给满 360
+    // 是为了插进来就看得见 —— angle 是**已填充角度**，给 0 会画出一个空环，
+    // 用户会以为没插上。
     "ring" -> mapOf(
-        "radius" to "120",
-        "width" to "12",
-        "color" to "#FFFFFFFF",
+        "radius_outer" to "120",
+        "radius_inner" to "108",
+        "angle_total" to "360",
+        "angle" to "360",
+        "is_clockwise" to "Y",
+        "color" to WATCH_DEFAULT_COLOR,
         "x" to "0",
         "y" to "0",
     )
     "progress" -> mapOf(
-        "radius" to "120",
-        "width" to "12",
-        "color" to "#FFFFFFFF",
-        "value" to "50",
+        "width" to "240",
+        "height" to "24",
+        "pct_complete" to "50",
+        "color" to WATCH_DEFAULT_COLOR,
         "x" to "0",
         "y" to "0",
     )
     // 1.0 §7.14。display="b" 是规范的建议默认：视频解码很耗电，
     // 息屏/dim 模式不该继续播。
+    // 不写 path：规范里「没选素材」的表示是**没有这个属性**，不是空串。
+    // 空串会被上游 watchParser.js 判成 missing required（`undefined || === ''`
+    // 两种都算），既没换来任何好处，还让 `path=""` 出现在导出的 XML 里。
     "video" -> mapOf(
-        "path" to "",
         "width" to "512",
         "height" to "512",
         "display" to "b",
@@ -5875,6 +6378,9 @@ private fun defaultAttributes(type: String): Map<String, String> = when (type) {
     "anim_scale_x" to "100",
     "anim_scale_y" to "100",
 )
+
+/** 规范口径的白色：`hex RRGGBB`，小写、不带 `#`。见 [defaultAttributes] 的说明。 */
+internal const val WATCH_DEFAULT_COLOR: String = "ffffff"
 
 @StringRes
 private fun attributeLabelRes(name: String): Int = when (name) {
@@ -5959,60 +6465,23 @@ private fun EditorColorPickerRow(
     }
 }
 
-/** HSV 三滑条取色盘（手表小屏取色盘：预览 + 色相/饱和/明度）。 */
+/**
+ * HSV 三滑条取色盘。
+ *
+ * 实现已经搬进公共件 [com.flue.launcher.ui.common.FlueColorPickerDialog] —— 应用列表背景的
+ * 「自定义颜色」也要用同一套，项目里不能再多一份手搓取色 UI。这里只留一层转发，
+ * 编辑器内部的调用点不用改。
+ */
 @Composable
 private fun EditorColorPickerDialog(
     initial: Color,
     onDismiss: () -> Unit,
     onConfirm: (Color) -> Unit,
 ) {
-    val hsv = remember(initial) {
-        FloatArray(3).also {
-            android.graphics.Color.colorToHSV(initial.toArgb(), it)
-        }
-    }
-    var hue by remember(initial) { mutableStateOf(hsv[0]) }
-    var saturation by remember(initial) { mutableStateOf(hsv[1]) }
-    var value by remember(initial) { mutableStateOf(hsv[2]) }
-    val currentColor = Color(
-        android.graphics.Color.HSVToColor(floatArrayOf(hue, saturation, value)),
-    )
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text(stringResource(R.string.watch_editor_color_picker)) },
-        text = {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(34.dp)
-                        .clip(RoundedCornerShape(10.dp))
-                        .background(currentColor),
-                )
-                Text(
-                    editorColorToHex(currentColor),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                Text(stringResource(R.string.watch_editor_hue), style = MaterialTheme.typography.labelSmall)
-                Slider(value = hue, onValueChange = { hue = it }, valueRange = 0f..360f)
-                Text(
-                    stringResource(R.string.watch_editor_saturation),
-                    style = MaterialTheme.typography.labelSmall,
-                )
-                Slider(value = saturation, onValueChange = { saturation = it }, valueRange = 0f..1f)
-                Text(stringResource(R.string.watch_editor_brightness), style = MaterialTheme.typography.labelSmall)
-                Slider(value = value, onValueChange = { value = it }, valueRange = 0f..1f)
-            }
-        },
-        confirmButton = {
-            TextButton(onClick = { onConfirm(currentColor) }) {
-                Text(stringResource(R.string.watch_editor_use))
-            }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) { Text(stringResource(R.string.watch_editor_cancel)) }
-        },
+    FlueColorPickerDialog(
+        initial = initial,
+        onDismiss = onDismiss,
+        onConfirm = onConfirm,
     )
 }
 
@@ -6316,7 +6785,7 @@ private val V1_ONLY_LAYER_TYPES = listOf(
  * 只影响新增按钮，不影响 [watchEditorLayerTypeLabel] —— 已打开的 2.0 文档若
  * 因某种途径含 video 图层，图层列表仍要显示它的中文名而不是裸类型串。
  */
-private fun insertableLayerTypes(
+internal fun insertableLayerTypes(
     version: WatchFormatVersion,
 ): List<Pair<String, Int>> = when (version) {
     WatchFormatVersion.V1 -> BASIC_LAYER_TYPES + V1_ONLY_LAYER_TYPES

@@ -7,7 +7,9 @@ import com.flue.launcher.watchface.standard.SecureWatchXmlParser
 import com.flue.launcher.watchface.standard.WatchInstallMetadata
 import com.flue.launcher.watchface.standard.WatchArchiveValidator
 import com.flue.launcher.watchface.standard.WatchmakerLayer
+import com.flue.launcher.watchface.standard.WatchmakerProtection
 import com.flue.launcher.watchface.standard.WatchmakerWatchFaceStorage
+import com.flue.launcher.watchface.standard.normalizeWatchColorLiteral
 import com.flue.launcher.watchface.standard.resolveWatchLayerParentIndices
 import org.w3c.dom.Document
 import org.w3c.dom.Element
@@ -111,13 +113,38 @@ class WatchEditorSession private constructor(
     val canSaveCurrentRevision: Boolean
         get() = logicalId != null && installedDirectory != null
 
+    /** Whether the current draft originated from a WatchMaker protected face. */
+    val isProtected: Boolean
+        @Synchronized get() {
+            ensureOpen()
+            return document.documentElement.attributes.let { attributes ->
+                (0 until attributes.length).any { index ->
+                    val attribute = attributes.item(index)
+                    attribute.nodeName.equals("protection", ignoreCase = true) &&
+                        attribute.nodeValue.trim().lowercase(Locale.ROOT) in
+                        setOf("y", "yes", "true", "1")
+                }
+            }
+        }
+
     /** Returns a UI-neutral snapshot; DOM nodes never escape the session. */
     @Synchronized
     fun snapshot(): WatchEditorSnapshot {
         ensureOpen()
         val root = document.documentElement
+        // 两个序号并存，因为两边的消费者要的东西不一样：
+        //  * order          —— 顶层图层在**编辑器列表**里的行号（图层面板、拖拽排序用）；
+        //  * definitionIndex —— 同一个图层在**渲染器** definition.layers 里的下标。
+        // 渲染器的解析器（WatchmakerDefinitionParser.collectLayers）是前序递归、把
+        // 嵌套在分组里的 <Layer> 也收进同一张扁平表，而 topLevelLayerElements() 碰到
+        // <Layer> 就停手不下钻。所以表盘里只要有一个带子图层的分组，两个序号就开始错位。
+        // 把这个换算做在这里、只做一次：实时变换与序列帧预览都按 definitionIndex 找层，
+        // 否则「拖文字只有选中框跟手、像素不动」（文字层通常没有 id，只能按下标匹配）。
+        var definitionIndex = 0
         val layers = topLevelLayerElements().mapIndexed { index, element ->
-            layerSnapshot(layerKeys[index], element, index)
+            layerSnapshot(layerKeys[index], element, index, definitionIndex).also {
+                definitionIndex += 1 + element.nestedLayerCount()
+            }
         }
         return WatchEditorSnapshot(
             rootName = root.tagName,
@@ -176,7 +203,19 @@ class WatchEditorSession private constructor(
     fun updateLayerAttributes(key: WatchEditorLayerKey, changes: Map<String, String?>) {
         mutate {
             val layer = findLayer(key)
+            // 改 `path` 就是「换素材」：旧文件要跟着走，否则替换一次就在包里留一份
+            // 再也不会被引用的图（老师报「替换图片的时候也是」）。
+            //
+            // 候选要在写入**之前**取，写完就查不到旧值了；真正删不删仍由
+            // stashUnreferencedResources 按全文档引用集判定，所以别的图层还在用
+            // 同一张图时不会被误删。走 stash 也保证撤销能原子地还原回来。
+            val obsolete = if (changes.containsKey("path")) {
+                layerOwnedResources(layer)
+            } else {
+                emptySet()
+            }
             changes.forEach { (name, value) -> setOrRemoveAttribute(layer, name, value) }
+            stashUnreferencedResources(obsolete)
         }
     }
 
@@ -313,6 +352,7 @@ class WatchEditorSession private constructor(
             val element = document.createElement("Layer")
             element.setAttribute("type", type)
             attributes.forEach { (name, value) -> setOrRemoveAttribute(element, name, value) }
+            assignStudioLayerIdentity(element, type)
             val existing = topLevelLayerElements()
             val targetIndex = index.coerceIn(0, existing.size)
             insertLayerAtDocumentIndex(
@@ -333,7 +373,7 @@ class WatchEditorSession private constructor(
         if (position < 0) return false
         mutate {
             val element = topLevelLayerElements()[position]
-            val obsoleteLoopResources = loopingImageResources(element)
+            val obsoleteLoopResources = layerOwnedResources(element)
             element.parentNode?.removeChild(element)
             layerKeys.removeAt(position)
             stashUnreferencedResources(obsoleteLoopResources)
@@ -358,6 +398,9 @@ class WatchEditorSession private constructor(
             if (isStudioDefinition() && copy.hasAttribute("id")) {
                 copy.setAttribute("id", uniqueLayerId(copy.getAttribute("id"), key))
             }
+            // 源层本来就没有 id（比如 Flue 早期版本建的 2.0 文档）时补一个：
+            // 副本和原件必须能被 parentId 分别引用。
+            assignStudioLayerIdentity(copy, copy.getAttribute("type"))
             val existing = topLevelLayerElements()
             val targetIndex = index.coerceIn(0, existing.size)
             insertLayerAtDocumentIndex(
@@ -499,7 +542,7 @@ class WatchEditorSession private constructor(
         require(frameDelayMs > 0) { "视频帧间隔必须大于零" }
         return mutate {
             val layer = findLayer(key)
-            val obsoleteLoopResources = loopingImageResources(layer)
+            val obsoleteLoopResources = layerOwnedResources(layer)
             // Remove the old reference first so its files can leave the draft
             // before the replacement batch is budgeted. Undo keeps them in the
             // bounded resource stash and restores them atomically if needed.
@@ -527,7 +570,13 @@ class WatchEditorSession private constructor(
                 throw error
             }
             setOrRemoveAttribute(layer, "type", "image_gif")
-            setOrRemoveAttribute(layer, "path", paths.joinToString("`"))
+            // 写裸文件名：规范的 path 是「约定目录内的文件名」，
+            // 见 watchXmlAssetPath 的注释。
+            setOrRemoveAttribute(
+                layer,
+                "path",
+                paths.joinToString("`") { watchXmlAssetPath(it, "images") },
+            )
             setOrRemoveAttribute(layer, "gif_delay", frameDelayMs.toString())
             paths
         }
@@ -558,7 +607,7 @@ class WatchEditorSession private constructor(
         require(videoFile.isFile && videoFile.length() > 0L) { "视频文件不可用：${videoFile.name}" }
         return mutate {
             val layer = findLayer(key)
-            val obsoleteLoopResources = loopingImageResources(layer)
+            val obsoleteLoopResources = layerOwnedResources(layer)
             setOrRemoveAttribute(layer, "path", null)
             stashUnreferencedResources(obsoleteLoopResources)
             val path = try {
@@ -572,7 +621,8 @@ class WatchEditorSession private constructor(
                 throw error
             }
             setOrRemoveAttribute(layer, "type", "video")
-            setOrRemoveAttribute(layer, "path", path)
+            // 裸文件名，理由同 image_gif（见 watchXmlAssetPath）。
+            setOrRemoveAttribute(layer, "path", watchXmlAssetPath(path, "videos"))
             // 帧序列的属性在这条路上没有意义；留着会让渲染器同时看到两套
             // 播放参数。gif_delay 是 image_gif 专属，一并清掉。
             setOrRemoveAttribute(layer, "gif_delay", null)
@@ -618,6 +668,30 @@ class WatchEditorSession private constructor(
         )
         // size 是 width/height 的共享回退值，留着会和刚写的两条打架。
         setOrRemoveAttribute(layer, "size", null)
+    }
+
+    /**
+     * 图片素材导入完成后写显示尺寸。
+     *
+     * `width` / `height` 对 image 与 image_gif 都是**必填**（1.0 §7.1，商店的
+     * `WatchStoreUploadRules.requiredAttributes` 同样这么查）。默认属性表里不能预填
+     * 它们 —— 那会让「没有尺寸 = 按素材比例自动适配」这条约定失效，导入的图被钉死在
+     * 默认值上。所以正确的时机是**在这里**：素材落盘之后，真实像素尺寸已知。
+     *
+     * 尺寸算法与视频完全一致（contain），像素值交由调用方读取：解码要 BitmapFactory，
+     * 那是 Android 的东西，核心层不碰。
+     */
+    @Synchronized
+    fun applyImportedImageSize(
+        key: WatchEditorLayerKey,
+        pixelWidth: Int,
+        pixelHeight: Int,
+        overwriteSize: Boolean = false,
+    ) {
+        if (pixelWidth <= 0 || pixelHeight <= 0) return
+        mutate {
+            applyContainedVideoSize(findLayer(key), pixelWidth, pixelHeight, overwriteSize)
+        }
     }
 
     fun importImage(context: Context, uri: Uri, requestedName: String? = null): String {
@@ -770,6 +844,7 @@ class WatchEditorSession private constructor(
     fun exportWatch(
         outputFile: File,
         rootAttributeOverrides: Map<String, String?> = emptyMap(),
+        protectedExport: Boolean = false,
     ): WatchEditorExportResult {
         ensureOpen()
         cancelActiveTransformGesture()
@@ -779,37 +854,57 @@ class WatchEditorSession private constructor(
         validateDocument()
         val draftXmlBytes = serializeDocument(document)
         writeAtomically(watchXmlFile, draftXmlBytes)
-        val exportXmlBytes = if (rootAttributeOverrides.isEmpty()) {
-            draftXmlBytes
+        // Android's DOM implementation cannot clone a DOCUMENT_NODE and throws
+        // "Cannot copy node of type 9". Build a fresh document and import only
+        // the root element so upload-only metadata never mutates the live draft.
+        val exportDocument = createExportDocument(rootAttributeOverrides)
+        setProtectionAttribute(exportDocument.documentElement, enabled = protectedExport)
+        applyExportRootMetadata(exportDocument, rootAttributeOverrides)
+        val fullXmlBytes = normalizeExportXmlPaths(
+            serializeDocument(exportDocument),
+            protectedExport = protectedExport,
+        )
+        val shellXmlBytes = if (protectedExport) {
+            val shellDocument = createExportDocument(rootAttributeOverrides)
+            setProtectionAttribute(shellDocument.documentElement, enabled = true)
+            val root = shellDocument.documentElement
+            while (root.firstChild != null) root.removeChild(root.firstChild)
+            serializeDocument(shellDocument)
         } else {
-            // Android's DOM implementation cannot clone a DOCUMENT_NODE and
-            // throws "Cannot copy node of type 9". Create a fresh document and
-            // import only the root element instead; upload-only metadata stays
-            // isolated from the live editor document exactly as before.
-            val exportDocument = document.implementation.createDocument(null, null, null)
-            exportDocument.appendChild(
-                exportDocument.importNode(document.documentElement, true),
-            )
-            rootAttributeOverrides.forEach { (name, value) ->
-                setOrRemoveAttribute(exportDocument.documentElement, name, value)
-            }
-            serializeDocument(exportDocument)
+            fullXmlBytes
         }
+        val pxmlRelativePath = protectedXmlRelativePath()
         val output = outputFile.canonicalFile
         output.parentFile?.let { if (!it.exists() && !it.mkdirs()) error("无法创建导出目录") }
         val temporary = File(output.parentFile, ".${output.name}.${UUID.randomUUID()}.tmp")
         var entryCount = 0
         try {
             ZipOutputStream(BufferedOutputStream(FileOutputStream(temporary))).use { zip ->
-                for (file in draftFiles()) {
-                    val relative = relativePath(file)
+                val entries = buildExportEntries(
+                    protectedExport = protectedExport,
+                    shellXmlBytes = shellXmlBytes,
+                    fullXmlBytes = fullXmlBytes,
+                    pxmlRelativePath = pxmlRelativePath,
+                )
+                for (archiveEntry in entries) {
+                    val relative = archiveEntry.relativePath
                     validateRelativePath(relative)
                     val entry = ZipEntry(relative)
                     zip.putNextEntry(entry)
-                    if (relative == watchXmlRelativePath) {
-                        zip.write(exportXmlBytes)
+                    if (archiveEntry.bytes != null) {
+                        zip.write(archiveEntry.bytes)
                     } else {
-                        FileInputStream(file).use { input -> input.copyTo(zip, DEFAULT_BUFFER_SIZE) }
+                        val file = requireNotNull(archiveEntry.sourceFile)
+                        val bytes = file.inputStream().use { it.readBytes() }
+                        zip.write(
+                            when {
+                                archiveEntry.protectedAsset ->
+                                    WatchmakerProtection.prepareProtectedAssetBytes(bytes, file.extension)
+                                archiveEntry.plainAsset ->
+                                    WatchmakerProtection.preparePlainAssetBytes(bytes, file.extension)
+                                else -> bytes
+                            },
+                        )
                     }
                     zip.closeEntry()
                     entryCount++
@@ -829,6 +924,265 @@ class WatchEditorSession private constructor(
         } finally {
             temporary.delete()
         }
+    }
+
+    private data class ExportArchiveEntry(
+        val relativePath: String,
+        val sourceFile: File? = null,
+        val bytes: ByteArray? = null,
+        val protectedAsset: Boolean = false,
+        val plainAsset: Boolean = false,
+    )
+
+    private fun createExportDocument(rootAttributeOverrides: Map<String, String?>): Document =
+        document.implementation.createDocument(null, null, null).also { exportDocument ->
+            exportDocument.appendChild(exportDocument.importNode(document.documentElement, true))
+            rootAttributeOverrides.forEach { (name, value) ->
+                setOrRemoveAttribute(exportDocument.documentElement, name, value)
+            }
+        }
+
+    /**
+     * 导出前把两个「必须由打包方算出来」的根属性写好。
+     *
+     * ### `features`
+     *
+     * 这是启动器和表盘市场用来筛选、分类的字段。编辑器改完图层不重算，导出的包就
+     * 带着**上一位作者的**特性表：加了天气搜不到，删干净心率还挂着心率标签。
+     * `WM_STUDIO_2.0_EDITOR.md` §2.3 与 `WM_FORMAT_2.0.md` §2.2 都写明它**每次导出
+     * 都重算并覆盖**，手改无效 —— 所以这里照做。
+     *
+     * 算的时候把全局 Lua 脚本一起喂进去：脚本里用的标签同样是这块表盘的特性，只扫
+     * XML 会漏掉纯脚本驱动的表盘。
+     *
+     * 调用方在 [rootAttributeOverrides] 里显式给了 `features` 时不覆盖 —— 那是上传
+     * 流程刻意附加的元数据，明确的调用意图优先于自动推断。
+     *
+     * ### `ucolor_default`
+     *
+     * `{ucolor}` 系列标签的默认取色（1.0 §3、2.0 §2.1）。缺这一项时用了 `{ucolor}`
+     * 的图层在别的渲染器里拿不到颜色，通常画成透明或全黑 —— 表盘看起来「少了一块」。
+     * 只在缺失时补规范默认白，已有值一律不动。
+     */
+    private fun applyExportRootMetadata(
+        exportDocument: Document,
+        rootAttributeOverrides: Map<String, String?>,
+    ) {
+        val root = exportDocument.documentElement
+        if (!rootAttributeOverrides.containsKey("features")) {
+            val scanned = buildString {
+                append(serializeDocument(exportDocument).toString(StandardCharsets.UTF_8))
+                globalScriptText()?.let { append('\n').append(it) }
+            }
+            val version = WatchFormatVersion.fromRootAttributes(attributesOf(root))
+            val features = WatchFeatureDetector.format(
+                WatchFeatureDetector.detect(scanned),
+                version,
+            )
+            setOrRemoveAttribute(root, "features", features.takeIf(String::isNotEmpty))
+        }
+        if (root.getAttribute("ucolor_default").isBlank()) {
+            root.setAttribute("ucolor_default", SPEC_DEFAULT_UCOLOR)
+        }
+    }
+
+    /** 全局脚本正文；没有脚本文件时返回 null。 */
+    private fun globalScriptText(): String? =
+        resolveDraftPath(GLOBAL_SCRIPT_RELATIVE_PATH)
+            .takeIf(File::isFile)
+            ?.let { runCatching { it.readText(StandardCharsets.UTF_8) }.getOrNull() }
+
+    private fun setProtectionAttribute(root: Element, enabled: Boolean) {
+        val protectionAttributes = (0 until root.attributes.length)
+            .map { root.attributes.item(it) }
+            .filter { it.nodeName.equals("protection", ignoreCase = true) }
+        protectionAttributes.forEach { root.removeAttributeNode(it as org.w3c.dom.Attr) }
+        if (enabled) root.setAttribute("protection", "y")
+    }
+
+    private fun normalizeExportXmlPaths(bytes: ByteArray, protectedExport: Boolean): ByteArray {
+        var xml = bytes.toString(StandardCharsets.UTF_8)
+        xml = if (protectedExport) {
+            xml.replace(".jpeg", ".pjpg", ignoreCase = true)
+                .replace(".png", ".ppng", ignoreCase = true)
+                .replace(".jpg", ".pjpg", ignoreCase = true)
+        } else {
+            xml.replace(".ppng", ".png", ignoreCase = true)
+                .replace(".pjpeg", ".jpeg", ignoreCase = true)
+                .replace(".pjpg", ".jpg", ignoreCase = true)
+        }
+        return xml.toByteArray(StandardCharsets.UTF_8)
+    }
+
+    private fun protectedXmlRelativePath(): String {
+        val parent = watchXmlRelativePath.substringBeforeLast('/', "")
+        return if (parent.isBlank()) "watch.pxml" else "$parent/watch.pxml"
+    }
+
+    private fun buildExportEntries(
+        protectedExport: Boolean,
+        shellXmlBytes: ByteArray,
+        fullXmlBytes: ByteArray,
+        pxmlRelativePath: String,
+    ): List<ExportArchiveEntry> {
+        val result = linkedMapOf<String, ExportArchiveEntry>()
+        result[watchXmlRelativePath] = ExportArchiveEntry(
+            relativePath = watchXmlRelativePath,
+            bytes = shellXmlBytes,
+        )
+        if (protectedExport) {
+            result[pxmlRelativePath] = ExportArchiveEntry(
+                relativePath = pxmlRelativePath,
+                bytes = WatchmakerProtection.encodeXml(fullXmlBytes),
+            )
+        }
+
+        val files = draftFiles()
+            .filter { file ->
+                val relative = relativePath(file)
+                relative != watchXmlRelativePath &&
+                    !file.name.equals("watch.pxml", ignoreCase = true)
+            }
+            .sortedWith(compareBy { file ->
+                // Prefer the working-copy extension when a protected draft has
+                // both `face.png` and an old `face.ppng` twin.
+                if (file.extension.equals("ppng", true) ||
+                    file.extension.equals("pjpg", true) ||
+                    file.extension.equals("pjpeg", true)
+                ) 1 else 0
+            })
+
+        val referencedStems = referencedAssetStems(fullXmlBytes)
+        files.forEach { file ->
+            val sourceRelative = relativePath(file)
+            if (isPrunableAsset(sourceRelative) && file.nameWithoutExtension.lowercase(Locale.ROOT) !in referencedStems) {
+                return@forEach
+            }
+            val imageResource = isImageResourcePath(sourceRelative)
+            val targetRelative = when {
+                !imageResource -> sourceRelative
+                protectedExport -> protectedImagePath(sourceRelative)
+                else -> plainImagePath(sourceRelative)
+            }
+            if (targetRelative == watchXmlRelativePath || targetRelative == pxmlRelativePath) return@forEach
+            result.putIfAbsent(
+                targetRelative,
+                ExportArchiveEntry(
+                    relativePath = targetRelative,
+                    sourceFile = file,
+                    protectedAsset = protectedExport && imageResource,
+                    plainAsset = !protectedExport && imageResource,
+                ),
+            )
+        }
+        ensurePreviewEntry(result)
+        return result.values.toList()
+    }
+
+    /**
+     * 只有 `images/` 与 `videos/` 下的素材允许被裁掉。
+     *
+     * 字体（`fonts/`、`fonts_bm/`）是按**名字**引用的，`font="Bevel"` 要同时留下
+     * `bevel.fnt` 和 `bevel.png`，位图字体的分页图名字还写在 `.fnt` 内部；着色器、
+     * 脚本、预览图更是完全不出现在图层属性里。这些一律原样打包 —— 少打一个就是
+     * 一块渲染不出来的表盘，省下的那几十 KB 不值这个风险。
+     */
+    private fun isPrunableAsset(relative: String): Boolean =
+        relative.startsWith("images/", ignoreCase = true) ||
+            relative.startsWith("videos/", ignoreCase = true)
+
+    /**
+     * 成品 XML（含脚本）里出现过的素材名主干，小写。
+     *
+     * 判据故意只比**主干**、还用 contains 而不是精确匹配：
+     *  * 受保护导出会把 `face.png` 改名成 `face.ppng`，扩展名对不上，主干才对得上。
+     *  * 序列帧的几百个文件名挤在一个 `path` 属性里用反引号分隔，contains 天然覆盖。
+     *  * Lua 脚本可能拼字符串，`"frame_" .. i .. ".png"` 这种拼法我们本来就无法静态
+     *    解析 —— 所以只要主干在文本里出现过就保留，宁可多留不可错删。
+     */
+    private fun referencedAssetStems(fullXmlBytes: ByteArray): Set<String> {
+        val haystack = buildString {
+            append(fullXmlBytes.toString(StandardCharsets.UTF_8))
+            globalScriptText()?.let { append('\n').append(it) }
+        }.lowercase(Locale.ROOT)
+        return draftFiles()
+            .asSequence()
+            .filter { isPrunableAsset(relativePath(it)) }
+            .map { it.nameWithoutExtension.lowercase(Locale.ROOT) }
+            .filter { stem -> stem.isNotEmpty() && haystack.contains(stem) }
+            .toHashSet()
+    }
+
+    /**
+     * 保证包里有 `preview.jpg`。
+     *
+     * `WM_FORMAT_1.0.md` §1 把它列为 **required**，商店的上传预检也直接查这条
+     * （`WatchStoreUploadRules.requiredFiles`）。空白草稿从来没有这张图，用户建完新
+     * 表盘直接导出就得到一个不合规的包 —— 装到别的启动器里连缩略图都没有。
+     *
+     * 顺序：已有 `preview.jpg` 就用它；只有暗色变体就拿暗色顶上；两者都没有才用
+     * 背景色现画一张。现画的那张会在下一次保存时被真正的画面截图覆盖
+     * （[writePreviewImage]），所以它只是「不合规」和「暂时难看」之间的取舍。
+     *
+     * 画图要 Android 的 Bitmap，纯 JVM 单测里拿不到 —— 拿不到就跳过，退回原来的
+     * 行为，不让预览图这件事把导出本身弄失败。
+     */
+    private fun ensurePreviewEntry(result: MutableMap<String, ExportArchiveEntry>) {
+        if (result.keys.any { it.equals(PREVIEW_RELATIVE_PATH, ignoreCase = true) }) return
+        val dim = result.entries.firstOrNull {
+            it.key.equals(PREVIEW_DIM_RELATIVE_PATH, ignoreCase = true)
+        }
+        if (dim != null) {
+            result[PREVIEW_RELATIVE_PATH] = dim.value.copy(relativePath = PREVIEW_RELATIVE_PATH)
+            return
+        }
+        placeholderPreviewBytes()?.let { bytes ->
+            result[PREVIEW_RELATIVE_PATH] = ExportArchiveEntry(
+                relativePath = PREVIEW_RELATIVE_PATH,
+                bytes = bytes,
+            )
+        }
+    }
+
+    /** 用根节点 `bg_color` 画一张纯色缩略图。取不到 Bitmap（单测环境）时返回 null。 */
+    private fun placeholderPreviewBytes(): ByteArray? = runCatching {
+        val background = normalizeWatchColorLiteral(document.documentElement.getAttribute("bg_color"))
+            ?.let { android.graphics.Color.parseColor(it) }
+            ?: android.graphics.Color.BLACK
+        val bitmap = android.graphics.Bitmap.createBitmap(
+            PLACEHOLDER_PREVIEW_PX,
+            PLACEHOLDER_PREVIEW_PX,
+            android.graphics.Bitmap.Config.ARGB_8888,
+        )
+        try {
+            bitmap.eraseColor(background)
+            ByteArrayOutputStream().use { out ->
+                bitmap.compress(android.graphics.Bitmap.CompressFormat.JPEG, 90, out)
+                out.toByteArray()
+            }
+        } finally {
+            bitmap.recycle()
+        }
+    }.getOrNull()?.takeIf { it.isNotEmpty() }
+
+    private fun isImageResourcePath(relative: String): Boolean {
+        if (!relative.startsWith("images/", ignoreCase = true)) return false
+        return relative.substringAfterLast('.', "").lowercase(Locale.ROOT) in
+            setOf("png", "jpg", "jpeg", "ppng", "pjpg", "pjpeg")
+    }
+
+    private fun protectedImagePath(relative: String): String = when {
+        relative.endsWith(".jpeg", ignoreCase = true) -> relative.dropLast(5) + ".pjpg"
+        relative.endsWith(".jpg", ignoreCase = true) -> relative.dropLast(4) + ".pjpg"
+        relative.endsWith(".png", ignoreCase = true) -> relative.dropLast(4) + ".ppng"
+        else -> relative
+    }
+
+    private fun plainImagePath(relative: String): String = when {
+        relative.endsWith(".pjpeg", ignoreCase = true) -> relative.dropLast(6) + ".jpeg"
+        relative.endsWith(".pjpg", ignoreCase = true) -> relative.dropLast(5) + ".jpg"
+        relative.endsWith(".ppng", ignoreCase = true) -> relative.dropLast(5) + ".png"
+        else -> relative
     }
 
     /** Deletes the cache draft immediately. It is safe to call more than once. */
@@ -1005,6 +1359,23 @@ class WatchEditorSession private constructor(
         collect(document.documentElement)
     }
 
+    /**
+     * 这个图层底下嵌套了多少个 `<Layer>`（含各级后代）。
+     *
+     * 必须与渲染器解析器的 `collectLayers` **逐层同构**：它是前序递归，且会穿过
+     * 非 `Layer` 的中间容器继续找 `<Layer>`，所以这里也要穿过。两边一旦不同构，
+     * [WatchEditorLayer.definitionIndex] 就会指错层 —— 那正是「拖文字只有框跟手」
+     * 的根因。改这个函数前先回头看一眼 `WatchmakerDefinitionParser.collectLayers`。
+     */
+    private fun Element.nestedLayerCount(): Int {
+        var count = 0
+        childNodes.elements().forEach { child ->
+            if (child.tagName.equals("Layer", ignoreCase = true)) count++
+            count += child.nestedLayerCount()
+        }
+        return count
+    }
+
     private fun insertLayerAtDocumentIndex(
         element: Element,
         targetIndex: Int,
@@ -1049,26 +1420,78 @@ class WatchEditorSession private constructor(
         transform: WatchEditorTransform,
     ) {
         val safe = transform.sanitized()
-        setOrRemoveAttribute(layer, "x", formatTransformNumber(safe.x))
-        setOrRemoveAttribute(layer, "y", formatTransformNumber(safe.y))
-        setOrRemoveAttribute(
-            layer,
-            "anim_scale_x",
-            formatTransformNumber(safe.scaleX * WATCHMAKER_SCALE_NORMAL),
-        )
-        setOrRemoveAttribute(
-            layer,
-            "anim_scale_y",
-            formatTransformNumber(safe.scaleY * WATCHMAKER_SCALE_NORMAL),
-        )
-        setOrRemoveAttribute(layer, "rotation", formatTransformNumber(safe.rotation))
+        val bound = boundTransformAttributes(layer)
+        if (TRANSFORM_X !in bound) {
+            setOrRemoveAttribute(layer, TRANSFORM_X, formatTransformNumber(safe.x))
+        }
+        if (TRANSFORM_Y !in bound) {
+            setOrRemoveAttribute(layer, TRANSFORM_Y, formatTransformNumber(safe.y))
+        }
+        if (TRANSFORM_SCALE_X !in bound) {
+            setOrRemoveAttribute(
+                layer,
+                TRANSFORM_SCALE_X,
+                formatTransformNumber(safe.scaleX * WATCHMAKER_SCALE_NORMAL),
+            )
+        }
+        if (TRANSFORM_SCALE_Y !in bound) {
+            setOrRemoveAttribute(
+                layer,
+                TRANSFORM_SCALE_Y,
+                formatTransformNumber(safe.scaleY * WATCHMAKER_SCALE_NORMAL),
+            )
+        }
+        if (TRANSFORM_ROTATION !in bound) {
+            setOrRemoveAttribute(layer, TRANSFORM_ROTATION, formatTransformNumber(safe.rotation))
+        }
+    }
+
+    /**
+     * 这一层上「值是动态表达式、编辑器不许用数值覆盖」的变换属性名。
+     *
+     * WatchMaker 的变换属性可以直接写表达式：秒针是 `rotation="{drss}"`、电量环是
+     * `anim_scale_x="{bl}"`。而 [layerTransform] 读这些属性用的是 `toFloatOrNull() ?: 0f`，
+     * 表达式一律读成 0/100%；如果放手时无条件写回，`{drss}` 就变成 `0` ——
+     * **绑定被永久删掉**，秒针从此不动。用户只是拖了一下位置，丢的却是整条动画。
+     *
+     * 所以写回前先问一遍这里：凡是现值不是纯数字的属性，跳过不写。其余轴照常写，
+     * 拖动仍然有效（比如给绑了 `rotation` 的指针挪个位置，x/y 会写，rotation 保留）。
+     *
+     * 缩放两轴要连着回退链一起判：渲染器与 [layerTransform] 的取值顺序都是
+     * `anim_scale_x → scale_x → anim_scale → scale`（见 WatchmakerWatchFaceView 的
+     * `sharedScale`）。只有 `anim_scale="{bl}"` 时，写 `anim_scale_x` 会**遮蔽**那条
+     * 绑定，效果等同于删除，所以链上第一个有值的属性是表达式就整轴锁定。
+     */
+    private fun boundTransformAttributes(layer: Element): Set<String> = buildSet {
+        if (isBoundTransformValue(layer.attributeValue(TRANSFORM_X))) add(TRANSFORM_X)
+        if (isBoundTransformValue(layer.attributeValue(TRANSFORM_Y))) add(TRANSFORM_Y)
+        if (isBoundTransformValue(layer.attributeValue(TRANSFORM_ROTATION))) add(TRANSFORM_ROTATION)
+        if (isBoundTransformValue(layer.firstPresentAttribute(SCALE_X_CHAIN))) add(TRANSFORM_SCALE_X)
+        if (isBoundTransformValue(layer.firstPresentAttribute(SCALE_Y_CHAIN))) add(TRANSFORM_SCALE_Y)
+    }
+
+    /**
+     * 供 UI 提示用：拖动这一层时哪些变换属性会被保留而不写入。
+     *
+     * 没有这个查询，编辑器就只能「静默不动」——用户拖了指针、松手后角度弹回，
+     * 看起来像 bug。有了它，调用方可以在手势开始时说明「rotation 绑定了表达式」。
+     */
+    @Synchronized
+    fun layerBoundTransformAttributes(key: WatchEditorLayerKey): Set<String> {
+        ensureOpen()
+        return boundTransformAttributes(findLayer(key))
     }
 
     private fun percentScale(raw: String?): Float =
         ((raw?.toFloatOrNull() ?: WATCHMAKER_SCALE_NORMAL) / WATCHMAKER_SCALE_NORMAL)
             .coerceIn(MIN_TRANSFORM_SCALE, MAX_TRANSFORM_SCALE)
 
-    private fun layerSnapshot(key: WatchEditorLayerKey, element: Element, order: Int) =
+    private fun layerSnapshot(
+        key: WatchEditorLayerKey,
+        element: Element,
+        order: Int,
+        definitionIndex: Int,
+    ) =
         WatchEditorLayer(
             key = key,
             id = element.getAttribute("id").takeIf(String::isNotBlank),
@@ -1079,6 +1502,7 @@ class WatchEditorSession private constructor(
                 .map { it.tagName }
                 .toList(),
             order = order,
+            definitionIndex = definitionIndex,
         )
 
     private fun validateDocument() {
@@ -1110,14 +1534,81 @@ class WatchEditorSession private constructor(
 
     private fun uniqueLayerId(base: String, excludedKey: WatchEditorLayerKey): String {
         val elements = topLevelLayerElements()
-        val used = elements.withIndex()
-            .filter { (index, _) -> layerKeys[index] != excludedKey }
-            .mapNotNull { (_, layer) -> layer.getAttribute("id").takeIf(String::isNotBlank) }
+        val excluded = elements.withIndex()
+            .filter { (index, _) -> layerKeys[index] == excludedKey }
+            .map { (_, layer) -> layer }
+            .toSet()
+        // 唯一性要对**整份文档**成立，不只是顶层：2.0 的 parentId 引用是全局的，
+        // 群组里的子层撞了 id，别的渲染器建树时就会把子层挂错父亲。
+        val used = allLayerElements()
+            .filterNot { it in excluded }
+            .mapNotNull { it.getAttribute("id").takeIf(String::isNotBlank) }
             .toHashSet()
         var candidate = "${base}_copy"
         var suffix = 2
         while (!used.add(candidate)) candidate = "${base}_copy${suffix++}"
         return candidate
+    }
+
+    /** 文档内所有 `Layer` 元素，含嵌套。大小写不敏感：手写 XML 里出现过 `<layer>`。 */
+    private fun allLayerElements(): List<Element> = buildList {
+        fun visit(parent: Element) {
+            parent.childNodes.elements().forEach { child ->
+                if (child.tagName.equals("Layer", ignoreCase = true)) add(child)
+                visit(child)
+            }
+        }
+        visit(document.documentElement)
+    }
+
+    /**
+     * 给 2.0 文档里新建的图层补上 `id` 与 `name`。
+     *
+     * `WM_FORMAT_2.0.md` §6 把序列化顺序列得很死，第一个就是 `id`；§6.1 明确
+     * 「`id` 唯一，Studio 格式 `layer-{timestamp_ms}-{random}-{counter}`」，`name` 是
+     * 编辑器显示名（自动取 `"<Type> N"`）。1.0 没这两项，所以只对 studio 文档做。
+     *
+     * 为什么不能省：2.0 的层级关系**靠 `parentId` 引用**而不是嵌套（§6.1、§7）。
+     * 没有 `id` 的图层永远不能被当成父层，Studio 里也就没法把别的层拖进去；打开
+     * Flue 建的 2.0 表盘时那些层还会全部显示成同一个空名字。
+     */
+    private fun assignStudioLayerIdentity(element: Element, type: String) {
+        if (!isStudioDefinition()) return
+        val used = allLayerElements()
+            .filterNot { it === element }
+            .mapNotNull { it.getAttribute("id").takeIf(String::isNotBlank) }
+            .toHashSet()
+        if (element.getAttribute("id").isBlank()) {
+            element.setAttribute("id", freshStudioLayerId(used))
+        }
+        if (element.getAttribute("name").isBlank()) {
+            val names = allLayerElements()
+                .filterNot { it === element }
+                .mapNotNull { it.getAttribute("name").takeIf(String::isNotBlank) }
+                .toHashSet()
+            element.setAttribute("name", freshStudioLayerName(type, names))
+        }
+    }
+
+    /** Studio 的 id 形状：`layer-{timestamp_ms}-{random}-{counter}`。 */
+    private fun freshStudioLayerId(used: Set<String>): String {
+        val stamp = System.currentTimeMillis()
+        val random = UUID.randomUUID().toString().substringBefore('-')
+        var counter = 1
+        while (true) {
+            val candidate = "layer-$stamp-$random-$counter"
+            if (candidate !in used) return candidate
+            counter++
+        }
+    }
+
+    /** Studio 的显示名形状：`"<Type> N"`。 */
+    private fun freshStudioLayerName(type: String, used: Set<String>): String {
+        val label = type.trim().ifBlank { "Layer" }
+            .replaceFirstChar { it.titlecase(Locale.ROOT) }
+        var index = 1
+        while ("$label $index" in used) index++
+        return "$label $index"
     }
 
     private fun uniqueResourcePath(
@@ -1215,30 +1706,151 @@ class WatchEditorSession private constructor(
 
     private fun remainingBudget(): Long = limits.maxTotalBytes - draftByteCount()
 
-    private fun loopingImageResources(layer: Element): Set<String> {
+    /**
+     * 一个图层「自己占着」的素材文件（草稿相对路径）。
+     *
+     * 覆盖两类：
+     *  * 序列帧 / GIF：`path` 里用反引号串起来的一整串帧，都在 `images/` 下。
+     *  * **视频**：`videos/` 下那一个文件。
+     *
+     * 视频这一支以前是漏的：给 video 图层换一段素材、或者把它整个删掉，旧的 mp4 会一直
+     * 留在包里（老师报的「上一个视频还会存在表盘文件里不会删除」）。视频动辄几 MB，攒
+     * 几次就把 20MB 的上传上限吃满，而作者在编辑器里完全看不到这些孤儿文件。
+     *
+     * 返回的只是**候选**：真正删不删由 [stashUnreferencedResources] 再查一遍全文档引用，
+     * 所以「换成同一个文件」这种情况不会被误删。
+     */
+    private fun layerOwnedResources(layer: Element): Set<String> {
         val type = layer.getAttribute("type").lowercase(Locale.ROOT)
         val rawPath = layer.getAttribute("path")
-        if (type !in setOf("gif", "image_gif") && '`' !in rawPath) return emptySet()
-        return rawPath.split('`')
-            .asSequence()
-            .map { it.trim().replace('\\', '/') }
-            .filter(String::isNotBlank)
-            .mapNotNull { path -> runCatching { validateRelativePath(path) }.getOrNull() }
-            .toSet()
+        if (type == "video") {
+            return setOfNotNull(draftRelativeAssetPath(rawPath, "videos"))
+        }
+        if (type in setOf("gif", "image_gif") || '`' in rawPath) {
+            return rawPath.split('`')
+                .asSequence()
+                .map { it.trim().replace('\\', '/') }
+                .filter(String::isNotBlank)
+                // XML 里存的是**裸文件名**（规范要求，见 watchXmlAssetPath），而文件操作要的是
+                // 草稿相对路径 —— 少了这一步换算，删图层时找不到 images/ 下的帧，孤儿文件
+                // 会一直留在包里（曾经把 deletingLoopingBackground… 那条测试打红）。
+                .mapNotNull { path -> draftRelativeAssetPath(path, "images") }
+                .toSet()
+        }
+        // 单张图片也要回收（老师报「删除图片图层、替换图片时，旧图片也该像视频一样
+        // 从表盘资源里移除」）。
+        //
+        // 以前这里只认视频和多帧序列，单张 image 直接返回空集，于是替换十次背景就在包里
+        // 攒下十张再也不会被引用的图 —— 表盘体积一路涨，导出还得连它们一起压。
+        //
+        // **共用图片不会被误删**：候选只是「这个图层引用过的文件」，真正决定删不删的是
+        // stashUnreferencedResources —— 它先算一遍全文档的引用集再过滤，另一个图层还在
+        // 用同一张图时这条候选会被直接跳过。所以这里可以放心地把候选算宽一点。
+        return setOfNotNull(draftRelativeAssetPath(rawPath, "images"))
+    }
+
+    /**
+     * 把 XML 的 `path` 值还原成草稿相对路径（[watchXmlAssetPath] 的逆）。
+     *
+     * 与渲染器 `resolveAsset` 同一套候选顺序：先按约定目录找，再按原样找 ——
+     * 老表盘里确实有把素材放在包根目录的写法。返回 null 表示这个值不是合法相对路径
+     * （`..` 逃逸之类），调用方当它不存在。
+     */
+    private fun draftRelativeAssetPath(xmlPath: String, conventionalDirectory: String): String? {
+        val normalized = xmlPath.trim().replace('\\', '/').removePrefix("/")
+        if (normalized.isBlank()) return null
+        val candidates = if (normalized.startsWith("$conventionalDirectory/", ignoreCase = true)) {
+            listOf(normalized)
+        } else {
+            listOf("$conventionalDirectory/$normalized", normalized)
+        }
+        val valid = candidates.filter { runCatching { validateRelativePath(it) }.isSuccess }
+        return valid.firstOrNull { resolveDraftPath(it).exists() } ?: valid.firstOrNull()
+    }
+
+    /**
+     * 文档里通过 `path` 引用到的**所有**草稿相对路径。
+     *
+     * 一个 XML 值可能指向 `images/`、`videos/` 或包根，所以把**每一种解读**都算成
+     * 「已被引用」。宁可多留一个孤儿文件，也不能误删还在用的素材。
+     */
+    private fun referencedDraftPaths(): Set<String> = allLayerElements()
+        .asSequence()
+        .flatMap { layer ->
+            layer.getAttribute("path")
+                .split('`')
+                .asSequence()
+                .map { it.trim().replace('\\', '/') }
+        }
+        .filter(String::isNotBlank)
+        .flatMap { value ->
+            sequenceOf(
+                value,
+                draftRelativeAssetPath(value, "images"),
+                draftRelativeAssetPath(value, "videos"),
+            ).filterNotNull()
+        }
+        .toSet()
+
+    /**
+     * 草稿里全部素材的清单：路径、字节数、有没有被图层引用。
+     *
+     * 编辑器的「资源管理器」读这里。作者需要看得到包里到底有什么：视频换过几版、
+     * 序列帧删剩多少、字体是不是还留着 —— 这些以前完全不可见，只能等上传被 20MB
+     * 上限拦下来才发现（老师要的「表盘内部资源管理器」）。
+     *
+     * `watch.xml` 与全局脚本不算素材，不列出来：它们不是「可以删的东西」。
+     * 字体按名字引用、位图字体的分页图名字写在 `.fnt` 内部，静态分析看不出来，
+     * 所以 `fonts/` 与 `fonts_bm/` 一律标成已引用，避免作者误删。
+     */
+    @Synchronized
+    fun resourceInventory(): List<WatchEditorResourceEntry> {
+        ensureOpen()
+        val referenced = referencedDraftPaths()
+        return resourcePathsInternal()
+            .sorted()
+            .map { path ->
+                val lower = path.lowercase(Locale.ROOT)
+                val alwaysKeep = lower.startsWith("fonts/") ||
+                    lower.startsWith("fonts_bm/") ||
+                    lower.startsWith("scripts/") ||
+                    lower.startsWith("shaders/") ||
+                    lower.startsWith("preview")
+                WatchEditorResourceEntry(
+                    relativePath = path,
+                    bytes = resolveDraftPath(path).length(),
+                    referenced = alwaysKeep || path in referenced,
+                )
+            }
+    }
+
+    /**
+     * 从草稿里移除一个素材。
+     *
+     * 走的是同一套 stash（可撤销），不是硬删。仍被引用的素材直接拒绝 —— 资源管理器
+     * 不该成为「把表盘删坏」的快捷通道。
+     */
+    @Synchronized
+    fun deleteResource(relativePath: String): Boolean {
+        ensureOpen()
+        val normalized = relativePath.trim().replace('\\', '/')
+        if (normalized.isBlank()) return false
+        if (normalized == watchXmlRelativePath || normalized == GLOBAL_SCRIPT_RELATIVE_PATH) return false
+        if (!resolveDraftPath(normalized).isFile) return false
+        if (resourceInventory().firstOrNull { it.relativePath == normalized }?.referenced != false) {
+            return false
+        }
+        var removed = false
+        mutate {
+            stashUnreferencedResources(setOf(normalized))
+            removed = !resolveDraftPath(normalized).exists()
+        }
+        return removed
     }
 
     private fun stashUnreferencedResources(candidates: Set<String>) {
         if (candidates.isEmpty()) return
-        val referenced = topLevelLayerElements()
-            .asSequence()
-            .flatMap { layer ->
-                layer.getAttribute("path")
-                    .split('`')
-                    .asSequence()
-                    .map { it.trim().replace('\\', '/') }
-            }
-            .filter(String::isNotBlank)
-            .toSet()
+        val referenced = referencedDraftPaths()
         candidates.filterNot(referenced::contains).forEach { path ->
             val source = resolveDraftPath(path)
             if (!source.isFile) return@forEach
@@ -1358,6 +1970,23 @@ class WatchEditorSession private constructor(
         private const val MAX_TRANSFORM_SCALE = 8f
         private const val GLOBAL_SCRIPT_RELATIVE_PATH = "scripts/script.txt"
 
+        /** 编辑器画布会写回的五个变换属性名。 */
+        const val TRANSFORM_X: String = "x"
+        const val TRANSFORM_Y: String = "y"
+        const val TRANSFORM_ROTATION: String = "rotation"
+        const val TRANSFORM_SCALE_X: String = "anim_scale_x"
+        const val TRANSFORM_SCALE_Y: String = "anim_scale_y"
+
+        /** 缩放取值回退链，顺序必须与渲染器一致，见 [boundTransformAttributes]。 */
+        private val SCALE_X_CHAIN = listOf(TRANSFORM_SCALE_X, "scale_x", "anim_scale", "scale")
+        private val SCALE_Y_CHAIN = listOf(TRANSFORM_SCALE_Y, "scale_y", "anim_scale", "scale")
+
+        /** 缺 `ucolor_default` 时补的规范默认值（1.0 §3 的示例就是 `ffffff`）。 */
+        private const val SPEC_DEFAULT_UCOLOR = "ffffff"
+        private const val PREVIEW_RELATIVE_PATH = "preview.jpg"
+        private const val PREVIEW_DIM_RELATIVE_PATH = "preview_dim.jpg"
+        private const val PLACEHOLDER_PREVIEW_PX = 512
+
         const val MAX_WATCH_SCRIPT_BYTES: Int = 256 * 1024
 
         /** Keeps memory and disk-history bounded while still allowing a useful edit chain. */
@@ -1458,10 +2087,10 @@ class WatchEditorSession private constructor(
                 // shape 曾硬编码 "R"：编辑器建出的每块表盘都被渲染器按
                 // definition.shape == ROUND 罩上圆形裁剪 —— 方屏表盘删光元素后
                 // 仍有一圈圆形遮罩就是它。现在跟随调用方传入的屏幕形状。
+                // WatchMaker 表盘固定使用原生 512×512 画布（1.0 §4）。canvasSize 参数
+                // 保留只是为了兼容已有调用方，新建结果永远是原生规格，所以根节点
+                // 也就不需要声明尺寸。
                 val shapeCode = if (roundShape) "R" else "S"
-                // WatchMaker 表盘固定使用原生 512×512 画布。保留旧参数只是
-                // 为了兼容已有调用方，但新建结果永远写入固定规格。
-                val fixedCanvasSize = WatchCanvasSize.DEFAULT
                 // 版本判据就是有没有 build_source="studio"：写了算 2.0，不写算 1.0。
                 // 这里曾无条件写 studio，于是新建出来的每一块都是 2.0，
                 // 用不了 1.0 专属的 video 图层。
@@ -1469,10 +2098,13 @@ class WatchEditorSession private constructor(
                     WatchFormatVersion.V2 -> " build_source=\"studio\""
                     WatchFormatVersion.V1 -> ""
                 }
+                // 不写 width / height：规范的根属性表（1.0 §3）里没有这两项，§4 把画布
+                // 固定成 512×512，而 `WatchCanvasSize.fromRootAttributes` 在两者都缺失时
+                // 正好回落 512×512 —— 所以省掉它们对 Flue 是零行为变化，对别的渲染器
+                // 少两个读不懂的属性。
                 val xml = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>" +
                     "<Watch name=\"${escapeXmlAttribute(safeName)}\"$buildSourceAttribute" +
-                    " shape=\"$shapeCode\"" +
-                    " width=\"${fixedCanvasSize.width}\" height=\"${fixedCanvasSize.height}\"/>"
+                    " shape=\"$shapeCode\"/>"
                 writeAtomically(resolveFile(draft, watchXml), xml.toByteArray(StandardCharsets.UTF_8))
                 val document = parseXml(resolveFile(draft, watchXml), limits)
                 return WatchEditorSession(
@@ -1796,6 +2428,24 @@ private fun NodeList.elements(): Sequence<Element> = sequence {
 
 private fun Element.attributeValue(name: String): String? =
     getAttribute(name).takeIf(String::isNotBlank)
+
+/** 按回退链取第一个真的写了的属性值；全都没写返回 null。 */
+private fun Element.firstPresentAttribute(names: List<String>): String? =
+    names.firstNotNullOfOrNull(::attributeValue)
+
+/**
+ * 现值是不是「动态绑定」——即编辑器不能用一个数字替换掉的东西。
+ *
+ * 判据故意放得很宽：**不是纯数字就算绑定**。WatchMaker 的表达式语法不止 `{tag}`
+ * 一种（还有 `{floor(dh*5)}`、`{$vb$}`、纯 Lua 变量引用等等，2.0 又加了新的插值
+ * 形式），白名单式的识别一定会漏，而漏判的代价是**静默删掉作者的动画**。反过来
+ * 误判的代价只是「这一轴拖不动」，可见、可解释、可撤销。空值不算绑定，那只是
+ * 没写过，编辑器当然可以写。
+ */
+private fun isBoundTransformValue(raw: String?): Boolean {
+    val value = raw?.trim().orEmpty()
+    return value.isNotEmpty() && value.toFloatOrNull() == null
+}
 
 private fun setOrRemoveAttribute(element: Element, name: String, value: String?) {
     require(name.isNotBlank() && !name.contains(Regex("\\s"))) { "XML 属性名非法" }

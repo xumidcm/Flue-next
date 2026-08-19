@@ -4,8 +4,6 @@ import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import com.flue.launcher.ui.navigation.ScreenState
-import com.flue.launcher.ui.theme.UiStyle
-import com.flue.launcher.ui.theme.isMaterial
 
 /**
  * 每一层在不同状态下的 scale / blur / opacity 目标值。
@@ -17,6 +15,39 @@ data class LayerAnimValues(
     val translationX: Float = 0f,  // 屏幕宽度比例（-1f = 向左移出, 1f = 向右移出）
     val translationY: Float = 0f  // 屏幕高度比例（-1f = 向上移出, 1f = 向下移出）
 )
+
+/**
+ * 转场动画风格。**与界面风格无关**，单独一项设置。
+ *
+ * ## 为什么要拆开
+ *
+ * 这两套动画原本是按 `uiStyle.isMaterial` 分的：Material 档走「列表横向移出 + 表盘小幅
+ * 缩放」，另两档走「列表放大穿过 + 表盘压暗下沉」。可**动画取向与视觉风格是两件事** ——
+ * 老师想要 watchOS 的形状配平移动画，或者 HyperOS 的配色配缩放动画，原来都做不到，
+ * 只能连着换整套外观。
+ *
+ * 所以这里把它抽成独立取值：
+ *
+ * - [SLIDE]（平移）＝原来 Material 那套：列表横向移出、表盘只小幅缩放；
+ * - [SCALE]（缩放）＝原来非 Material 那套：列表放大穿过、表盘压暗下沉。
+ *
+ * 名字按**动画的主导量**取，不按风格取 —— 以后再加风格也不会把这层重新绑回去。
+ */
+enum class FlueTransitionMotion {
+    /** 平移主导：列表横向移出移入，缩放很轻。原 Material 档的做法。 */
+    SLIDE,
+
+    /** 缩放主导：列表放大穿过、表盘压暗下沉。原 watchOS / HyperOS 档的做法。 */
+    SCALE;
+
+    companion object {
+        /** 默认取缩放：三档风格里有两档原本就是这套，多数用户升级后观感不变。 */
+        val Default: FlueTransitionMotion = SCALE
+
+        fun fromPreference(raw: String?): FlueTransitionMotion =
+            entries.firstOrNull { it.name == raw } ?: Default
+    }
+}
 
 /**
  * 在两个完整图层状态之间按同一进度插值。
@@ -62,11 +93,13 @@ private fun LayerAnimValues.shrinkGated(enabled: Boolean): LayerAnimValues =
  */
 fun faceLayerValues(
     state: ScreenState,
-    uiStyle: UiStyle,
+    motion: FlueTransitionMotion,
     shrinkOnFaceReturn: Boolean = true,
     legacyTransition: Boolean = false,
 ): LayerAnimValues =
-    if (!uiStyle.isMaterial && legacyTransition) {
+    // 「还原老动画」是缩放家族的一个变体（2.5 倍冲脸），所以只在缩放档下生效；
+    // 平移档开着它没有意义，也不该悄悄改成另一套。
+    if (motion == FlueTransitionMotion.SCALE && legacyTransition) {
         when (state) {
             ScreenState.Face -> LayerAnimValues(scale = 1f, blur = 0f, alpha = 1f)
             ScreenState.Apps, ScreenState.Settings ->
@@ -86,7 +119,7 @@ fun faceLayerValues(
                 LayerAnimValues(scale = 0.9f, blur = 8f, alpha = 0.5f)
                     .shrinkGated(shrinkOnFaceReturn)
         }
-    } else if (uiStyle.isMaterial) {
+    } else if (motion == FlueTransitionMotion.SLIDE) {
         when (state) {
             ScreenState.Face -> LayerAnimValues(scale = 1f, blur = 0f, alpha = 1f)
             ScreenState.Apps, ScreenState.Settings ->
@@ -109,14 +142,26 @@ fun faceLayerValues(
     } else {
         when (state) {
             ScreenState.Face -> LayerAnimValues(scale = 1f, blur = 0f, alpha = 1f)
-            // watchOS 三段式的 A 段：表盘「向下压暗退后」（缩小 + 下沉 + 模糊），
-            // 而不是旧版的 2.5 倍放大冲脸。B 段的渐黑由 LauncherActivity 里的
-            // 独立遮罩层承担，所以这里 alpha 不用一路打到 0 也能全黑。
+            // 返回表盘这一程改成与平移档同一套取值（老师指定）。
+            //
+            // 为什么连去程一起变了：这张表是**按状态**给目标值的，不按方向 —— 同一个
+            // `Apps` 值既是「离开表盘去列表」的终点，也是「从列表返回表盘」的起点，
+            // 弹簧只是反着跑同一段。所以「只改返回那一程」在这套结构下做不到，改端点
+            // 是唯一不产生跳变的做法（起点被静止态钉死，见下面 App 那条的注释）。
+            //
+            // 旧取值 `scale = 0.90 / blur = 14 / alpha = 0` 的问题正是老师要去掉的那种
+            // 观感：表盘从**完全不可见**且重度模糊里长出来。平移档那套（1.22 / 7 / 0.22）
+            // 是「从略大一点收回原位」，全程留着 22% 可见度，所以读起来是表盘一直在
+            // 那儿、只是退后了一点。
+            //
+            // 刻意只换这两条：Stack / Notifications / Widgets / ControlCenter 不是
+            // 「返回表盘」这一程（那是侧向覆层），应用列表层那张表也一个字没动 ——
+            // 老师说了「其他的动画不要改」。
             ScreenState.Apps, ScreenState.Settings ->
-                LayerAnimValues(scale = 0.90f, blur = 14f, alpha = 0f, translationY = 0.07f)
+                LayerAnimValues(scale = 1.22f, blur = 7f, alpha = 0.22f)
                     .shrinkGated(shrinkOnFaceReturn)
             ScreenState.App ->
-                LayerAnimValues(scale = 0.88f, blur = 15f, alpha = 0f, translationY = 0.07f)
+                LayerAnimValues(scale = 1.28f, blur = 9f, alpha = 0.14f)
                     .shrinkGated(shrinkOnFaceReturn)
             ScreenState.Stack ->
                 LayerAnimValues(scale = 0.85f, blur = 5f, alpha = 0.3f)
@@ -142,16 +187,21 @@ fun faceLayerValues(
  */
 fun appListLayerValues(
     state: ScreenState,
-    uiStyle: UiStyle,
+    motion: FlueTransitionMotion,
     shrinkOnAppReturn: Boolean = true,
     shrinkOnFaceReturn: Boolean = true,
     legacyTransition: Boolean = false,
 ): LayerAnimValues =
-    if (!uiStyle.isMaterial && legacyTransition) {
+    if (motion == FlueTransitionMotion.SCALE && legacyTransition) {
         when (state) {
-            // 老动画：列表退回表盘时缩成一个点（0.2），配合表盘 2.5 倍冲脸。
+            // 老动画返回表盘时不再收缩。以前是缩成一个点（0.2）配合表盘 2.5 倍
+            // 冲脸，但列表缩点这一段 spring 往往还没走完就被表盘盖住，看起来是
+            // 「闪一下归位」而不是收进去 —— 老师要的是去掉这个收缩，只留淡出
+            // 与模糊；表盘那侧的 2.5 倍冲脸是老动画的招牌，保持不动。
+            //
+            // scale 恒为 1 且无位移，shrinkGated 对它已无事可做，所以不再套。
             ScreenState.Face ->
-                LayerAnimValues(scale = 0.2f, blur = 10f, alpha = 0f).shrinkGated(shrinkOnFaceReturn)
+                LayerAnimValues(scale = 1f, blur = 10f, alpha = 0f)
             ScreenState.Apps -> LayerAnimValues(scale = 1f, blur = 0f, alpha = 1f)
             ScreenState.Settings -> LayerAnimValues(scale = 0.9f, blur = 8f, alpha = 0.3f)
             ScreenState.App ->
@@ -159,7 +209,7 @@ fun appListLayerValues(
             else ->
                 LayerAnimValues(scale = 0.2f, blur = 10f, alpha = 0f).shrinkGated(shrinkOnFaceReturn)
         }
-    } else if (uiStyle.isMaterial) {
+    } else if (motion == FlueTransitionMotion.SLIDE) {
         when (state) {
             ScreenState.Face ->
                 LayerAnimValues(scale = 0.88f, blur = 8f, alpha = 0f).shrinkGated(shrinkOnFaceReturn)
@@ -200,13 +250,13 @@ fun appListLayerValues(
  */
 fun appListLaunchValues(
     progress: Float,
-    uiStyle: UiStyle,
+    motion: FlueTransitionMotion,
     shrinkOnAppReturn: Boolean = true,
 ): LayerAnimValues {
     val p = progress.coerceIn(0f, 1f)
     val end = appListLayerValues(
         state = ScreenState.App,
-        uiStyle = uiStyle,
+        motion = motion,
         shrinkOnAppReturn = shrinkOnAppReturn,
     )
     return LayerAnimValues(

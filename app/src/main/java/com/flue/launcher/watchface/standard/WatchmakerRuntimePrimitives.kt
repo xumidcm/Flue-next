@@ -986,6 +986,32 @@ sealed interface WatchTapAction {
      */
     data object HeartRate : WatchTapAction
 
+    /**
+     * `sw_start_stop` / `sw_reset`：表盘内共享秒表（`{sw*}` 一族背后那一个）。
+     *
+     * 上游把这两个动作放在渲染器层（`WM_TAP_ACTIONS.md` §6：「handled at the
+     * RENDERER level (Lua, no Java handler)」），所以它们不走宿主的应用映射，
+     * 直接操作 [WatchStopwatch]。
+     */
+    data object StopwatchStartStop : WatchTapAction
+
+    data object StopwatchReset : WatchTapAction
+
+    /**
+     * 内建媒体控制：`media_play_pause` / `media_play` / `media_pause` /
+     * `media_next` / `media_prev`。
+     *
+     * 老师报「这个表盘有很多不支持的 Action，比如音乐播放」—— 这一族以前**根本没解析**，
+     * 于是全部落到 [Unsupported]，点一下只弹一句「动作不可用」。
+     */
+    data class Media(val key: WatchMediaKey) : WatchTapAction
+
+    /** 内建音量：`vol_up` / `vol_down`（调的是媒体流，并且要显示系统音量条）。 */
+    data class Volume(val raise: Boolean) : WatchTapAction
+
+    /** 内建闹钟：`set_alarm_HH:MM`。时间在解析期就校验过，这里恒为合法值。 */
+    data class SetAlarm(val hour: Int, val minute: Int) : WatchTapAction
+
     /** Execute inside the loaded face's shared CloX-compatible Lua sandbox. */
     data class Script(val source: String) : WatchTapAction
 
@@ -998,6 +1024,15 @@ sealed interface WatchTapAction {
 
     data class Unsupported(val reason: String) : WatchTapAction
 }
+
+/**
+ * 内建媒体控制动作（`WM_TAP_ACTIONS.md` §1）。
+ *
+ * 上游是直接 dispatch 媒体键，所以**不需要任何权限、也不关心是哪个播放器** ——
+ * 系统把键送给当前持有媒体会话的那个应用。这也是为什么它属于「built-in，无需配置」，
+ * 而 `w_music`（打开音乐应用）属于要用户映射的那一类。
+ */
+enum class WatchMediaKey { PLAY_PAUSE, PLAY, PAUSE, NEXT, PREVIOUS }
 
 object WatchTapActionParser {
     fun parse(raw: String?): WatchTapAction = parseInternal(raw.orEmpty().trim())
@@ -1012,6 +1047,25 @@ object WatchTapActionParser {
             return WatchTapAction.HeartRate
         if (lower == "open_settings") return WatchTapAction.OpenSettings
         if (lower == "battery_status") return WatchTapAction.BatteryStatus
+        // 内建动作优先于可配置命名动作 —— 上游的 dispatch 顺序就是
+        // 「built-in first, then configurable」（WM_TAP_ACTIONS.md §「How it works」）。
+        MEDIA_ACTIONS[lower]?.let { return WatchTapAction.Media(it) }
+        if (lower == "vol_up") return WatchTapAction.Volume(raise = true)
+        if (lower == "vol_down") return WatchTapAction.Volume(raise = false)
+        if (lower.startsWith(SET_ALARM_PREFIX)) {
+            // `set_alarm_07:30`。时间在这里就校验掉：交给宿主之前先保证是合法钟点，
+            // 免得把 `set_alarm_99:99` 这种脏值塞进 AlarmClock 的 extra 里。
+            val time = lower.removePrefix(SET_ALARM_PREFIX).split(':')
+            val hour = time.getOrNull(0)?.trim()?.toIntOrNull()
+            val minute = time.getOrNull(1)?.trim()?.toIntOrNull()
+            return if (time.size != 2 || hour == null || minute == null ||
+                hour !in 0..23 || minute !in 0..59
+            ) {
+                WatchTapAction.Unsupported("malformed alarm time")
+            } else {
+                WatchTapAction.SetAlarm(hour = hour, minute = minute)
+            }
+        }
         if (lower.isBlank()) return WatchTapAction.Unsupported("empty tap action")
         if (lower.startsWith("script:")) {
             val source = value.substringAfter(':').trim()
@@ -1057,17 +1111,64 @@ object WatchTapActionParser {
             }
         }
         if (lower in NAMED_ACTIONS) return WatchTapAction.Named(lower)
+        // 表盘内共享秒表的两个动作。上游把它们归在「渲染器层处理、没有 Java
+        // handler」那一类（`WM_TAP_ACTIONS.md` §6），所以这里给它们独立的类型，
+        // 由渲染侧直接改 [WatchStopwatch]，不经宿主的应用映射。
+        if (lower == "sw_start_stop") return WatchTapAction.StopwatchStartStop
+        if (lower == "sw_reset") return WatchTapAction.StopwatchReset
         // 包含 / : . 的其他格式（URL、component name 等）暂不支持
         if (lower.contains('/') || lower.contains(':') || lower.contains('.'))
             return WatchTapAction.Unsupported("custom intents are disabled")
         return WatchTapAction.Unsupported("unsupported action")
     }
 
+    private val MEDIA_ACTIONS = mapOf(
+        "media_play_pause" to WatchMediaKey.PLAY_PAUSE,
+        "media_play" to WatchMediaKey.PLAY,
+        "media_pause" to WatchMediaKey.PAUSE,
+        "media_next" to WatchMediaKey.NEXT,
+        "media_prev" to WatchMediaKey.PREVIOUS,
+    )
+
+    private const val SET_ALARM_PREFIX = "set_alarm_"
+
+    /**
+     * 可配置命名动作。前半段**与上游 `TapActionHandler.CONFIGURABLE_ACTIONS` 逐字对齐**
+     * （`WM_TAP_ACTIONS.md` §3），后半段是 Flue 早年自己加的拼法。
+     *
+     * 认得出来很重要：命名动作是「识别了但可能没映射」，落到 [WatchTapAction.Unsupported]
+     * 会当场弹一句「表盘点击动作不可用」。老师报「这个表盘有很多不支持的 Action」，
+     * 有一半就是 `w_dialer` / `w_map` / `voice_search` 这些**上游有、这份名单里漏了**的名字。
+     */
+    /**
+     * 设置页「表盘点击动作」按这张表出行 —— 名单只有一份，界面与解析永远同步。
+     * 顺序照上游文档的排布，方便逐条对照。
+     */
+    val CONFIGURABLE_ACTIONS: List<String> get() = NAMED_ACTIONS.toList()
+
+    /**
+     * 这个动作名是不是「用户可在设置里映射到具体应用」的那一类。
+     *
+     * 存在的理由：解析器会把 `widget_weather` / `widget_calendar` / `widget_health` 这些
+     * **可配置**名字短路成强类型动作（[WatchTapAction.Weather] 等），于是运行时光看解析
+     * 结果分不出「这个动作用户配得了吗」。渲染层据此决定要不要先查映射表 —— 直接查
+     * [CONFIGURABLE_ACTIONS] 会每次拷一份 list，这里走同一个 Set，零分配。
+     */
+    fun isConfigurable(action: String?): Boolean =
+        action?.trim()?.lowercase(Locale.ROOT)?.takeIf(String::isNotEmpty) in NAMED_ACTIONS
+
     private val NAMED_ACTIONS = setOf(
-        "w_camera", "w_clock", "w_music", "w_calculator", "browser",
+        // ── 上游 26 个 ──────────────────────────────────────────────────────
+        "tap_launcher", "widget_weather", "widget_health", "widget_calendar",
+        "w_agenda", "w_fit", "w_heart_rate", "w_compass",
+        "w_keep", "m_email", "m_calendar", "voice_search",
+        "w_contacts", "w_sports", "w_gallery", "w_messaging",
+        "w_camera", "w_dialer", "w_music", "w_clock",
+        "w_calculator", "w_payment", "w_map", "browser",
+        "flashlight", "socialmedia",
+        // ── Flue 旧有别名（社区表盘里确实出现过）────────────────────────────
         "w_email", "w_sms", "w_phone", "w_maps", "w_alarm", "w_timer",
-        "w_stopwatch", "w_weather", "w_calendar", "w_contacts", "w_gallery",
-        "w_recorder", "w_settings", "m_camera", "m_clock", "m_music",
-        "m_calculator", "m_weather", "m_calendar",
+        "w_stopwatch", "w_weather", "w_calendar", "w_recorder", "w_settings",
+        "m_camera", "m_clock", "m_music", "m_calculator", "m_weather",
     )
 }

@@ -1,6 +1,7 @@
 package com.flue.launcher.motion
 
 import androidx.compose.runtime.staticCompositionLocalOf
+import com.flue.launcher.ui.theme.UiStyle
 import java.util.UUID
 
 const val FLUE_MOTION_SCHEMA_VERSION: Int = 1
@@ -223,13 +224,24 @@ object FlueMotionProfiles {
         ),
     ).requireValid()
 
+    /**
+     * 可选档位列表。[Gentle]（柔和）排在最前面，因为它是默认档。
+     *
+     * 以前这里还有一档「跟随风格」，参数按当前 UI 风格分三套。老师定的方向是**所有 UI
+     * 风格的动画曲线都用柔和**，所以那一档整个删掉了 —— 留着它就等于留一个「让三档风格
+     * 各自不同」的入口，与「统一柔和」直接矛盾。风格差异仍然体现在形状、强调色、字体、
+     * 背景上，不再体现在动效曲线上。
+     */
     val builtIns: List<FlueMotionProfile> = listOf(Gentle, Aggressive, Classic)
 
     fun isBuiltIn(id: String): Boolean =
         id == GENTLE_ID || id == AGGRESSIVE_ID || id == CLASSIC_ID
 
+    /** `id` 为空（没存过、或刚重置）时落到 [Gentle]。 */
     fun resolve(id: String?, customProfiles: List<FlueMotionProfile>): FlueMotionProfile =
         (builtIns + customProfiles).firstOrNull { it.id == id } ?: Gentle
 }
 
-val LocalFlueMotionProfile = staticCompositionLocalOf { FlueMotionProfiles.Gentle }
+val LocalFlueMotionProfile = staticCompositionLocalOf {
+    FlueMotionProfiles.Gentle
+}

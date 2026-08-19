@@ -28,6 +28,40 @@ internal object WatchmakerProtection {
     fun openDecodedXml(input: InputStream): InputStream =
         Base64.getDecoder().wrap(WatchmakerBase64InputStream(BufferedInputStream(input)))
 
+    /** Encodes the complete watch definition using WatchMaker's protected XML format. */
+    fun encodeXml(input: ByteArray): ByteArray =
+        Base64.getEncoder().encode(input).also { encoded ->
+            for (index in encoded.indices) {
+                encoded[index] = swapBase64Alphabet(encoded[index].toInt() and 0xff).toByte()
+            }
+        }
+
+    /** The image obfuscation is deliberately symmetric: the same operation decodes it. */
+    fun protectAssetBytes(input: ByteArray): ByteArray = xorAssetBytes(input)
+
+    fun unprotectAssetBytes(input: ByteArray): ByteArray = xorAssetBytes(input)
+
+    /**
+     * Converts an image file into the payload used by a protected archive. If a
+     * draft already contains an encrypted `.ppng`/`.pjpg` file, leave it alone;
+     * installed protected faces normally contain the same extension with the
+     * decoded image bytes in place.
+     */
+    fun prepareProtectedAssetBytes(input: ByteArray, extension: String): ByteArray {
+        val type = protectedAssetType(extension) ?: return input
+        if (hasExpectedHeader(input, type)) return xorAssetBytes(input)
+        val decoded = xorAssetBytes(input)
+        return if (hasExpectedHeader(decoded, type)) input else xorAssetBytes(input)
+    }
+
+    /** Returns decoded image bytes for a plain archive, if the source is protected. */
+    fun preparePlainAssetBytes(input: ByteArray, extension: String): ByteArray {
+        val type = protectedAssetType(extension) ?: return input
+        if (hasExpectedHeader(input, type)) return input
+        val decoded = xorAssetBytes(input)
+        return if (hasExpectedHeader(decoded, type)) decoded else input
+    }
+
     fun decodeXmlToFile(source: File, destination: File, maximumDecodedBytes: Long) {
         source.inputStream().use { raw ->
             openDecodedXml(raw).use { decoded ->
@@ -85,6 +119,20 @@ internal object WatchmakerProtection {
         }
     }
 
+    private fun xorAssetBytes(input: ByteArray): ByteArray = ByteArray(input.size) { index ->
+        (input[index].toInt() xor XOR_KEY[index % XOR_KEY.size].toInt()).toByte()
+    }
+
+    private fun protectedAssetType(extension: String): ProtectedAssetType? = when {
+        extension.equals("ppng", ignoreCase = true) || extension.equals("png", ignoreCase = true) ->
+            ProtectedAssetType.PNG
+        extension.equals("pjpg", ignoreCase = true) ||
+            extension.equals("pjpeg", ignoreCase = true) ||
+            extension.equals("jpg", ignoreCase = true) ||
+            extension.equals("jpeg", ignoreCase = true) -> ProtectedAssetType.JPEG
+        else -> null
+    }
+
     private fun copyBounded(
         input: InputStream,
         output: OutputStream,
@@ -130,6 +178,15 @@ internal object WatchmakerProtection {
                 }
             }
         }.getOrDefault(false)
+    }
+
+    private fun hasExpectedHeader(bytes: ByteArray, type: ProtectedAssetType): Boolean = when (type) {
+        ProtectedAssetType.PNG -> bytes.size >= PNG_HEADER.size &&
+            bytes.copyOf(PNG_HEADER.size).contentEquals(PNG_HEADER)
+        ProtectedAssetType.JPEG -> bytes.size >= 3 &&
+            (bytes[0].toInt() and 0xff) == 0xff &&
+            (bytes[1].toInt() and 0xff) == 0xd8 &&
+            (bytes[2].toInt() and 0xff) == 0xff
     }
 
     /**
@@ -201,6 +258,14 @@ internal object WatchmakerProtection {
         return if (offset == size) output else output.copyOf(offset)
     }
 
+    private fun swapBase64Alphabet(value: Int): Int = when (value.toChar()) {
+        'D' -> 'g'.code
+        'g' -> 'D'.code
+        '4' -> 'L'.code
+        'L' -> '4'.code
+        else -> value
+    }
+
     private fun replaceFile(source: File, target: File) {
         try {
             Files.move(
@@ -250,13 +315,7 @@ internal object WatchmakerProtection {
             return written
         }
 
-        private fun restore(value: Int): Int = when (value.toChar()) {
-            'D' -> 'g'.code
-            'g' -> 'D'.code
-            '4' -> 'L'.code
-            'L' -> '4'.code
-            else -> value
-        }
+        private fun restore(value: Int): Int = swapBase64Alphabet(value)
 
         private fun Int.isAsciiWhitespace(): Boolean =
             this == 0x09 || this == 0x0a || this == 0x0d || this == 0x20

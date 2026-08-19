@@ -35,9 +35,15 @@ private val TAP_OFFSETS: List<Pair<Float, Float>> = listOf(
 fun Modifier.flueLegacyBlur(
     progress: () -> Float,
     enabled: Boolean,
+    advancedMaterialEnabled: Boolean = true,
     maxRadiusPx: Float = 26f,
 ): Modifier {
-    if (!enabled || Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) return this
+    if (
+        !enabled || overlayBlurBackend(
+            sdkInt = Build.VERSION.SDK_INT,
+            advancedMaterialEnabled = advancedMaterialEnabled,
+        ) == OverlayBlurBackend.SYSTEM
+    ) return this
     val blurLayer = rememberGraphicsLayer()
     return this.drawWithContent {
         val p = progress().coerceIn(0f, 1f)

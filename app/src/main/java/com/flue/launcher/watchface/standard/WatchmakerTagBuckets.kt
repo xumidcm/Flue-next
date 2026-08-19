@@ -81,7 +81,7 @@ object WatchTagBuckets {
     )
 
     private val DAY_TAGS = setOf(
-        "dd", "ddz", "ddw0", "ddw", "ddw1", "ddw2", "ddww",
+        "dd", "ddz", "ddy", "ddw0", "ddw", "ddw1", "ddw2", "ddww",
         "dn", "dnn", "dnnn", "dnnnn", "dy", "dyy", "dyyyy",
         // {dw} 周序号、{ddim} 本月天数、{wmp} 月相序号：都是纯日期函数，
         // 一天最多变一次。{wmp} 虽然名字像天气，实现是本地天文算法（见

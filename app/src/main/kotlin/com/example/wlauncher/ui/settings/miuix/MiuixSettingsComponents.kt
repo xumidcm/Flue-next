@@ -44,6 +44,12 @@ import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.flue.launcher.ui.style.FlueGroupDivider
+import com.flue.launcher.ui.style.FlueSlider
+import com.flue.launcher.ui.style.FlueSwitch
+import com.flue.launcher.ui.style.FlueGroupPosition
+import com.flue.launcher.ui.style.flueGroupShape
+import com.flue.launcher.ui.style.flueRowHorizontalPadding
 import com.flue.launcher.ui.theme.LauncherTheme
 import com.flue.launcher.ui.theme.ProvideLauncherStyle
 import com.flue.launcher.ui.theme.RoundElementRole
@@ -87,12 +93,17 @@ fun SettingsIcon(
  * 组容器：大圆角卡片，可选组标题（左对齐加粗小号灰字）。
  * 组内行之间用 [MiuixCardDivider] 画细分隔线；组与组之间留 12dp 空隙
  * （由调用方通过 `Arrangement.spacedBy(12.dp)` 或 [MiuixGroupSpacing] 控制）。
+ *
+ * [groupPosition] 不是 [FlueGroupPosition.Single] 时，这张卡是**一组里的一行**：只圆该圆的
+ * 那两个角，非末行底部自带分隔线，于是连续几行拼起来看着就是一张 HyperOS 大卡。
+ * 间距由 `flueSettingsGroup` 在外层按位置给，这里不管。
  */
 @Composable
 fun MiuixSettingsCard(
     modifier: Modifier = Modifier,
     title: String? = null,
     roundRole: RoundElementRole = RoundElementRole.AUTO,
+    groupPosition: FlueGroupPosition = FlueGroupPosition.Single,
     content: @Composable ColumnScope.() -> Unit
 ) {
     val style = LauncherTheme.style
@@ -112,10 +123,12 @@ fun MiuixSettingsCard(
                 // 圆屏走胶囊（老师定：三套统一）。这里是「一组设置行」的容器，塞几行
                 // 由调用方决定，组合期算不出高度 —— 交给 RowCapsuleShape 在绘制期按
                 // 真实宽高比判断：单行组取真胶囊，多行组自动退回 cardShape。
-                .clip(style.roundAwareCardShape(roundRole))
+                .clip(style.flueGroupShape(groupPosition, roundRole))
                 .background(style.cardColor),
-            content = content
-        )
+        ) {
+            content()
+            FlueGroupDivider(groupPosition)
+        }
     }
 }
 
@@ -150,7 +163,7 @@ fun MiuixSettingsRow(
     trailing: (@Composable () -> Unit)? = null
 ) {
     val style = LauncherTheme.style
-    val horizontalPadding = if (isFlueScreenRound()) 22.dp else 16.dp
+    val horizontalPadding = flueRowHorizontalPadding(style, rowHeight = 56.dp)
     val interactionSource = remember { MutableInteractionSource() }
     val pressed by interactionSource.collectIsPressedAsState()
     val background = animateColorAsState(
@@ -208,162 +221,7 @@ fun MiuixSettingsRow(
     }
 }
 
-/**
- * 胶囊开关：44x26dp 视觉（HyperOS 实机尺寸；旧 26x15 在手表上小到难点），
- * 拖影动画 spring(0.9, 600)，按压时滑块横向拉伸模拟 HyperOS 的「拖影」。
- * 点按经系统触觉 ToggleOn/ToggleOff 给确认震动。
- */
-@Composable
-fun MiuixSwitch(
-    checked: Boolean,
-    onCheckedChange: ((Boolean) -> Unit)?,
-    modifier: Modifier = Modifier,
-    enabled: Boolean = true,
-    trackWidth: Dp = 44.dp,
-    trackHeight: Dp = 26.dp
-) {
-    val style = LauncherTheme.style
-    val interactionSource = remember { MutableInteractionSource() }
-    val pressed by interactionSource.collectIsPressedAsState()
-    val haptics = androidx.compose.ui.platform.LocalHapticFeedback.current
 
-    val thumbPadding = 2.5.dp
-    val thumbSize = trackHeight - thumbPadding * 2
-    val thumbProgress = animateFloatAsState(
-        if (checked) 1f else 0f,
-        animationSpec = miuixSpring(),
-        label = "miuix_switch_thumb_progress"
-    )
-    // 拖影只缩放绘制层，不再每帧改变 thumb 宽度并重新测量整行。
-    val thumbStretch = animateFloatAsState(
-        if (pressed && enabled) 1.18f else 1f,
-        animationSpec = miuixSpring(),
-        label = "miuix_switch_thumb_stretch"
-    )
-    val trackColor = animateColorAsState(
-        when {
-            !enabled -> style.secondaryTextColor.copy(alpha = 0.20f)
-            checked -> style.accentColor
-            else -> style.secondaryTextColor.copy(alpha = 0.36f)
-        },
-        label = "miuix_switch_track"
-    )
-    // 滑块取「最亮的表面令牌」：浅色 = 白卡片，深色 = 近白标题色
-    val thumbColor = remember(style) {
-        if (style.cardColor.luminance() >= style.titleColor.luminance()) style.cardColor else style.titleColor
-    }
-
-    Box(
-        modifier = modifier
-            .width(trackWidth)
-            .height(trackHeight)
-            .clip(RoundedCornerShape(999.dp))
-            .drawBehind { drawRect(trackColor.value) }
-            .then(
-                if (onCheckedChange != null) {
-                    Modifier.clickable(
-                        interactionSource = interactionSource,
-                        indication = null,
-                        enabled = enabled,
-                        onClick = {
-                            haptics.performHapticFeedback(
-                                if (checked) {
-                                    androidx.compose.ui.hapticfeedback.HapticFeedbackType.ToggleOff
-                                } else {
-                                    androidx.compose.ui.hapticfeedback.HapticFeedbackType.ToggleOn
-                                },
-                            )
-                            onCheckedChange(!checked)
-                        }
-                    )
-                } else {
-                    Modifier
-                }
-            ),
-        contentAlignment = Alignment.CenterStart
-    ) {
-        Box(
-            modifier = Modifier
-                .padding(start = thumbPadding)
-                .size(thumbSize)
-                .graphicsLayer {
-                    translationX = (trackWidth - thumbSize - thumbPadding * 2).toPx() *
-                        thumbProgress.value
-                    scaleX = thumbStretch.value
-                    transformOrigin = TransformOrigin(if (checked) 1f else 0f, 0.5f)
-                }
-                .clip(RoundedCornerShape(999.dp))
-                .background(thumbColor)
-        )
-    }
-}
-
-/**
- * HyperOS 风格滑块：24dp 高的粗胶囊轨道、无 thumb，填充即值。
- *
- * 骨架用官方 M3 [androidx.compose.material3.Slider]（track/thumb slot 换皮）
- * 而不是手搓 pointerInput：steps 吸附、无障碍语义、RTL、键盘/表冠支持
- * 全部白拿——「不要自己搓、用预设」。
- */
-@OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
-@Composable
-fun MiuixSlider(
-    value: Float,
-    onValueChange: (Float) -> Unit,
-    modifier: Modifier = Modifier,
-    valueRange: ClosedFloatingPointRange<Float> = 0f..1f,
-    enabled: Boolean = true,
-    onValueChangeFinished: (() -> Unit)? = null,
-    trackHeight: Dp = 24.dp,
-    steps: Int = 0
-) {
-    val style = LauncherTheme.style
-    val interactionSource = remember { MutableInteractionSource() }
-    val pressed by interactionSource.collectIsPressedAsState()
-    val fillColor = animateColorAsState(
-        when {
-            !enabled -> style.secondaryTextColor.copy(alpha = 0.30f)
-            pressed -> style.accentColor
-            else -> style.accentColor.copy(alpha = 0.92f)
-        },
-        label = "miuix_slider_fill"
-    )
-    val span = (valueRange.endInclusive - valueRange.start).takeIf { it > 0f } ?: 1f
-
-    androidx.compose.material3.Slider(
-        value = value,
-        onValueChange = onValueChange,
-        modifier = modifier
-            .fillMaxWidth()
-            .height(trackHeight),
-        enabled = enabled,
-        valueRange = valueRange,
-        steps = steps,
-        onValueChangeFinished = onValueChangeFinished,
-        interactionSource = interactionSource,
-        // HyperOS 没有可见 thumb：填充即值。
-        thumb = {},
-        track = { sliderState ->
-            val fraction = ((sliderState.value - valueRange.start) / span).coerceIn(0f, 1f)
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(trackHeight)
-                    .clip(RoundedCornerShape(999.dp))
-                    .background(style.pressedCardColor),
-                contentAlignment = Alignment.CenterStart
-            ) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth(fraction)
-                        .fillMaxHeight()
-                        .clip(RoundedCornerShape(999.dp))
-                        .drawBehind { drawRect(fillColor.value) }
-                )
-            }
-        }
-    )
-}
 
 // ------------------------------------------------------------------ Preview
 
@@ -384,25 +242,25 @@ private fun MiuixPreviewContent() {
                 title = "高级材质",
                 subtitle = "建议 Android 12+ 设备开启",
                 onClick = { switchA = !switchA },
-                trailing = { MiuixSwitch(checked = switchA, onCheckedChange = { switchA = it }) }
+                trailing = { FlueSwitch(checked = switchA, onCheckedChange = { switchA = it }) }
             )
             MiuixCardDivider()
             MiuixSettingsRow(
                 title = "边缘模糊",
                 subtitle = "实验性",
                 onClick = { switchB = !switchB },
-                trailing = { MiuixSwitch(checked = switchB, onCheckedChange = { switchB = it }) }
+                trailing = { FlueSwitch(checked = switchB, onCheckedChange = { switchB = it }) }
             )
             MiuixCardDivider()
             MiuixSettingsRow(title = "全局 UI 大小", subtitle = "${(slider * 100).toInt()}%")
             Box(modifier = Modifier.padding(horizontal = 16.dp).padding(bottom = 14.dp)) {
-                MiuixSlider(value = slider, onValueChange = { slider = it })
+                FlueSlider(value = slider, onValueChange = { slider = it })
             }
         }
         MiuixSettingsCard(title = "系统") {
             MiuixSettingsRow(title = "导出日志", subtitle = "导出诊断信息", onClick = {})
             MiuixCardDivider()
-            MiuixSettingsRow(title = "关于", subtitle = "Flue Next 2.0.0 (20)", onClick = {})
+            MiuixSettingsRow(title = "关于", subtitle = "Flue Next 2.0.2 (22)", onClick = {})
         }
     }
 }

@@ -20,12 +20,8 @@ data class AppInfo(
     val activityName: String,
     val cachedIcon: ImageBitmap,
     val cachedBlurredIcon: ImageBitmap,
-    val cachedTwoToneIcon: ImageBitmap? = null,
-    val cachedTwoToneBlurredIcon: ImageBitmap? = null,
     val cachedPlainIcon: ImageBitmap? = null,
     val cachedPlainBlurredIcon: ImageBitmap? = null,
-    val cachedPlainTwoToneIcon: ImageBitmap? = null,
-    val cachedPlainTwoToneBlurredIcon: ImageBitmap? = null,
     val isBuiltInSettingsEntry: Boolean = false,
     val itemType: AppListItemType = AppListItemType.APP,
     val shortcutIntentUri: String? = null,
@@ -47,23 +43,13 @@ data class AppInfo(
         get() = itemType == AppListItemType.FOLDER
 }
 
-fun AppInfo.iconForDisplay(useTwoTone: Boolean, blurred: Boolean = false): ImageBitmap {
-    if (useTwoTone) {
-        val twoTone = if (blurred) cachedTwoToneBlurredIcon ?: cachedTwoToneIcon else cachedTwoToneIcon
-        if (twoTone != null) return twoTone
-    }
+/** 图标的显示用位图。[blurred] 走的是预渲染的柔化版，不是运行时模糊。 */
+fun AppInfo.iconForDisplay(blurred: Boolean = false): ImageBitmap {
     return if (blurred) cachedBlurredIcon else cachedIcon
 }
 
-fun AppInfo.plainIconForDisplay(useTwoTone: Boolean, blurred: Boolean = false): ImageBitmap {
-    if (useTwoTone) {
-        val twoTone = if (blurred) {
-            cachedPlainTwoToneBlurredIcon ?: cachedPlainTwoToneIcon
-        } else {
-            cachedPlainTwoToneIcon
-        }
-        if (twoTone != null) return twoTone
-    }
+/** 不带圆形遮罩的原样图标，供 MD3 密集蜂窝那类自己裁形状的排布用。 */
+fun AppInfo.plainIconForDisplay(blurred: Boolean = false): ImageBitmap {
     return if (blurred) {
         cachedPlainBlurredIcon ?: cachedBlurredIcon
     } else {

@@ -72,6 +72,58 @@ internal class WatchmakerWatchFaceStageView @JvmOverloads constructor(
     /** 对外暴露首段，让既有调用方继续拿到熟悉的 View 类型。 */
     val renderer: WatchmakerWatchFaceView get() = primaryView
 
+    /**
+     * 编辑器实时变换要广播给**每一个** Canvas 段。
+     *
+     * ## 为什么必须广播
+     *
+     * 有 video 图层时 renderPlan 被切成「首段 → 视频面 → 补画段 → …」，首段只画视频
+     * **下面**那些层，视频上面的层由 [extraViews] 里另一个 `WatchmakerWatchFaceView`
+     * 实例画。而编辑器一直只对 [primaryView] 下发实时变换 —— 于是拖一个压在视频上的
+     * 文字层，那一层归补画段管，首段收到的覆盖对它无效：选中框跟着手指走，像素不动，
+     * 直到松手落盘重新解析（老师报的「导入视频后拖文字只有松手才显示」）。
+     *
+     * 没有视频时 [extraViews] 是空的，广播退化成原来的单段调用，行为不变。
+     */
+    fun setLiveLayerTransform(
+        layerIndex: Int,
+        layerId: String? = null,
+        x: Float,
+        y: Float,
+        rotationDegrees: Float,
+        scaleX: Float,
+        scaleY: Float,
+    ) {
+        forEachCanvasSegment {
+            it.setLiveLayerTransform(
+                layerIndex = layerIndex,
+                layerId = layerId,
+                x = x,
+                y = y,
+                rotationDegrees = rotationDegrees,
+                scaleX = scaleX,
+                scaleY = scaleY,
+            )
+        }
+    }
+
+    fun clearLiveLayerTransform() = forEachCanvasSegment(WatchmakerWatchFaceView::clearLiveLayerTransform)
+
+    fun cancelLiveLayerTransformHandoff() =
+        forEachCanvasSegment(WatchmakerWatchFaceView::cancelLiveLayerTransformHandoff)
+
+    fun handoffLiveLayerTransformOnSourceReady(refreshToken: Int) =
+        forEachCanvasSegment { it.handoffLiveLayerTransformOnSourceReady(refreshToken) }
+
+    /** 冻结编辑器动画交互，同样要覆盖所有段，否则补画段里的文字仍在跑入场动画。 */
+    fun setEditorAnimationInteractionFrozen(frozen: Boolean) =
+        forEachCanvasSegment { it.setEditorAnimationInteractionFrozen(frozen) }
+
+    private inline fun forEachCanvasSegment(action: (WatchmakerWatchFaceView) -> Unit) {
+        action(primaryView)
+        extraViews.forEach(action)
+    }
+
     private fun onPlaybackChanged(shouldPlay: Boolean) {
         playing = shouldPlay
         videoViews.forEach { it.setPlaying(shouldPlay) }

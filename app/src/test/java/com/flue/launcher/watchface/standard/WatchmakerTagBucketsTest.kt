@@ -39,6 +39,7 @@ class WatchmakerTagBucketsTest {
         assertEquals(WatchTagBucket.HOUR, WatchTagBuckets.of("da"))
         assertEquals(WatchTagBucket.HOUR, WatchTagBuckets.of("drh0"))
         assertEquals(WatchTagBucket.DAY, WatchTagBuckets.of("dd"))
+        assertEquals(WatchTagBucket.DAY, WatchTagBuckets.of("ddy"))
         assertEquals(WatchTagBucket.DAY, WatchTagBuckets.of("ddww"))
         assertEquals(WatchTagBucket.DAY, WatchTagBuckets.of("dyyyy"))
     }

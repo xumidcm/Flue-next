@@ -33,6 +33,7 @@ class WatchFaceLuaRuntime private constructor(
     private val stringAllocationBudget: StringAllocationBudget,
     private val internalDebugTable: LuaValue,
     private val declaredFaceNames: Set<String>,
+    private val externalDataVersion: () -> Long,
 ) : AutoCloseable {
     private var resolveTag: (String) -> WatchTagResolution = { WatchTagResolution.Unsupported(it) }
     private var lastFrameElapsedSeconds: Double? = null
@@ -50,6 +51,74 @@ class WatchFaceLuaRuntime private constructor(
             size > MAX_CACHED_EXPRESSIONS
     }
 
+    /**
+     * 属性表达式的**求值结果**缓存。
+     *
+     * ## 为什么需要它
+     *
+     * 编译结果早就缓存了（[compiledExpressions]），但每一帧、每个图层的每个动态属性仍然要走一遍
+     * 「装指令钩子 → 调 chunk → 拆钩子」。老师报「这个表盘用起来很卡」的那张 M3 Expressive
+     * 表盘就是极端例子：89 个图层里有 87 个 `color` 写成 `m_on_tertiary_cont('{ucolor}')`
+     * 这类**脚本函数调用**（脚本里是 hex→HSL→hex 的一整套色调映射 + string.format）。
+     * 60fps 下就是每秒五千多次 Lua 调用，全都在算同一批颜色。
+     *
+     * ## 什么时候可以复用上一次的结果
+     *
+     * 四个条件同时成立：
+     *
+     * 1. **代号相同**。face 侧 Lua 状态一变（跑过 tap 脚本、跑过 `on_millisecond` /
+     *    `on_second` 这些回调）就 [faceStateGeneration] + 1，跨代的条目全部作废 ——
+     *    带逐帧回调的表盘因此只能吃到「同一帧内多个图层共用同一表达式」这一层收益，
+     *    这正是应该的。
+     * 2. **它读过的每个标签值都没变**。标签是走 `wm_tag(...)` 进来的，求值时顺手记下
+     *    「读了哪些标签、当时是什么值」，命中判定时用**当前**解析器重新取一遍比对。
+     *    重取是纯 Kotlin 的快照查表，比进一次 Lua 便宜得多；而 `{swss}` / tween 这类
+     *    每帧都变的标签会自然而然地判不中，不会被冻住。
+     * 3. **外部数据版本相同**。`WF.thirdParty.slots` 由广播写入时递增版本号；即使表盘
+     *    本身没有脚本回调，版本变化也会让缓存立即失效。
+     * 4. **没过期**。再兜一层 [MAX_CACHE_AGE_NANOS] 上限，防住没有版本供应器的其它动态输入。
+     *
+     * 另外第一次见到某个表达式时会**连算两次探纯度**，两次结果不同就永久不缓存（见
+     * [evaluateValue]）—— 靠副作用驱动动画的表达式因此不会被冻住。
+     */
+    private class EvaluatedAttribute(
+        val value: LuaValue?,
+        val generation: Long,
+        val externalDataVersion: Long,
+        val evaluatedAtNanos: Long,
+        val tagNames: Array<String>,
+        val tagValues: Array<String?>,
+        val impure: Boolean,
+    )
+
+    private val evaluatedAttributes = object : LinkedHashMap<String, EvaluatedAttribute>(
+        MAX_CACHED_EXPRESSIONS,
+        0.75f,
+        true,
+    ) {
+        override fun removeEldestEntry(
+            eldest: MutableMap.MutableEntry<String, EvaluatedAttribute>,
+        ): Boolean = size > MAX_CACHED_EXPRESSIONS
+    }
+
+    /** face 侧 Lua 状态的代号。跑过任何 face 代码就 +1。 */
+    private var faceStateGeneration = 0L
+
+    /** 正在录制的「本次求值读过哪些标签」。非空表示当前处在一次可缓存的求值里。 */
+    private var recordedTagNames: MutableList<String>? = null
+    private var recordedTagValues: MutableList<String?>? = null
+
+    /** `expression -> (代号, 是否引用了 face 全局)`。见 [referencesFaceState]。 */
+    private val faceStateReferences = object : LinkedHashMap<String, Pair<Long, Boolean>>(
+        MAX_CACHED_EXPRESSIONS,
+        0.75f,
+        true,
+    ) {
+        override fun removeEldestEntry(
+            eldest: MutableMap.MutableEntry<String, Pair<Long, Boolean>>,
+        ): Boolean = size > MAX_CACHED_EXPRESSIONS
+    }
+
     fun runSnippet(
         source: String,
         resolver: (String) -> WatchTagResolution = { WatchTagResolution.Unsupported(it) },
@@ -60,6 +129,8 @@ class WatchFaceLuaRuntime private constructor(
         resolveTag = resolver
         compile(spliceTags(source), "=watch_tap").call()
         dynamicFaceNames += declaredFaceNames(source)
+        // 脚本可以改任何全局，缓存里的结果一律不能再信。
+        invalidateEvaluatedAttributes()
         Unit
     }
 
@@ -77,6 +148,7 @@ class WatchFaceLuaRuntime private constructor(
         val previous = lastFrameElapsedSeconds
         lastFrameElapsedSeconds = elapsedSeconds
         callback.call(LuaValue.valueOf(if (previous == null) 0.0 else (elapsedSeconds - previous).coerceAtLeast(0.0)))
+        invalidateEvaluatedAttributes()
         Unit
     }
 
@@ -131,6 +203,10 @@ class WatchFaceLuaRuntime private constructor(
         lastWallSecond = second
         lastWallMinute = minute
         lastWallHour = hour
+        // 回调跑过就说明 face 侧的全局可能变了：属性结果缓存整批作废。没跑回调时
+        // 什么都不做 —— 那种表盘（比如老师那张 M3，只定义颜色函数、没有逐帧回调）
+        // 才能真正吃到跨帧复用。
+        if (callbackRan) invalidateEvaluatedAttributes()
         callbackRan
     }
 
@@ -164,9 +240,21 @@ class WatchFaceLuaRuntime private constructor(
     /** True only when the expression references a global defined by face code. */
     fun referencesFaceState(expression: String): Boolean {
         if (closed || expression.isBlank()) return false
-        return identifiersOutsideTagsAndStrings(expression).any { name ->
+        // 这一步要扫一遍表达式挑出标识符（协程序列 + 字符串切片），而它在**每个动态属性、
+        // 每一帧**都会被调用一次 —— 老师那张 89 图层的表盘一秒就是五千多次。判定结果只取决于
+        // 表达式文本 + 当前 face 全局，所以按代号缓存：代号变了（跑过 face 代码）才重扫。
+        synchronized(faceStateReferences) {
+            faceStateReferences[expression]
+        }?.let { cached ->
+            if (cached.first == faceStateGeneration) return cached.second
+        }
+        val result = identifiersOutsideTagsAndStrings(expression).any { name ->
             name !in BUILTIN_ROOTS && (name in dynamicFaceNames || !globals.rawget(name).isnil())
         }
+        synchronized(faceStateReferences) {
+            faceStateReferences[expression] = faceStateGeneration to result
+        }
+        return result
     }
 
     fun evaluateFaceNumber(
@@ -215,16 +303,111 @@ class WatchFaceLuaRuntime private constructor(
     ): LuaValue? {
         if (expression.isBlank() || expression.length > MAX_EXPRESSION_CHARS) return null
         val splicedExpression = spliceTags(expression)
-        return runLimited {
-            resolveTag = resolver
-            val chunk = synchronized(compiledExpressions) {
-                compiledExpressions[splicedExpression]
-                    ?: compile("return ($splicedExpression)", "=watch_attr").also {
-                        compiledExpressions[splicedExpression] = it
-                    }
+        val cached = synchronized(evaluatedAttributes) { evaluatedAttributes[splicedExpression] }
+        if (cached != null && !cached.impure && isReusable(cached, resolver)) return cached.value
+
+        val names = ArrayList<String>(TAG_RECORD_INITIAL_CAPACITY)
+        val values = ArrayList<String?>(TAG_RECORD_INITIAL_CAPACITY)
+        val first = evaluateRecording(splicedExpression, resolver, names, values)
+        // 已知不纯：算一次就走，什么都不记。
+        if (cached != null && cached.impure) return first
+        if (cached != null) {
+            rememberValue(splicedExpression, first, names, values, impure = false)
+            return first
+        }
+        // **第一次见这个表达式 → 紧接着再算一次探纯度。**
+        //
+        // 缓存的前提是「输入没变 ⇒ 结果不变」。绝大多数属性表达式是纯的（`m_accent('{ucolor}')`
+        // 这种色调映射就是典型），但表盘理论上可以写一个每次调用都自增的函数来驱动动画，
+        // 或者直接读 `os.date()` 这类标签之外的活数据 —— 那种表达式一旦被复用就会卡住。
+        // 同一瞬间连算两次：结果不同就永久标记为不可复用，代价只有加载时多算一次。
+        val probeNames = ArrayList<String>(TAG_RECORD_INITIAL_CAPACITY)
+        val probeValues = ArrayList<String?>(TAG_RECORD_INITIAL_CAPACITY)
+        val second = evaluateRecording(splicedExpression, resolver, probeNames, probeValues)
+        rememberValue(
+            splicedExpression = splicedExpression,
+            value = second,
+            tagNames = probeNames,
+            tagValues = probeValues,
+            impure = identityKey(first) != identityKey(second),
+        )
+        return second
+    }
+
+    /** 求值一次，并把这次读到的标签记进 [tagNames] / [tagValues]。 */
+    private fun evaluateRecording(
+        splicedExpression: String,
+        resolver: (String) -> WatchTagResolution,
+        tagNames: MutableList<String>,
+        tagValues: MutableList<String?>,
+    ): LuaValue? {
+        // 嵌套求值目前不存在（Lua 侧没有回调进这里的桥），但还是按栈式保存/恢复，
+        // 免得以后加桥时静悄悄把外层的录制清掉。
+        val outerNames = recordedTagNames
+        val outerValues = recordedTagValues
+        recordedTagNames = tagNames
+        recordedTagValues = tagValues
+        return try {
+            runLimited {
+                resolveTag = resolver
+                val chunk = synchronized(compiledExpressions) {
+                    compiledExpressions[splicedExpression]
+                        ?: compile("return ($splicedExpression)", "=watch_attr").also {
+                            compiledExpressions[splicedExpression] = it
+                        }
+                }
+                chunk.call()
+            }.getOrNull()?.takeUnless(LuaValue::isnil)
+        } finally {
+            recordedTagNames = outerNames
+            recordedTagValues = outerValues
+        }
+    }
+
+    /** 命中判定见 [EvaluatedAttribute] 的注释。四个条件全满足才算能复用。 */
+    private fun isReusable(
+        cached: EvaluatedAttribute,
+        resolver: (String) -> WatchTagResolution,
+    ): Boolean {
+        if (cached.generation != faceStateGeneration) return false
+        if (cached.externalDataVersion != externalDataVersion()) return false
+        if (System.nanoTime() - cached.evaluatedAtNanos > MAX_CACHE_AGE_NANOS) return false
+        for (index in cached.tagNames.indices) {
+            if (resolver(cached.tagNames[index]).expressionValue() != cached.tagValues[index]) {
+                return false
             }
-            chunk.call()
-        }.getOrNull()?.takeUnless(LuaValue::isnil)
+        }
+        return true
+    }
+
+    private fun rememberValue(
+        splicedExpression: String,
+        value: LuaValue?,
+        tagNames: List<String>,
+        tagValues: List<String?>,
+        impure: Boolean,
+    ) {
+        // 表 / 函数一律按不纯记：它们是可变对象，缓存等于把同一个实例反复交出去，face 代码
+        // 改一下就污染后续所有帧。**但条目仍然要写进去** —— 那是「探过了」的记录，
+        // 否则每一帧都会为它重探一次（两次求值），比不缓存还慢。
+        val cacheable = value == null || value.isboolean() || value.isnumber() || value.isstring()
+        val entry = EvaluatedAttribute(
+            value = if (cacheable) value else null,
+            generation = faceStateGeneration,
+            externalDataVersion = externalDataVersion(),
+            evaluatedAtNanos = System.nanoTime(),
+            tagNames = tagNames.toTypedArray(),
+            tagValues = tagValues.toTypedArray(),
+            impure = impure || !cacheable,
+        )
+        synchronized(evaluatedAttributes) { evaluatedAttributes[splicedExpression] = entry }
+    }
+
+    /** 纯度探测用的比较键。表 / 函数走 LuaJ 的身份字符串，天然每次都不同 → 判为不纯。 */
+    private fun identityKey(value: LuaValue?): String? = value?.tojstring()
+
+    private fun invalidateEvaluatedAttributes() {
+        faceStateGeneration++
     }
 
     private fun compile(source: String, chunkName: String): LuaValue =
@@ -262,7 +445,14 @@ class WatchFaceLuaRuntime private constructor(
             // __index(table, name); the key is the last argument in both forms.
             val name = args.arg(args.narg())
             val normalized = name.checkjstring().trim().lowercase(Locale.ROOT)
-            return resolveTag(normalized).expressionValue()?.toLuaInput() ?: NIL
+            val resolved = resolveTag(normalized).expressionValue()
+            // 记下「这次求值依赖了哪个标签、当时是什么值」，供结果缓存的命中判定。
+            // 同一个标签被读多次就记多次：多比几个字符串远比进一次 Lua 便宜。
+            recordedTagNames?.let { names ->
+                names += normalized
+                recordedTagValues?.add(resolved)
+            }
+            return resolved?.toLuaInput() ?: NIL
         }
     }
 
@@ -549,6 +739,18 @@ class WatchFaceLuaRuntime private constructor(
         private const val INSTRUCTION_HOOK_INTERVAL = 1_000
         private const val MAX_INSTRUCTIONS_PER_ENTRY = 2_000_000
         private const val MAX_CACHED_EXPRESSIONS = 256
+
+        /**
+         * 属性结果缓存的兜底寿命：200ms。
+         *
+         * 标签变化、face 状态变化、副作用型表达式都有各自的精确判据（见 [EvaluatedAttribute]），
+         * 这一条只管「万一还有别的隐藏输入」，把最坏陈旧时间钉在 200ms —— 颜色/文字上看不出来，
+         * 而 60fps 下真求值仍然从「每秒每表达式 60 次」降到 5 次。
+         */
+        private const val MAX_CACHE_AGE_NANOS = 200_000_000L
+
+        /** 单个表达式读到的标签数量通常是 1~2 个，列表初值给小的。 */
+        private const val TAG_RECORD_INITIAL_CAPACITY = 4
         private const val MAX_STRING_RESULT_BYTES = 1024 * 1024
         private const val MAX_STRING_ALLOCATION_BYTES_PER_ENTRY = 8 * 1024 * 1024
         private const val MAX_TABLE_CONCAT_ITEMS = 65_536L
@@ -571,9 +773,16 @@ class WatchFaceLuaRuntime private constructor(
             "until", "while", "math", "string", "table", "os", "tonumber", "tostring", "type",
         )
 
+        /**
+         * @param readExternalSlot clox External Data API 的槽位读取器（B5）。缺省返回空槽位 ——
+         *   离线测试与不需要外部数据的调用点都不必接线。传进来的值**只当字符串**用：
+         *   见 [WatchExternalData] 里那段安全基线。
+         */
         fun create(
             initialScript: String?,
             resolveTag: (String) -> WatchTagResolution = { WatchTagResolution.Unsupported(it) },
+            readExternalSlot: (Int) -> WatchExternalDataSlot = { WatchExternalData.EMPTY_SLOT },
+            externalDataVersion: () -> Long = { 0L },
         ): WatchFaceLuaRuntime {
             val script = initialScript.orEmpty()
             require(script.toByteArray(Charsets.UTF_8).size <= MAX_SCRIPT_BYTES) {
@@ -653,9 +862,19 @@ class WatchFaceLuaRuntime private constructor(
                 stringAllocationBudget = stringAllocationBudget,
                 internalDebugTable = internalDebugTable,
                 declaredFaceNames = declaredFaceNames(script),
+                externalDataVersion = externalDataVersion,
             )
             runtime.resolveTag = resolveTag
             globals.set("wm_tag", runtime.LiveTagLookup())
+            // WF.thirdParty.slots：clox External Data API 的读取面。
+            //
+            // 注意**必须装在白名单裁剪之后** —— 上面那一轮 `set(current, LuaValue.NIL)`
+            // 会把不在名单里的全局统统抹掉，先装就白装了。
+            //
+            // 用惰性查表（`__index` 函数）而不是「广播来了推一次」：推送要跨线程碰
+            // Lua 状态机，而表盘每帧都在读，惰性查的代价只是一次内存数组索引，
+            // 却天然不会读到半个写入。
+            globals.set("WF", externalDataTable(readExternalSlot))
             globals.setmetatable(
                 LuaValue.tableOf(
                     arrayOf(
@@ -670,6 +889,53 @@ class WatchFaceLuaRuntime private constructor(
                 }.getOrThrow()
             }
             return runtime
+        }
+
+        /**
+         * `WF = { thirdParty = { slots = <惰性 1..10> } }`。
+         *
+         * 槽位表本身是空表 + `__index`：没写过的槽位也返回 `{data="",key="",timestamp=0}`
+         * 而不是 nil，表盘脚本才能无条件 `slots[n].data`（上游文档保证的就是这个）。
+         * 越界索引返回 nil —— 那是脚本写错了，给个空槽位反而会把错误藏起来。
+         */
+        private fun externalDataTable(
+            readExternalSlot: (Int) -> WatchExternalDataSlot,
+        ): LuaValue {
+            val slots = LuaValue.tableOf()
+            slots.setmetatable(
+                LuaValue.tableOf(
+                    arrayOf(
+                        LuaValue.valueOf("__index"),
+                        object : VarArgFunction() {
+                            override fun invoke(args: Varargs): Varargs {
+                                // __index(table, key)：键是最后一个参数。
+                                val index = args.arg(args.narg()).toint()
+                                if (
+                                    index < WatchExternalData.MIN_SLOT ||
+                                    index > WatchExternalData.MAX_SLOT
+                                ) {
+                                    return NIL
+                                }
+                                val slot = readExternalSlot(index)
+                                return LuaValue.tableOf(
+                                    arrayOf(
+                                        LuaValue.valueOf("data"), LuaValue.valueOf(slot.data),
+                                        LuaValue.valueOf("key"), LuaValue.valueOf(slot.key),
+                                        LuaValue.valueOf("timestamp"),
+                                        LuaValue.valueOf(slot.timestampMs.toDouble()),
+                                    ),
+                                )
+                            }
+                        },
+                    ),
+                ),
+            )
+            val thirdParty = LuaValue.tableOf(
+                arrayOf(LuaValue.valueOf("slots"), slots),
+            )
+            return LuaValue.tableOf(
+                arrayOf(LuaValue.valueOf("thirdParty"), thirdParty),
+            )
         }
 
         private fun declaredFaceNames(source: String): Set<String> =

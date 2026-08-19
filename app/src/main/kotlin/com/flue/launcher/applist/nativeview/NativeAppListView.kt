@@ -13,6 +13,7 @@ import android.view.MotionEvent
 import android.view.View
 import android.view.HapticFeedbackConstants
 import android.view.ViewConfiguration
+import android.view.animation.AnimationUtils
 import android.view.animation.PathInterpolator
 import android.os.Build
 import androidx.recyclerview.widget.RecyclerView
@@ -20,6 +21,7 @@ import androidx.core.view.ViewCompat
 import com.flue.launcher.applist.model.AppListCommand
 import com.flue.launcher.applist.model.AppItemKey
 import kotlin.math.abs
+import kotlin.math.cos
 import kotlin.math.hypot
 import kotlin.math.min
 import kotlin.math.roundToInt
@@ -104,6 +106,10 @@ class NativeAppListView @JvmOverloads constructor(
     private val childVisualScrollListener = object : OnScrollListener() {
         override fun onScrolled(recyclerView: RecyclerView, dx: Int, dy: Int) {
             applyAttachedChildVisuals()
+            // 指示器画在宿主自己的 display list 上，不属于任何子 View，所以子项被
+            // offsetChildrenVertical 挪走并不会让它重绘。滚动时必须显式失效一次，
+            // 否则滑块只在「顺手被别的原因重绘」的那几帧才跟上，看起来是一顿一顿的。
+            if (currentConfig.value.scrollIndicatorEnabled) invalidate()
         }
 
         override fun onScrollStateChanged(recyclerView: RecyclerView, newState: Int) {
@@ -210,11 +216,56 @@ class NativeAppListView @JvmOverloads constructor(
     private val bottomFadePaint = Paint(Paint.ANTI_ALIAS_FLAG)
     private var topFadeHeight = 0f
     private var bottomFadeHeight = 0f
+    /**
+     * 指示器的两支笔触。圆屏画弧、方屏画线段都靠同一支 STROKE + ROUND cap 的笔：
+     * 圆头描边天然就是「细长胶囊」，不必再走一遍 RoundRect / Path，也避免了圆屏那侧
+     * 为了画胶囊状的弧去构造 Path（每帧一次分配，手表上是实打实的成本）。
+     */
+    private val scrollIndicatorTrackPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE
+        strokeCap = Paint.Cap.ROUND
+    }
+    private val scrollIndicatorThumbPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE
+        strokeCap = Paint.Cap.ROUND
+    }
+    /** 圆屏 drawArc 的外接矩形。复用一个实例：dispatchDraw 里不能每帧 new RectF。 */
+    private val scrollIndicatorArcBounds = android.graphics.RectF()
+
+    /**
+     * 淡入淡出的状态。时序逻辑在 [nativeScrollIndicatorAdvanceAlpha]（纯函数、可单测），
+     * 这里只存「当前到哪了」和两个时间戳。
+     *
+     * 基准 alpha 单独记一份，是因为笔触颜色里已经烘进了轨道/滑块各自的固定透明度
+     * （0.16 / 0.72）。淡出时要按比例缩这两个值，直接写 paint.alpha 会把基准冲掉，
+     * 下一帧就没有还原的依据了。
+     */
+    private var scrollIndicatorAlpha = 0f
+    private var scrollIndicatorTrackBaseAlpha = 0
+    private var scrollIndicatorThumbBaseAlpha = 0
+    private var scrollIndicatorActivityUptimeMs = 0L
+    private var scrollIndicatorFrameUptimeMs = 0L
     private var pullOffsetPx = 0f
     private val springEdgeEffects = FlueSpringEdgeEffectFactory(
         owner = this,
         onOffsetChanged = ::setPullOffset,
+        onEdgeReached = { performEdgeHaptic() },
     )
+
+    /**
+     * 触顶 / 触底的一次反馈。
+     *
+     * 30+ 用 `GESTURE_THRESHOLD_ACTIVATE` —— 它就是为「越过一个边界」设计的短促一下；
+     * 老系统退回 `CLOCK_TICK`（本文件的滚动与长按也在用同一族，手感一致）。
+     */
+    private fun performEdgeHaptic() {
+        val constant = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            HapticFeedbackConstants.GESTURE_THRESHOLD_ACTIVATE
+        } else {
+            HapticFeedbackConstants.CLOCK_TICK
+        }
+        performHapticFeedback(constant)
+    }
 
     /** Returns true when the command owner accepted the request. */
     var onCommand: ((AppListCommand) -> Boolean)? = null
@@ -301,10 +352,29 @@ class NativeAppListView @JvmOverloads constructor(
     override fun onSizeChanged(width: Int, height: Int, oldWidth: Int, oldHeight: Int) {
         super.onSizeChanged(width, height, oldWidth, oldHeight)
         updateEdgeFadeShaders()
+        // 笔触本身只跟密度和主题色有关，挂在这里是为了拿到「一定在首帧绘制之前」的时机：
+        // applyConfig 只在检测到差异时才刷笔触，而首次 applyConfig 的 previous 是默认
+        // 配置，颜色恰好相同时就一次都不刷，指示器会带着零宽描边画出空白。
+        updateScrollIndicatorPaints()
+        // 进入列表（以及尺寸变化）时闪一下指示器再淡出：watchOS 就是这个行为，
+        // 而且它保住了「刚进来就知道自己在整列的哪里」这一份信息 —— 纯粹等用户滚
+        // 才出现的话，进场那一眼是没有位置感的。
+        markScrollIndicatorActivity()
     }
 
     override fun dispatchDraw(canvas: Canvas) {
         super.dispatchDraw(canvas)
+        drawEdgeFadeMask(canvas)
+        // 指示器画在遮罩**之后**：遮罩是贴着上下边缘的渐变，而条的两端正好伸进那两条带子，
+        // 顺序反过来会被渐变洗掉一截，看起来像条被咬了两口。
+        //
+        // 现在的默认接线里遮罩其实是 Compose 侧的兄弟层（见 LauncherActivity 的
+        // `drawEdgeFadeMaskInNativeView = false`），所以这个顺序只在遮罩被切回视图内时
+        // 才真正生效；仍然按正确顺序摆着，免得哪天切回来又要重新踩一遍。
+        drawScrollIndicator(canvas)
+    }
+
+    private fun drawEdgeFadeMask(canvas: Canvas) {
         if (!currentConfig.value.drawEdgeFadeMask) return
         // Keep the mask in the RecyclerView display list even while the scene
         // is inactive. The parent layer owns transition alpha/scale; toggling
@@ -319,6 +389,128 @@ class NativeAppListView @JvmOverloads constructor(
                 height.toFloat(),
                 bottomFadePaint,
             )
+        }
+    }
+
+    /**
+     * 屏幕右侧的滑动进度指示器。
+     *
+     * ## 为什么滚动量取自 `computeVerticalScroll*` 而不是子 View 的位置
+     *
+     * 五种布局的行都带着鱼眼缩放、入场位移、圆屏收边位移，变换后的边界不是布局值；从那里
+     * 反推进度就是「缩放 → 边界变 → 进度变 → 重画 → 缩放」的帧率级回路（和
+     * `ChordScale.kt` 铁律 1 同源的坑）。五个 LayoutManager 都把这三个量重写成了精确的
+     * 布局空间值（星环 / 心流继承网格基类那份），所以这条路对**所有** presentation
+     * 一视同仁 —— 这里没有 `when (presentation)`，新增布局样式不需要改这里。
+     *
+     * ## 滚动时淡入、停下淡出
+     *
+     * 对齐 watchOS 那条指示器的行为（老师要求「和 Apple Watch 一样」）。时序在
+     * [nativeScrollIndicatorAdvanceAlpha] 里，是纯函数所以能单测；这里只负责把算出来的
+     * 不透明度乘到两支笔触的基准 alpha 上。完全透明时直接 return，省掉一次 drawArc/drawLine。
+     *
+     * 内容不足一屏时本来就不画（见 [nativeScrollIndicatorState]），不会出现一条永远满格的杠。
+     */
+    private fun drawScrollIndicator(canvas: Canvas) {
+        val config = currentConfig.value
+        if (!config.scrollIndicatorEnabled) {
+            // 开关关掉时把淡出状态一起清零，否则重新打开会接着上次的半透明往下淡。
+            scrollIndicatorAlpha = 0f
+            return
+        }
+        val state = nativeScrollIndicatorState(
+            scrollOffsetPx = computeVerticalScrollOffset(),
+            scrollRangePx = computeVerticalScrollRange(),
+            viewportHeightPx = computeVerticalScrollExtent(),
+        )
+        if (!state.visible) {
+            scrollIndicatorAlpha = 0f
+            return
+        }
+        if (scrollIndicatorThumbPaint.strokeWidth <= 0f) return
+        val fade = advanceScrollIndicatorAlpha()
+        if (fade <= 0f) return
+        scrollIndicatorTrackPaint.alpha = (scrollIndicatorTrackBaseAlpha * fade).roundToInt()
+        scrollIndicatorThumbPaint.alpha = (scrollIndicatorThumbBaseAlpha * fade).roundToInt()
+        val density = resources.displayMetrics.density
+        val thicknessPx = NATIVE_SCROLL_INDICATOR_THICKNESS_DP * density
+        val edgeMarginPx = NATIVE_SCROLL_INDICATOR_EDGE_MARGIN_DP * density
+        when (config.deviceShape) {
+            NativeDeviceShape.ROUND -> {
+                val radius = nativeScrollIndicatorArcRadiusPx(
+                    viewportWidthPx = width.toFloat(),
+                    viewportHeightPx = height.toFloat(),
+                    edgeMarginPx = edgeMarginPx,
+                    thicknessPx = thicknessPx,
+                )
+                if (radius <= 0f) return
+                val centerX = width / 2f
+                val centerY = height / 2f
+                scrollIndicatorArcBounds.set(
+                    centerX - radius,
+                    centerY - radius,
+                    centerX + radius,
+                    centerY + radius,
+                )
+                val track = nativeScrollIndicatorArcTrack(NATIVE_SCROLL_INDICATOR_ARC_SWEEP_DEG)
+                val thumb = nativeScrollIndicatorThumbSpan(
+                    track = track,
+                    visibleFraction = state.visibleFraction,
+                    progress = state.progress,
+                    minimumExtent = NATIVE_SCROLL_INDICATOR_MIN_THUMB_DEG,
+                )
+                canvas.drawArc(
+                    scrollIndicatorArcBounds,
+                    track.start,
+                    track.extent,
+                    false,
+                    scrollIndicatorTrackPaint,
+                )
+                canvas.drawArc(
+                    scrollIndicatorArcBounds,
+                    thumb.start,
+                    thumb.extent,
+                    false,
+                    scrollIndicatorThumbPaint,
+                )
+            }
+
+            NativeDeviceShape.RECTANGULAR -> {
+                val centerX = nativeScrollIndicatorBarCenterXPx(
+                    viewportWidthPx = width.toFloat(),
+                    edgeMarginPx = edgeMarginPx,
+                    thicknessPx = thicknessPx,
+                )
+                if (centerX <= 0f) return
+                val track = nativeScrollIndicatorBarTrack(
+                    viewportHeightPx = height.toFloat(),
+                    verticalInsetFraction = NATIVE_SCROLL_INDICATOR_BAR_INSET_FRACTION,
+                )
+                if (track.extent <= 0f) return
+                val thumb = nativeScrollIndicatorThumbSpan(
+                    track = track,
+                    visibleFraction = state.visibleFraction,
+                    progress = state.progress,
+                    minimumExtent = NATIVE_SCROLL_INDICATOR_MIN_THUMB_DP * density,
+                )
+                // 圆头描边的两端各鼓出半个线宽，所以线段端点要往内收半宽，否则胶囊的
+                // 圆头会超出轨道范围（滚到底时表现为滑块比轨道长一点）。
+                val capInset = thicknessPx / 2f
+                canvas.drawLine(
+                    centerX,
+                    track.start + capInset,
+                    centerX,
+                    track.end - capInset,
+                    scrollIndicatorTrackPaint,
+                )
+                canvas.drawLine(
+                    centerX,
+                    thumb.start + capInset,
+                    centerX,
+                    thumb.end - capInset,
+                    scrollIndicatorThumbPaint,
+                )
+            }
         }
     }
 
@@ -856,6 +1048,7 @@ class NativeAppListView @JvmOverloads constructor(
         val edgeFadeChanged = hasDifferentNativeEdgeFade(previous, next.value)
         val contentOverlayEffectChanged =
             hasDifferentNativeContentOverlayEffect(previous, next.value)
+        val scrollIndicatorChanged = hasDifferentNativeScrollIndicator(previous, next.value)
         val motionProfileChanged = previous.motionProfile != next.value.motionProfile
         val resetInitialScroll =
             previous.initialResetToken != next.value.initialResetToken
@@ -945,6 +1138,7 @@ class NativeAppListView @JvmOverloads constructor(
             dragOverlayView?.applyConfig(next)
         }
         if (edgeFadeChanged) updateEdgeFadeShaders()
+        if (scrollIndicatorChanged) updateScrollIndicatorPaints()
         if (contentOverlayEffectChanged) applyContentOverlayBlur()
         if (geometryChanged) updateViewportPadding(height)
         (layoutManager as? NativeSpatialAppListLayoutManager)?.reapplyChildVisuals()
@@ -1135,8 +1329,8 @@ class NativeAppListView @JvmOverloads constructor(
             val adapterPosition = holder.bindingAdapterPosition
             if (adapterPosition == RecyclerView.NO_POSITION) continue
             slots[adapterPosition] = NativeDragPreviewSlot(
-                centerX = child.iconCenterXInParentWithoutPreviewOrFlow(),
-                centerY = child.iconCenterYInParentWithoutPreviewOrFlow(),
+                centerX = child.iconCenterXInParentForHitTest(),
+                centerY = child.iconCenterYInParentForHitTest(),
             )
         }
 
@@ -1149,8 +1343,8 @@ class NativeAppListView @JvmOverloads constructor(
             val originalPosition = originalPositions[key] ?: continue
             val previewPosition = previewPositions[key] ?: continue
             val origin = slots[originalPosition] ?: NativeDragPreviewSlot(
-                row.iconCenterXInParentWithoutPreviewOrFlow(),
-                row.iconCenterYInParentWithoutPreviewOrFlow(),
+                row.iconCenterXInParentForHitTest(),
+                row.iconCenterYInParentForHitTest(),
             )
             val destination = slots[previewPosition] ?: fallbackDragPreviewSlot(
                 origin = origin,
@@ -1190,8 +1384,8 @@ class NativeAppListView @JvmOverloads constructor(
             return
         }
         val origin = NativeDragPreviewSlot(
-            row.iconCenterXInParentWithoutPreviewOrFlow(),
-            row.iconCenterYInParentWithoutPreviewOrFlow(),
+            row.iconCenterXInParentForHitTest(),
+            row.iconCenterYInParentForHitTest(),
         )
         var destination: NativeDragPreviewSlot? = null
         for (index in 0 until childCount) {
@@ -1200,8 +1394,8 @@ class NativeAppListView @JvmOverloads constructor(
                 NativeAppListAdapter.AppItemViewHolder ?: continue
             if (otherHolder.bindingAdapterPosition == previewPosition) {
                 destination = NativeDragPreviewSlot(
-                    other.iconCenterXInParentWithoutPreviewOrFlow(),
-                    other.iconCenterYInParentWithoutPreviewOrFlow(),
+                    other.iconCenterXInParentForHitTest(),
+                    other.iconCenterYInParentForHitTest(),
                 )
                 break
             }
@@ -1225,6 +1419,12 @@ class NativeAppListView @JvmOverloads constructor(
             NativeAppListPresentation.LINEAR -> currentConfig.value.rowHeightPx.toFloat()
             NativeAppListPresentation.HONEYCOMB ->
                 currentConfig.value.honeycombCellSizePx.takeIf { it > 0f }
+                    ?: currentConfig.value.iconSizePx.toFloat()
+            NativeAppListPresentation.FLOW ->
+                currentConfig.value.flowCellSizePx.takeIf { it > 0f }
+                    ?: currentConfig.value.iconSizePx.toFloat()
+            NativeAppListPresentation.RING ->
+                currentConfig.value.ringCellSizePx.takeIf { it > 0f }
                     ?: currentConfig.value.iconSizePx.toFloat()
             NativeAppListPresentation.DENSE_GRID ->
                 currentConfig.value.denseGridMinimumItemHeightPx
@@ -1410,8 +1610,8 @@ class NativeAppListView @JvmOverloads constructor(
                 val position = holder.bindingAdapterPosition
                 if (position == RecyclerView.NO_POSITION) continue
                 val distance = hypot(
-                    x - row.iconCenterXInParentWithoutPreviewOrFlow(),
-                    y - row.iconCenterYInParentWithoutPreviewOrFlow(),
+                    x - row.iconCenterXInParentForHitTest(),
+                    y - row.iconCenterYInParentForHitTest(),
                 )
                 if (distance < bestDistance) {
                     bestDistance = distance
@@ -1449,8 +1649,8 @@ class NativeAppListView @JvmOverloads constructor(
                     ) ?: holder.boundKeyOrNull() ?: continue
                 if (key == draggedSourceKey) continue
                 val distance = hypot(
-                    probeX - child.iconCenterXInParentWithoutPreviewOrFlow(),
-                    probeY - child.iconCenterYInParentWithoutPreviewOrFlow(),
+                    probeX - child.iconCenterXInParentForHitTest(),
+                    probeY - child.iconCenterYInParentForHitTest(),
                 )
                 if (distance < bestDistance) {
                     bestDistance = distance
@@ -1957,11 +2157,21 @@ class NativeAppListView @JvmOverloads constructor(
         val centerPivotY = child.height / 2f
         if (child.pivotX != centerPivotX) child.pivotX = centerPivotX
         if (child.pivotY != centerPivotY) child.pivotY = centerPivotY
+        // 圆屏列表的「曲线」：整行再乘一次弦宽缩放，行两端于是沿内切圆收进去。
+        // 乘而不是取代鱼眼缩放 —— 两者管的是不同的事（鱼眼是焦点强调，弦宽是圆屏裁切），
+        // 谁替换谁都会让另一项在圆屏上凭空失效。方屏时 nativeRoundChordScale 恒返回 1f。
+        val chordScale = nativeRoundChordScale(
+            childCenterY = baseCenterY,
+            viewportWidthPx = width.toFloat(),
+            viewportHeightPx = height.toFloat(),
+            deviceShape = currentConfig.value.deviceShape,
+        )
+        val childScale = visual.scale * chordScale
         if (rowView != null) {
-            rowView.setVisualScale(visual.scale)
+            rowView.setVisualScale(childScale)
         } else {
-            if (child.scaleX != visual.scale) child.scaleX = visual.scale
-            if (child.scaleY != visual.scale) child.scaleY = visual.scale
+            if (child.scaleX != childScale) child.scaleX = childScale
+            if (child.scaleY != childScale) child.scaleY = childScale
             if (child.translationY != visual.translationY) {
                 child.translationY = visual.translationY
             }
@@ -2104,6 +2314,103 @@ class NativeAppListView @JvmOverloads constructor(
             )
         } else null
         invalidate()
+    }
+
+    /**
+     * 指示器两支笔的颜色与线宽。
+     *
+     * 颜色取 [NativeAppListPalette.labelColorArgb]（应用名的颜色）而不是另立一项配色：
+     * 指示器和文字都是「浮在内容之上的前景」，主题一换必须同时换。深色主题下标签是白的、
+     * 浅色主题下是黑的，指示器跟着走就永远和背景对得上，不需要再判一次 [NativeAppListTheme]。
+     */
+    private fun updateScrollIndicatorPaints() {
+        val color = currentConfig.value.palette.labelColorArgb.toInt()
+        val thicknessPx = NATIVE_SCROLL_INDICATOR_THICKNESS_DP * resources.displayMetrics.density
+        scrollIndicatorTrackPaint.strokeWidth = thicknessPx
+        scrollIndicatorTrackPaint.color =
+            color.withAlphaFraction(NATIVE_SCROLL_INDICATOR_TRACK_ALPHA)
+        scrollIndicatorThumbPaint.strokeWidth = thicknessPx
+        scrollIndicatorThumbPaint.color =
+            color.withAlphaFraction(NATIVE_SCROLL_INDICATOR_THUMB_ALPHA)
+        // 颜色刚写进去，此刻的 alpha 就是「全不透明状态下该有的那一档」，记作基准。
+        scrollIndicatorTrackBaseAlpha = scrollIndicatorTrackPaint.alpha
+        scrollIndicatorThumbBaseAlpha = scrollIndicatorThumbPaint.alpha
+        invalidate()
+    }
+
+    /**
+     * 记一次「刚刚滚过」。
+     *
+     * [onScrolled] 是 RecyclerView 专门留给子类的钩子（默认空实现），比挂
+     * `OnScrollListener` 干净：监听器是一份可被外部清掉的列表，而这条指示器不该依赖
+     * 谁有没有替我们注册。
+     */
+    override fun onScrolled(deltaX: Int, deltaY: Int) {
+        super.onScrolled(deltaX, deltaY)
+        if (deltaX != 0 || deltaY != 0) markScrollIndicatorActivity()
+    }
+
+    private fun markScrollIndicatorActivity() {
+        scrollIndicatorActivityUptimeMs = AnimationUtils.currentAnimationTimeMillis()
+        scheduleScrollIndicatorFrame()
+    }
+
+    /**
+     * 只失效指示器那一条，不是整个列表。
+     *
+     * 整屏 invalidate 会让每一行都重走一遍鱼眼/模糊的绘制，而淡出期间内容根本没变 ——
+     * 那是一次纯浪费的全列表重绘，手表上看得出来。
+     */
+    private fun scheduleScrollIndicatorFrame() {
+        if (!isAttachedToWindow || width <= 0 || height <= 0) return
+        val density = resources.displayMetrics.density
+        // 右侧那条的横向占用：边距 + 线宽，再宽松留一个线宽给圆头和抗锯齿。
+        val stripWidth = (
+            NATIVE_SCROLL_INDICATOR_EDGE_MARGIN_DP + NATIVE_SCROLL_INDICATOR_THICKNESS_DP * 2f
+            ) * density
+        // 圆屏的弧向左鼓进来最多一个半径的 (1 - cos(sweep/2))，比直条宽；一并算进去
+        // 免得弧的中段被裁在脏区之外，表现为淡出时弧“从中间缺一块”。
+        val arcBulge = if (currentConfig.value.deviceShape == NativeDeviceShape.ROUND) {
+            nativeScrollIndicatorArcRadiusPx(
+                viewportWidthPx = width.toFloat(),
+                viewportHeightPx = height.toFloat(),
+                edgeMarginPx = NATIVE_SCROLL_INDICATOR_EDGE_MARGIN_DP * density,
+                thicknessPx = NATIVE_SCROLL_INDICATOR_THICKNESS_DP * density,
+            ) * (1f - cos(Math.toRadians((NATIVE_SCROLL_INDICATOR_ARC_SWEEP_DEG / 2f).toDouble())).toFloat())
+        } else {
+            0f
+        }
+        val left = (width - stripWidth - arcBulge).toInt().coerceAtLeast(0)
+        postInvalidateOnAnimation(left, 0, width, height)
+    }
+
+    /**
+     * 推进一帧淡入淡出，返回这一帧该用的不透明度。
+     *
+     * 时间用 [AnimationUtils.currentAnimationTimeMillis]：它在同一帧内是同一个值，
+     * 拿 `SystemClock` 会让同一帧里的多次读数产生微小差异。
+     */
+    private fun advanceScrollIndicatorAlpha(): Float {
+        val now = AnimationUtils.currentAnimationTimeMillis()
+        // 首帧没有上一帧可比，按 0 推进（只取目标方向，不跳变）。
+        val elapsedMs = if (scrollIndicatorFrameUptimeMs == 0L) {
+            0L
+        } else {
+            now - scrollIndicatorFrameUptimeMs
+        }
+        scrollIndicatorFrameUptimeMs = now
+        val target = nativeScrollIndicatorTargetAlpha(
+            scrolling = scrollState != SCROLL_STATE_IDLE,
+            millisSinceScrollActivity = now - scrollIndicatorActivityUptimeMs,
+        )
+        scrollIndicatorAlpha = nativeScrollIndicatorAdvanceAlpha(
+            currentAlpha = scrollIndicatorAlpha,
+            targetAlpha = target,
+            elapsedMillis = elapsedMs,
+        )
+        // 还没到位就自己约下一帧。到位即停，不留一条永远在重绘的零透明杠。
+        if (scrollIndicatorAlpha != target) scheduleScrollIndicatorFrame()
+        return scrollIndicatorAlpha
     }
 }
 

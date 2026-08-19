@@ -7,6 +7,90 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class WatchFaceLuaRuntimeTest {
+
+    /**
+     * 属性结果缓存。老师报「这个表盘用起来很卡」的那张 M3 Expressive 表盘，89 个图层里有 87 个
+     * `color` 写成脚本里的色调映射函数调用 —— 60fps 下每秒五千多次 Lua 调用，全在算同一批颜色。
+     *
+     * 这几条钉住「什么时候可以复用、什么时候必须重算」，写错了不会崩，只会让颜色卡住或者白算。
+     */
+    @Test
+    fun pureAttributeResultsAreReusedWhileTheirTagsHoldStill() {
+        val script = """
+            var_calls = 0
+            function m_tone(u)
+              var_calls = var_calls + 1
+              return u .. '!'
+            end
+        """.trimIndent()
+        WatchFaceLuaRuntime.create(script).use { runtime ->
+            var color = "112233"
+            val resolver: (String) -> WatchTagResolution = { tag ->
+                if (tag == "ucolor") {
+                    WatchTagResolution.Resolved(color)
+                } else {
+                    WatchTagResolution.Unsupported(tag)
+                }
+            }
+            // 第一次会连算两次（探纯度），所以计数是 2。
+            assertEquals("112233!", runtime.evaluateFaceText("m_tone('{ucolor}')", resolver))
+            assertEquals(2.0, runtime.callCount(), 0.0)
+
+            // 同一表达式、标签值没变 → 直接复用，一次 Lua 都不进。
+            repeat(20) {
+                assertEquals("112233!", runtime.evaluateFaceText("m_tone('{ucolor}')", resolver))
+            }
+            assertEquals(2.0, runtime.callCount(), 0.0)
+
+            // 标签值变了 → 必须重算，而且拿到的是新值。
+            color = "445566"
+            assertEquals("445566!", runtime.evaluateFaceText("m_tone('{ucolor}')", resolver))
+            assertEquals(3.0, runtime.callCount(), 0.0)
+        }
+    }
+
+    @Test
+    fun impureAttributesAreNeverReused() {
+        // 靠副作用驱动的表达式：每次调用都自增。这种如果被缓存就会卡住，
+        // 所以第一次见到时的「连算两次」探测必须把它标成不可复用。
+        val script = """
+            var_step = 0
+            function next_step()
+              var_step = var_step + 1
+              return var_step
+            end
+        """.trimIndent()
+        WatchFaceLuaRuntime.create(script).use { runtime ->
+            val resolver: (String) -> WatchTagResolution = { WatchTagResolution.Unsupported(it) }
+            val first = runtime.evaluateFaceNumber("next_step()", resolver)
+            val second = runtime.evaluateFaceNumber("next_step()", resolver)
+            val third = runtime.evaluateFaceNumber("next_step()", resolver)
+            assertTrue("$first -> $second -> $third", second!! > first!! && third!! > second)
+        }
+    }
+
+    @Test
+    fun faceStateChangesInvalidateReusedResults() {
+        // tap 脚本 / 逐帧回调跑过之后，缓存里的结果一律不能再信 —— 它们可能读了被改掉的全局。
+        val script = """
+            var_base = 1
+            function shade() return var_base * 10 end
+        """.trimIndent()
+        WatchFaceLuaRuntime.create(script).use { runtime ->
+            val resolver: (String) -> WatchTagResolution = { WatchTagResolution.Unsupported(it) }
+            assertEquals(10.0, runtime.evaluateFaceNumber("shade()", resolver)!!, 0.0)
+            assertTrue(runtime.runSnippet("var_base = 5").isSuccess)
+            assertEquals(50.0, runtime.evaluateFaceNumber("shade()", resolver)!!, 0.0)
+        }
+    }
+
+    /**
+     * 直接读全局，**不走表达式求值** —— `evaluateNumber("var_calls")` 自己也会被结果缓存
+     * 兜住（它是个没有标签依赖的纯表达式），拿回来的会是上一次的计数。
+     */
+    private fun WatchFaceLuaRuntime.callCount(): Double =
+        globalRenderedValue("var_calls")?.toDouble() ?: Double.NaN
+
     @Test
     fun stringFormatHonoursFloatingPointPrecisionAndLiteralSuffixes() {
         WatchFaceLuaRuntime.create(null).use { runtime ->
@@ -240,6 +324,25 @@ class WatchFaceLuaRuntimeTest {
 
             assertTrue(runtime.runSnippet("var_label = 'Battery {bl}'", resolver).isSuccess)
             assertEquals("Battery 80", runtime.evaluateText("var_label", resolver))
+        }
+    }
+
+    @Test
+    fun externalDataSlotsAreVisibleAndInvalidateCachedLuaReads() {
+        var version = 0L
+        var current = WatchExternalDataSlot(data = "first", key = "initial", timestampMs = 10L)
+        val resolver: (String) -> WatchTagResolution = { WatchTagResolution.Unsupported(it) }
+        WatchFaceLuaRuntime.create(
+            initialScript = null,
+            readExternalSlot = { if (it == 1) current else WatchExternalData.EMPTY_SLOT },
+            externalDataVersion = { version },
+        ).use { runtime ->
+            assertEquals("first", runtime.evaluateFaceText("WF.thirdParty.slots[1].data", resolver))
+            current = WatchExternalDataSlot(data = "second", key = "updated", timestampMs = 20L)
+            version++
+            assertEquals("second", runtime.evaluateFaceText("WF.thirdParty.slots[1].data", resolver))
+            assertEquals("updated", runtime.evaluateFaceText("WF.thirdParty.slots[1].key", resolver))
+            assertEquals("", runtime.evaluateFaceText("WF.thirdParty.slots[11].data", resolver))
         }
     }
 

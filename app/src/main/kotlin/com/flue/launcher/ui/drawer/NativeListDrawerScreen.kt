@@ -20,21 +20,29 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.draw.drawWithCache
 import androidx.compose.ui.graphics.toArgb
-import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import com.flue.launcher.applist.background.AppListBackgroundPainting
+import com.flue.launcher.applist.background.appListBackground
 import com.flue.launcher.applist.integration.rememberNativeAppListProjection
 import com.flue.launcher.applist.model.AppItemKey
 import com.flue.launcher.applist.model.AppListCommand
 import com.flue.launcher.applist.nativeview.NativeAppListConfig
+import com.flue.launcher.applist.nativeview.NativeFlowGeometry
+import com.flue.launcher.layout.FLUE_LAYOUT_CRESCENT_BULGE_MAX
 import com.flue.launcher.applist.nativeview.NativeAppListHost
 import com.flue.launcher.applist.nativeview.NativeAppListPalette
 import com.flue.launcher.applist.nativeview.NativeAppListIconShape
 import com.flue.launcher.applist.nativeview.NativeAppListPresentation
+import com.flue.launcher.util.FlowCrescentDirection
 import com.flue.launcher.applist.nativeview.HoneycombNativeAppListLayoutStrategy
 import com.flue.launcher.applist.nativeview.DenseGridNativeAppListLayoutStrategy
+import com.flue.launcher.applist.nativeview.FlowNativeAppListLayoutStrategy
+import com.flue.launcher.applist.nativeview.RingNativeAppListLayoutStrategy
 import com.flue.launcher.applist.nativeview.LinearNativeAppListLayoutStrategy
+import com.flue.launcher.applist.nativeview.nativeRingCellSizePx
+import com.flue.launcher.applist.nativeview.nativeRingIconSizePx
 import com.flue.launcher.applist.nativeview.NativeAppListRowBorder
 import com.flue.launcher.applist.nativeview.NativeAppListTheme
 import com.flue.launcher.applist.nativeview.NativeDeviceShape
@@ -42,6 +50,7 @@ import com.flue.launcher.applist.nativeview.NativeFisheyePreset
 import com.flue.launcher.applist.nativeview.quantizeNativeBlurRadiusPx
 import com.flue.launcher.applist.nativeview.selectNativeBlurTier
 import com.flue.launcher.data.model.AppInfo
+import com.flue.launcher.ui.common.isFlueScreenRound
 import com.flue.launcher.ui.theme.UiStyle
 import kotlin.math.roundToInt
 import kotlin.math.max
@@ -120,7 +129,6 @@ fun NativeListDrawerScreen(
     /** 仅 MD3 密集蜂窝使用；默认关闭顶部鱼眼。 */
     honeycombTopFisheyeEnabled: Boolean = false,
     edgeSpacingCompressionEnabled: Boolean = true,
-    twoToneIconsEnabled: Boolean = false,
     iconShadowEnabled: Boolean = true,
     themeColor: Color = Color(0xFF7BE8FF),
     uiStyle: UiStyle = UiStyle.APPLE_WATCH,
@@ -145,13 +153,34 @@ fun NativeListDrawerScreen(
      * 老师要的是「黑底不动、只有图标缩放、深色背景走透明度渐变」。
      */
     backgroundHandledByPlate: Boolean = false,
+    /**
+     * 自定义背景（纯色 / 自定义色 / 跟随表盘 / 自定义图片）的完整描述。
+     *
+     * 由调用方组装（`LauncherActivity`），因为外层那块不缩放的背板要画得**一模一样** ——
+     * 两处各算一份必然出现「缩放中途看到两种背景的边界」。`null` = 沿用 [palette] 的纯色，
+     * 与这个功能加进来之前逐位相同。
+     */
+    backgroundPainting: AppListBackgroundPainting? = null,
     folderOpen: Boolean = false,
     folderOverlayProgress: Float = if (folderOpen) 1f else 0f,
     useWatchFaceColors: Boolean = false,
     rowBorderEnabled: Boolean = false,
+    /**
+     * 网格布局圆图标底下那块底板要不要画。见 [NativeListDrawerConfigRequest.gridIconPlateEnabled]。
+     */
+    gridIconPlateEnabled: Boolean = true,
     allowFolderCreation: Boolean = true,
+    /**
+     * 屏幕右侧的滑动进度指示器。四种（以及以后新增的）列表样式共用一条，
+     * 因为它读的是 RecyclerView 的滚动量，跟布局怎么排无关。
+     */
+    scrollIndicatorEnabled: Boolean = true,
     presentation: NativeAppListPresentation = NativeAppListPresentation.LINEAR,
     honeycombNarrowColumns: Int = 4,
+    /** 心流月牙鼓出量，占内容宽度的百分比（0 = 不鼓，心流退化成规则网格）。 */
+    flowCrescentBulgePercent: Int = 0,
+    /** 心流月牙朝右（true）还是朝左。 */
+    flowCrescentToRight: Boolean = true,
     onAppClick: (AppInfo, Offset) -> Unit,
     onLongClick: (AppInfo) -> Unit = {},
     onReorder: (AppListCommand.Move) -> Boolean = { false },
@@ -163,7 +192,7 @@ fun NativeListDrawerScreen(
     onScrollToTop: () -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
-    val projection = rememberNativeAppListProjection(apps, twoToneIconsEnabled)
+    val projection = rememberNativeAppListProjection(apps)
     var actionAppKey by remember { mutableStateOf<String?>(null) }
     val actionApp = actionAppKey?.let { key -> projection.appsByKey[AppItemKey(key)] }
     // 长按菜单的模糊进度由菜单自己的 alpha 反馈，而不是挂在「actionApp 是否为
@@ -182,7 +211,11 @@ fun NativeListDrawerScreen(
         if (actionAppKey != null && actionApp == null) actionAppKey = null
     }
     val localDensity = LocalDensity.current
-    val isRoundDevice = LocalConfiguration.current.isScreenRound
+    // 屏形只认 isFlueScreenRound()：部分方屏手表的系统会错误上报圆屏（反之亦然），
+    // 用户可以在设置里手动覆盖。以前这里直接读 LocalConfiguration.isScreenRound，
+    // 于是「显示适配」里那个形状覆盖对应用列表完全无效 —— 列表的圆屏收边和右侧指示器
+    // 该画弧还是画直线，全都要跟着这一个真相来源走。
+    val isRoundDevice = isFlueScreenRound()
     val density = localDensity.density
     val paletteStyle = if (
         uiStyle == UiStyle.MATERIAL_3 &&
@@ -193,6 +226,18 @@ fun NativeListDrawerScreen(
         uiStyle
     }
     val palette = appListPalette(themeColor, darkMode, paletteStyle, useWatchFaceColors)
+    // 层内底色的不透明度时钟一字不改，只是「画什么」从一个纯色换成可能带底图 + 遮罩的整层。
+    val backgroundLayerAlpha = when {
+        // 背板接管期间层内底色必须为 0：两层同色叠加时缩放的那一层就是「跟着缩的黑底」。
+        backgroundHandledByPlate -> 0f
+        uiStyle == UiStyle.APPLE_WATCH -> 1f
+        else -> entryProgress.coerceIn(0f, 1f)
+    }
+    val backgroundModifier = if (backgroundPainting != null) {
+        Modifier.appListBackground(backgroundPainting, backgroundLayerAlpha)
+    } else {
+        Modifier.background(palette.background.copy(alpha = backgroundLayerAlpha))
+    }
 
     BoxWithConstraints(modifier) {
         val viewportWidthPx = (maxWidth.value * density).roundToInt()
@@ -217,6 +262,8 @@ fun NativeListDrawerScreen(
                 fisheyeRangeRows = fisheyeRangeRows,
                 fisheyeStrengthPercent = fisheyeStrengthPercent,
                 honeycombTopFisheyeEnabled = honeycombTopFisheyeEnabled,
+                flowCrescentBulgePercent = flowCrescentBulgePercent,
+                flowCrescentToRight = flowCrescentToRight,
                 edgeSpacingCompressionEnabled = edgeSpacingCompressionEnabled,
                 topFadeRangeDp = topFadeRangeDp,
                 bottomFadeRangeDp = bottomFadeRangeDp,
@@ -233,7 +280,9 @@ fun NativeListDrawerScreen(
                 rotaryHapticsEnabled = rotaryHapticsEnabled,
                 darkMode = darkMode,
                 rowBorderEnabled = rowBorderEnabled,
+                gridIconPlateEnabled = gridIconPlateEnabled,
                 allowFolderCreation = allowFolderCreation,
+                scrollIndicatorEnabled = scrollIndicatorEnabled,
                 iconShadowEnabled = iconShadowEnabled,
                 entryProgress = entryProgress,
                 rowBackgroundArgb = palette.item.toUnsignedArgbLong(),
@@ -297,21 +346,13 @@ fun NativeListDrawerScreen(
                 layoutStrategy = when (presentation) {
                     NativeAppListPresentation.HONEYCOMB -> HoneycombNativeAppListLayoutStrategy
                     NativeAppListPresentation.DENSE_GRID -> DenseGridNativeAppListLayoutStrategy
+                    NativeAppListPresentation.FLOW -> FlowNativeAppListLayoutStrategy
+                    NativeAppListPresentation.RING -> RingNativeAppListLayoutStrategy
                     NativeAppListPresentation.LINEAR -> LinearNativeAppListLayoutStrategy
                 },
                 modifier = Modifier
                     .fillMaxSize()
-                    .background(
-                        palette.background.copy(
-                            alpha = when {
-                                // 背板接管期间层内底色必须为 0：两层同色叠加时
-                                // 缩放的那一层就是「跟着缩的黑底」。
-                                backgroundHandledByPlate -> 0f
-                                uiStyle == UiStyle.APPLE_WATCH -> 1f
-                                else -> entryProgress.coerceIn(0f, 1f)
-                            },
-                        ),
-                    ),
+                    .then(backgroundModifier),
             )
         }
         actionApp?.let { app ->
@@ -360,6 +401,17 @@ internal data class NativeListDrawerConfigRequest(
     val fisheyeRangeRows: Int,
     val fisheyeStrengthPercent: Int,
     val honeycombTopFisheyeEnabled: Boolean = false,
+    /**
+     * 心流月牙的鼓出量百分比（0 = 关掉月牙，退化成规则网格）。
+     *
+     * 100% = 峰值那几行正好贴住可用区右边界、离中线最远的那几行正好贴住左边界（谁都不越界）；
+     * 到 [FLUE_LAYOUT_CRESCENT_BULGE_MAX]% 为止可以更深，代价是上下两端那几行被推出可视区
+     * 左侧 —— 圆屏上那块本来就在圆外，行也会随滚动走回中段。换算见
+     * [NativeFlowGeometry.MAX_CRESCENT_BULGE_FRACTION]。
+     */
+    val flowCrescentBulgePercent: Int = 0,
+    /** 心流月牙朝右（true）还是朝左。 */
+    val flowCrescentToRight: Boolean = true,
     val edgeSpacingCompressionEnabled: Boolean,
     val topFadeRangeDp: Int,
     val bottomFadeRangeDp: Int,
@@ -386,7 +438,22 @@ internal data class NativeListDrawerConfigRequest(
     val rotaryHapticsEnabled: Boolean,
     val darkMode: Boolean,
     val rowBorderEnabled: Boolean,
+    /**
+     * 网格布局圆图标底下那块底板要不要画。
+     *
+     * 这块底板就是 [NativeAppListPalette.rowBackgroundColorArgb]：`NativeAppListRowView.onDraw`
+     * 只要看到它的 alpha 非 0，就会把**整个格子**（非线性布局下 rowBounds = 0,0,width,height）
+     * 按 `rowBorder.cornerRadiusPx` 填一遍。而网格的格子是「宽高比 0.92 的竖长方形」、图标却是
+     * 内切 `min(w,h) - 2*iconInnerPadding` 的圆 —— 于是圆图标底下永远露出一圈方角底板，
+     * 正是老师说的「图标是圆形但是底下有个矩形遮罩」。
+     *
+     * 以前这里没有开关：网格布局是**无条件**吃 `rowBackgroundArgb` 的（`rowBorderEnabled ||
+     * presentation == DENSE_GRID`），行边框开关只管线性布局，网格没有任何入口能关掉底板。
+     */
+    val gridIconPlateEnabled: Boolean = true,
     val allowFolderCreation: Boolean,
+    /** 见 [NativeAppListConfig.scrollIndicatorEnabled]。默认开。 */
+    val scrollIndicatorEnabled: Boolean = true,
     val iconShadowEnabled: Boolean,
     val entryProgress: Float,
     val rowBackgroundArgb: Long,
@@ -404,14 +471,26 @@ internal fun nativeListDrawerConfig(request: NativeListDrawerConfigRequest): Nat
             request.leftSafeInsetPercent.coerceIn(0, 50) / 100f
         ).roundToInt()
     val honeycombNarrowColumns = request.honeycombNarrowColumns.coerceIn(1, 10)
-    val denseGridBaseColumns = (honeycombNarrowColumns + 1).coerceIn(2, 6)
-    val denseGridColumns = (denseGridBaseColumns / scale).roundToInt().coerceIn(1, 10)
+    // 网格是均匀网格，没有蜂窝那种「窄行 / 宽行」之分，所以列数就是设置里的值，
+    // 不能再 +1。以前沿用了蜂窝的 narrow+1 并把下限钳在 2，于是「网格列数」调到
+    // 1 时实际渲染出 2 列 —— 设置写 1 却给 2，是老师报的那个对不上。
+    //
+    // 也**不能再除以 scale**。除一遍的本意是「图标缩小了就多塞几列」，但那会让
+    // 一个显式的数字设置被另一个设置悄悄改掉：应用列表缩放调到 50% 时
+    // `1 / 0.5 = 2`，「网格列数 1」照样渲染成 2 列 —— 和 narrow+1 那条是同一个
+    // 症状的第二个来源。列数是用户直接指定的，缩放只该改图标大小，不该改列数。
+    val denseGridColumns = honeycombNarrowColumns.coerceIn(1, 10)
     val denseGridHorizontalPaddingPx = 8f * density
     val denseGridItemSpacingPx = 4f * density
     val denseGridMinimumItemPx = 48f * density
     val denseGridMinimumVerticalPaddingPx = 8f * density
     val denseGridIconInnerPaddingPx = (3f * scale).coerceIn(2f, 6f) * density
-    val honeycombIconSizePx = if (request.presentation == NativeAppListPresentation.HONEYCOMB) {
+    val honeycombIconSizePx = if (
+        request.presentation == NativeAppListPresentation.HONEYCOMB ||
+        // 心流的格子尺寸算法与蜂窝逐位相同（按可用宽度除列数），
+        // 只是列数不再是「窄行 / 宽行」两档。
+        request.presentation == NativeAppListPresentation.FLOW
+    ) {
         val viewportWidth = request.viewportWidthPx.coerceAtLeast(1)
         val contentWidth = (viewportWidth - leftSafeInsetPx).toFloat()
             .coerceAtLeast(viewportWidth * 0.55f)
@@ -425,13 +504,28 @@ internal fun nativeListDrawerConfig(request: NativeListDrawerConfigRequest): Nat
     } else {
         0
     }
+    // 星环的尺寸链条与蜂窝 / 心流**反过来**：那两种是先定图标大小、格子跟着图标（×1.02），
+    // 星环是先把可用宽度按列数等分成格子（铺满整屏是它的定义），图标再按比例塞进格子里。
+    // 沿用蜂窝那条「availableWidth / (maxColumns + 0.35)」会在两侧留下一圈永远填不上的
+    // 空白，圆屏上那圈空白正压在弧线最需要图标的地方。
+    val ringCellSizePx = if (request.presentation == NativeAppListPresentation.RING) {
+        nativeRingCellSizePx(
+            viewportWidthPx = request.viewportWidthPx,
+            leftSafeInsetPx = leftSafeInsetPx,
+            columns = honeycombNarrowColumns,
+        )
+    } else {
+        0f
+    }
+    val ringIconSizePx = nativeRingIconSizePx(cellSizePx = ringCellSizePx, scale = scale)
     val scaledIconSizeDp = (request.iconSizeDp * scale).coerceIn(24f, 128f)
     val scaledVerticalPaddingDp = (10f * scale).coerceIn(4f, 24f)
     val scaledHorizontalPaddingDp = (16f * scale).coerceIn(10f, 32f)
     val scaledIconTextGapDp = (14f * scale).coerceIn(8f, 28f)
     val scaledTextSizeSp = (16f * scale).coerceIn(10f, 32f)
     val fontScale = request.fontScale.takeIf { it.isFinite() && it > 0f } ?: 1f
-    val iconSizePx = honeycombIconSizePx.takeIf { it > 0 }
+    val iconSizePx = ringIconSizePx.takeIf { it > 0 }
+        ?: honeycombIconSizePx.takeIf { it > 0 }
         ?: (scaledIconSizeDp * density).roundToInt()
         .coerceAtLeast(1)
     val verticalPaddingPx = (scaledVerticalPaddingDp * density).roundToInt().coerceAtLeast(0)
@@ -441,10 +535,31 @@ internal fun nativeListDrawerConfig(request: NativeListDrawerConfigRequest): Nat
     } else {
         0f
     }
-    val rowHeightPx = if (request.presentation == NativeAppListPresentation.HONEYCOMB) {
-        honeycombCellSizePx.roundToInt()
+    val flowCellSizePx = if (request.presentation == NativeAppListPresentation.FLOW) {
+        iconSizePx * 1.02f
     } else {
-        iconSizePx + verticalPaddingPx * 2
+        0f
+    }
+    // 月牙百分比原样传给几何层，由它换算成像素。
+    //
+    // 以前在这里按「内容宽度 × 0.75 × 百分比」估一个像素值，几何层再夹到真实余量上 ——
+    // 两个上限打架：行宽一大，百分比刚过一半就撞到余量，之后拖到 100% 画面毫无变化
+    // （老师报「月牙弧度只能调到 100%」的另一半原因）。现在百分比的含义单一：
+    // 100% = 峰值正好贴边，150% = 弧再深一半（上下两端那几行推出可视区）。
+    val flowCrescentBulgeFraction = if (request.presentation == NativeAppListPresentation.FLOW) {
+        request.flowCrescentBulgePercent
+            .coerceIn(0, FLUE_LAYOUT_CRESCENT_BULGE_MAX)
+            .toFloat() / 100f
+    } else {
+        0f
+    }
+    val rowHeightPx = when (request.presentation) {
+        NativeAppListPresentation.HONEYCOMB -> honeycombCellSizePx.roundToInt()
+        NativeAppListPresentation.FLOW -> flowCellSizePx.roundToInt()
+        // 星环的「行高」就是格边长（正方格），边缘渐变与鱼眼作用带都按它换算。
+        NativeAppListPresentation.RING -> ringCellSizePx.roundToInt().coerceAtLeast(1)
+        NativeAppListPresentation.DENSE_GRID,
+        NativeAppListPresentation.LINEAR -> iconSizePx + verticalPaddingPx * 2
     }
     val halfViewport = request.viewportHeightPx.coerceAtLeast(1) / 2f
     val edgeBand = (
@@ -493,6 +608,17 @@ internal fun nativeListDrawerConfig(request: NativeListDrawerConfigRequest): Nat
         honeycombNarrowColumns = honeycombNarrowColumns,
         honeycombFisheyeRangeRows = request.fisheyeRangeRows,
         honeycombTopFisheyeEnabled = request.honeycombTopFisheyeEnabled,
+        // 心流沿用同一个「每行列数」设置（密集网格也是这么复用的），等列不加一。
+        flowColumns = honeycombNarrowColumns,
+        flowCellSizePx = flowCellSizePx,
+        flowCrescentBulgeFraction = flowCrescentBulgeFraction,
+        flowCrescentDirection = if (request.flowCrescentToRight) {
+            FlowCrescentDirection.Right
+        } else {
+            FlowCrescentDirection.Left
+        },
+        // 星环也沿用同一个「每行列数」设置（honeycombNarrowColumns），等列不加一。
+        ringCellSizePx = ringCellSizePx,
         denseGridColumns = denseGridColumns,
         denseGridHorizontalPaddingPx = denseGridHorizontalPaddingPx,
         denseGridItemSpacingPx = denseGridItemSpacingPx,
@@ -503,18 +629,34 @@ internal fun nativeListDrawerConfig(request: NativeListDrawerConfigRequest): Nat
         denseGridIconInnerPaddingPx = denseGridIconInnerPaddingPx,
         centerEdgeItems = request.presentation == NativeAppListPresentation.LINEAR,
         allowFolderCreation = request.allowFolderCreation,
+        scrollIndicatorEnabled = request.scrollIndicatorEnabled,
         // 文件夹 / 长按菜单开着时列表不接受起拖。
         dragEnabled = !request.dragBlocked,
         iconShadowEnabled = request.iconShadowEnabled,
         edgeSpacingCompressionEnabled = request.edgeSpacingCompressionEnabled,
-        entryMotionEnabled = !request.appleWatchIconShape,
+        // 入场动画对所有风格都开。
+        //
+        // 这里以前是 `!request.appleWatchIconShape`：Apple 风格（默认风格）下入场动画
+        // 被整个关掉，`nativeStaggeredEntryProgress` 一进来就 return 1f，图标直接就位。
+        // 于是老师看到的是「应用列表压根没有甩尾入场动画，倒是设置页有」—— 设置页走的
+        // 是另一套 Compose 动画，不受这个开关影响。
+        //
+        // 原来关掉的理由应该是旧 Compose 版 Apple 档另有一套入场（appListEntryVisuals
+        // 的 BETA_12_CLASSIC 分支），原生化之后那套没搬过来，这个开关就成了纯粹的缺失。
+        entryMotionEnabled = true,
         entryProgress = request.entryProgress,
         // 0.65：底部行晚约 27% 行程，watchOS 式甩尾但不至于拖沓。
         entryStaggerStrength = if (request.entryStaggerEnabled) 0.65f else 0f,
         palette = NativeAppListPalette(
+            // 关掉底板走的是「把这个颜色的 alpha 归零」，而不是往 NativeAppListConfig 里再塞
+            // 一个布尔量：渲染侧（NativeAppListRowView.onDraw）判断画不画底板的唯一依据本来
+            // 就是这个 alpha，多一个开关就多一个真相来源，两者不同步时会画出半个底板。
             rowBackgroundColorArgb = if (
                 request.rowBorderEnabled ||
-                request.presentation == NativeAppListPresentation.DENSE_GRID
+                (
+                    request.presentation == NativeAppListPresentation.DENSE_GRID &&
+                        request.gridIconPlateEnabled
+                    )
             ) {
                 request.rowBackgroundArgb
             } else {
@@ -574,6 +716,14 @@ internal fun nativeListDrawerConfig(request: NativeListDrawerConfigRequest): Nat
         ),
     )
 }
+
+/**
+ * 心流月牙的鼓出量上限曾经写在这里（占内容宽度的比例，0.40 → 0.75）。
+ *
+ * 现在删掉了：它和几何层的「夹到可用余量」是**两个互相打架的上限**，行一宽就先撞后者，
+ * 于是设置里那条拉杆过半之后毫无变化。百分比现在一路传到 [NativeFlowGeometry]，
+ * 由它按余量的倍数换算（100% = 峰值贴边，上限 150%）。
+ */
 
 private fun AppListCommand.keyOrNull() = when (this) {
     is AppListCommand.Open -> key

@@ -246,6 +246,12 @@ object SettingsHierarchy {
                 steps = 14,
                 unit = "%"
             ),
+            SettingsEntry.Toggle(
+                id = "app_list_scroll_indicator",
+                title = "滑动进度指示器",
+                prefKey = "app_list_scroll_indicator_enabled",
+                subtitle = "屏幕右侧显示滑动进度，圆屏沿边缘走弧线"
+            ),
             SettingsEntry.Slider(
                 id = "app_list_left_safe_inset",
                 title = "应用列表左侧安全区",
@@ -265,11 +271,6 @@ object SettingsHierarchy {
                 id = "low_res_icons",
                 title = "低分辨率图标",
                 prefKey = "low_res_icons"
-            ),
-            SettingsEntry.Toggle(
-                id = "two_tone_icons",
-                title = "双色图标",
-                prefKey = "two_tone_icons_enabled"
             ),
             SettingsEntry.Toggle(
                 id = "icon_shadow",

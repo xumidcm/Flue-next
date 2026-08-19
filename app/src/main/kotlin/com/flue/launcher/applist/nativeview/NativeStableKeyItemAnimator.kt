@@ -74,6 +74,13 @@ internal class NativeStableKeyItemAnimator(
         false
     }
 
+    /**
+     * RecyclerView 每个动画周期只会调这里一次。
+     *
+     * 批动画器还活着时**故意推迟**（复用同一个 ValueAnimator 是老表上的热路径预算），
+     * 靠 `onAnimationEnd` 里再进一次来接上 —— 所以那个监听绝不能在还有 pendingMoves 的
+     * 时候被摘掉，见 [endAnimation] 与 [stopBatchAnimator]。
+     */
     override fun runPendingAnimations() {
         if (pendingMoves.isEmpty() || batchAnimator != null) return
         activeMoves.putAll(pendingMoves)
@@ -122,7 +129,21 @@ internal class NativeStableKeyItemAnimator(
             onMoveFrame()
             dispatchAnimationFinished(item)
         }
-        if (activeMoves.isEmpty() && batchAnimator != null) {
+        // 只有「活跃与待启动都空了」才拆批动画器。
+        //
+        // 这里曾经只看 activeMoves。只要**在 180ms 位移动画还没跑完时又来一次差分提交**
+        // （装/卸应用就是：刷新先发布一次列表，紧随其后的顺序 / 隐藏集变更再发布一次），
+        // 新提交的位移就还躺在 pendingMoves 里，而 animatePersistence 开头对每个 holder 调
+        // 的 endAnimation 恰好把上一批最后一个活跃项摘走 —— activeMoves 空了，批动画器被
+        // stopBatchAnimator 摘掉监听后 cancel，onAnimationEnd 再也不会跑，pendingMoves 里
+        // 那些 holder 就**永远等不到 dispatchAnimationFinished**。
+        //
+        // 后果正是老师报的那只鬼图标：RecyclerView 认为它还在动画，于是既不回收也不重新
+        // 布局，它带着动画**起始**位移停在旧槽位、作为残留子 View 画在新挂上来的图标下面；
+        // 触摸照样能落到它身上（按压覆层会亮），但所有命中测试都按 bindingAdapterPosition
+        // 过滤，NO_POSITION 的它对点击和拖拽完全隐形。
+        // 回归测试：NativeStableKeyItemAnimatorTest。
+        if (activeMoves.isEmpty() && pendingMoves.isEmpty() && batchAnimator != null) {
             stopBatchAnimator()
             activeFrameMoves = emptyArray()
         }
@@ -169,6 +190,22 @@ internal class NativeStableKeyItemAnimator(
             animator.cancel()
         }
         batchAnimator = null
+        // 兜底：摘掉监听之后 onAnimationEnd 不会再跑，谁也不会来接 pendingMoves 了。
+        // 现在的两个调用点都保证此时它是空的（endAnimation 会检查、endAnimations 先冲
+        // 干净），但这一族 bug 的代价是「一只永远点不动的鬼图标」，所以宁可在这里再收
+        // 一次尾：任何以后新增的调用点都不会重新打开这个洞。
+        finishPendingMoves()
+    }
+
+    /** 把待启动的位移直接当作完成上报。少一次位移动画是小事，漏一次上报是鬼图标。 */
+    private fun finishPendingMoves() {
+        if (pendingMoves.isEmpty()) return
+        pendingMoves.keys.toList().forEach { holder ->
+            pendingMoves.remove(holder)?.active = false
+            reset(holder)
+            dispatchAnimationFinished(holder)
+        }
+        onMoveFrame()
     }
 
     private fun reset(holder: RecyclerView.ViewHolder) {

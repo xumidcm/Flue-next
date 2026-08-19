@@ -1055,10 +1055,11 @@ internal fun evaluateWatchExpr(
  * 差别只在老路径是「拼成字面量文本再由词法器读回来」，这里直接建值 —— 少两趟
  * 字符串扫描，结果相同。
  *
- * 未解析 / 不支持的 tag 取 `nil`，与老路径代入 `"nil"` 等价。
+ * 未解析 / 不支持的 tag 取**中性 0**（见 [attributeExpressionValue]）：取 nil 会让
+ * 含它的表达式整条失败、属性落回默认值，一个不认识的变量就能把整块表盘弄花。
  */
 private fun WatchTagResolution.toBareTagValue(): ExpressionValue {
-    val value = expressionValue()?.trim() ?: return ExpressionValue.Nil
+    val value = attributeExpressionValue()?.trim() ?: return ExpressionValue.Nil
     value.toDoubleOrNull()?.takeIf(Double::isFinite)?.let { return ExpressionValue.Numeric(it) }
     if (value.equals("true", true)) return ExpressionValue.Logical(true)
     if (value.equals("false", true)) return ExpressionValue.Logical(false)

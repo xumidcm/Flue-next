@@ -99,6 +99,24 @@ class WatchmakerWatchFaceStageViewPolicyTest {
     }
 
     @Test
+    fun `external data expressions create a face sandbox without a script file`() {
+        assertTrue(
+            watchFaceNeedsLuaRuntime(
+                initialScript = null,
+                layers = listOf(
+                    WatchmakerLayer(
+                        id = "external",
+                        type = "text",
+                        parentId = null,
+                        attributes = mapOf("text" to "WF.thirdParty.slots[1].data"),
+                        children = emptyList(),
+                    ),
+                ),
+            ),
+        )
+    }
+
+    @Test
     fun `rounded buttons and text rings expose rectangular tap bounds`() {
         assertEquals(
             WatchTapBox(-42f, -17f, 42f, 17f),

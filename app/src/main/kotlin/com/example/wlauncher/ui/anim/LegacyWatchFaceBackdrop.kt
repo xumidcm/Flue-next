@@ -339,11 +339,14 @@ internal fun rememberLegacyWatchFaceBackdropFrames(
     visualKey: String,
     capturedFrame: LegacyWatchFaceCapturedFrame?,
     viewportSize: IntSize?,
+    advancedMaterialEnabled: Boolean = true,
 ): LegacyWatchFaceBackdropFrames? {
-    // API 31+ 的 AndroidView / TextureView 改由手势 DOWN 时的真实 PixelCopy
-    // 合成帧驱动硬件扩边，绝不再退回 preview.jpg 或视频首帧。预制三联帧只
-    // 服务 Android 12 以下，保持原来的低成本混合路径。
-    val needsPreparedFrames = Build.VERSION.SDK_INT < Build.VERSION_CODES.S
+    // 高级材质关闭时，Android 12+ 也回落到与 Android 12 以下相同的预制三联帧。
+    // 这样关闭开关不会变成“完全没有模糊”，只是换成低成本的旧实现。
+    val needsPreparedFrames = overlayBlurBackend(
+        sdkInt = Build.VERSION.SDK_INT,
+        advancedMaterialEnabled = advancedMaterialEnabled,
+    ) == OverlayBlurBackend.LEGACY
     if (!needsPreparedFrames) return null
 
     val measuredViewport = viewportSize?.takeIf { it.width > 0 && it.height > 0 }
@@ -665,10 +668,21 @@ private fun createGeneratedWatchFaceCover(
  * Reuses the API 27-30 prebuilt blur for other renderers that need a stable
  * backdrop (for example the opt-in gyro face). The returned bitmap is owned by
  * the caller; [source] remains untouched.
+ *
+ * @param radius 降采样图上的盒模糊半径。默认值是表盘背衬那套实测配方；应用列表背景要
+ *   **可调强度**（老师定的「模糊程度也可以修改」），所以把它开成参数 —— 否则那条滑块在
+ *   Android 12 以下只有开与关两档。
  */
-internal fun createLegacyPrebuiltBlur(source: Bitmap): Bitmap = createStrongBlur(source)
+internal fun createLegacyPrebuiltBlur(
+    source: Bitmap,
+    radius: Int = LEGACY_BACKDROP_BLUR_RADIUS,
+): Bitmap = createStrongBlur(source, radius)
 
-private fun createStrongBlur(source: Bitmap): Bitmap {
+private fun createStrongBlur(
+    source: Bitmap,
+    radius: Int = LEGACY_BACKDROP_BLUR_RADIUS,
+): Bitmap {
+    val effectiveRadius = radius.coerceIn(1, 32)
     val smallWidth = (source.width / LEGACY_BACKDROP_BLUR_DOWNSAMPLE_DIVISOR).coerceAtLeast(28)
     val smallHeight = (source.height / LEGACY_BACKDROP_BLUR_DOWNSAMPLE_DIVISOR).coerceAtLeast(28)
     val small = Bitmap.createScaledBitmap(source, smallWidth, smallHeight, true)
@@ -684,14 +698,14 @@ private fun createStrongBlur(source: Bitmap): Bitmap {
             scratch,
             smallWidth,
             smallHeight,
-            radius = LEGACY_BACKDROP_BLUR_RADIUS,
+            radius = effectiveRadius,
         )
         boxBlurVertical(
             scratch,
             pixels,
             smallWidth,
             smallHeight,
-            radius = LEGACY_BACKDROP_BLUR_RADIUS,
+            radius = effectiveRadius,
         )
     }
     small.setPixels(pixels, 0, smallWidth, 0, 0, smallWidth, smallHeight)

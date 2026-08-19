@@ -105,9 +105,7 @@ fun chordScaleForPosition(
     if (radius <= 0f) return 1f
     // 夹到 r：元素中心滚出圆外时 r²−d² 会变负，直接按最窄处（弦长 0）处理，
     // 再由下面的 coerceIn 兜到 MIN_CHORD_SCALE。
-    val distance = abs(itemCenterY - screenCenterY).coerceAtMost(radius)
-    val chord = 2f * sqrt((radius * radius - distance * distance).coerceAtLeast(0f))
-    return (chord / viewportWidth).coerceIn(MIN_CHORD_SCALE, 1f)
+    return chordScaleForDistance(itemCenterY - screenCenterY, viewportWidth)
 }
 
 /**
@@ -180,8 +178,54 @@ fun chordScaleForItemGeometry(
 ): Float {
     if (viewportWidth <= 0f) return 1f
     val radius = viewportWidth / 2f
-    if (!allowTallItem && itemHeight > radius) return 1f
-    return chordScaleForPosition(itemCenterY, viewportWidth, screenCenterY)
+    if (radius <= 0f) return 1f
+    val positionScale = chordScaleForPosition(itemCenterY, viewportWidth, screenCenterY)
+    val height = itemHeight.coerceAtLeast(0f)
+    if (allowTallItem || height <= radius) return positionScale
+    return tallItemChordScale(positionScale, height, radius)
+}
+
+/**
+ * 高项的弦宽缩放：在「按位置缩」与「不缩」之间**连续**过渡。
+ *
+ * ## 为什么不是一刀切
+ *
+ * 这里原来是 `if (itemHeight > radius) return 1f` —— 一条硬跳变，也是老师报的
+ * 「调大整体缩放后，有些选项没有鱼眼而是平铺、有些正常」的根因：全局缩放放大
+ * density，行的**像素**高度跟着涨，刚好越过半径的行会突然从「跟着弧线缩」变成
+ * 「完全平铺」，而它上下的邻居还在缩，同一页上于是混了两种观感。
+ *
+ * ## 为什么也不是「一律按位置缩」
+ *
+ * 一个 scale 只能代表一个高度上的弦宽。项越高，它横跨的弧段差异越大：按中心算，
+ * 整块滚到远端时会被一起夹到 [MIN_CHORD_SCALE]，而它靠近屏幕中央的那半截本该接近
+ * 全宽 —— 那比不缩放更难看。编辑器里「8 个按钮那一整段」正是这种项。
+ *
+ * ## 取的折中
+ *
+ * 按超出半径的程度把缩放**插值回 1f**：
+ *  * 刚过半径 → 与半径以内的行几乎一致（所以边界处连续，不再有跳变）；
+ *  * 高到两倍半径以上 → 恒 1f，与老护栏的意图完全相同（继续吃圆屏的静态内边距）。
+ *
+ * 三条铁律不破：入参全是布局值，输出只喂 graphicsLayer，且对位置仍然单调。
+ */
+private fun tallItemChordScale(positionScale: Float, itemHeight: Float, radius: Float): Float {
+    val excess = ((itemHeight / radius) - 1f).coerceIn(0f, 1f)
+    return positionScale + (1f - positionScale) * excess
+}
+
+/**
+ * [chordScaleForPosition] 的距离版：调用方已经算好「离圆心多远」时直接用它。
+ *
+ * 抽出来是为了让高项那条分支和常规分支共用同一条弦长公式 —— 两处各写一遍
+ * `2√(r²−d²)`，早晚会漂移成两种缩放曲线。
+ */
+fun chordScaleForDistance(distanceFromCenter: Float, viewportWidth: Float): Float {
+    val radius = viewportWidth / 2f
+    if (radius <= 0f) return 1f
+    val distance = abs(distanceFromCenter).coerceAtMost(radius)
+    val chord = 2f * sqrt((radius * radius - distance * distance).coerceAtLeast(0f))
+    return (chord / viewportWidth).coerceIn(MIN_CHORD_SCALE, 1f)
 }
 
 /**

@@ -59,6 +59,39 @@ class JbWatchLuaExpressionRuntimeTest {
     }
 
     @Test
+    fun evaluatesProvidedDayOfYearExpression() {
+        JbWatchLuaExpressionRuntime.create().use { runtime ->
+            assertEquals(
+                "321",
+                runtime.evaluateText(DAY_OF_YEAR_EXPRESSION) { tag ->
+                    if (tag.equals("ddy", ignoreCase = true)) WatchTagResolution.Resolved("323")
+                    else WatchTagResolution.Unsupported(tag)
+                },
+            )
+        }
+    }
+
+    @Test
+    fun evaluatesProvidedMoonPhaseExpressionWithQuotedTag() {
+        JbWatchLuaExpressionRuntime.create().use { runtime ->
+            assertEquals(
+                " Wax.Gibbous",
+                runtime.evaluateText(MOON_PHASE_EXPRESSION) { tag ->
+                    if (tag.equals("wmp", ignoreCase = true)) WatchTagResolution.Resolved("4")
+                    else WatchTagResolution.Unsupported(tag)
+                },
+            )
+        }
+    }
+
+    @Test
+    fun evaluatesProvidedStepExpressionWithTrailingWhitespace() {
+        JbWatchLuaExpressionRuntime.create().use { runtime ->
+            assertEquals("61", runtime.evaluateText("$STEP_EXPRESSION   ", stepsResolver(1_234)))
+        }
+    }
+
+    @Test
     fun evaluatesNumericAndVisibilityAttributesAndStopsAfterClose() {
         val runtime = JbWatchLuaExpressionRuntime.create()
         val resolver = stepsResolver(2_000)
@@ -92,5 +125,15 @@ class JbWatchLuaExpressionRuntimeTest {
             "({ssc} * 0.72) >= 1000 " +
                 "and string.gsub(string.format(\"%.1fkm\", ({ssc} * 0.72)/1000), \"%.\", \",\") " +
                 "or math.floor({ssc} * 0.72) .. \"m\""
+
+        const val DAY_OF_YEAR_EXPRESSION =
+            "(((((((322-{ddy})<0))) and (((322-{ddy})+322)) or ((322-{ddy})))))"
+
+        const val MOON_PHASE_EXPRESSION =
+            "'{wmp}' == '1' and ' New' or '{wmp}' == '2' and 'Wax.Crescent' " +
+                "or '{wmp}' == '3' and 'First Quarter' or '{wmp}' == '4' and ' Wax.Gibbous' " +
+                "or '{wmp}' == '5' and 'Full' or '{wmp}' == '6' and 'Wan.Gibbous' " +
+                "or '{wmp}' == '7' and 'Third Quarter' or '{wmp}' == '8' and 'Wan.Crescent' " +
+                "or '{wmp}' == '9' and ' Old'"
     }
 }

@@ -157,6 +157,64 @@ class WatchFormatConverterTest {
         assertTrue("unknown-format" in failure.report.unsupportedFeatures)
     }
 
+    /**
+     * WFF 的坐标必须真的换算到 WatchMaker 的中心原点 512 画布，根节点不许留下
+     * 规范外的 width / height。
+     *
+     * 转换器过去逐字照抄 x/y/width/height，再靠往根节点写源尺寸让 Flue 自己的
+     * 渲染器把设计空间改成源画布 —— 那两个属性不在 1.0 §3 的表里，别的渲染器
+     * 读不到，而「左上角原点 → 中心原点」和「左上角 → 中心」这两层偏移一直没做，
+     * 于是整块表盘往右下偏半个屏幕。这条测试盯着这三件事一起对。
+     */
+    @Test
+    fun wffGeometryIsMappedIntoTheCenterOriginCanvasAndTheRootStaysSpecClean() =
+        withTempDir { root ->
+            val source = File(root, "geometry.wff")
+            zip(
+                source,
+                "watchface.xml" to """
+                    <WatchFace name="Geometry" width="256" height="256">
+                      <Image src="hand.png" x="0" y="0" width="128" height="128" color="#FF112233"/>
+                    </WatchFace>
+                """.trimIndent(),
+                "hand.png" to "not-really-a-png",
+            )
+            val output = File(root, "converted.watch")
+
+            val result = WatchFormatConverter().convert(source, output)
+
+            assertTrue("conversion result: $result", result is WatchConversionResult.Success)
+            ZipFile(output).use { archive ->
+                val xml = archive.getInputStream(archive.getEntry("watch.xml"))
+                    .use { it.readBytes().toString(StandardCharsets.UTF_8) }
+                // 256 源画布 → 系数 2。左上角 (0,0) 的 128 方块中心是 (64,64)，
+                // 相对画布中心 (128,128) 是 (-64,-64)，乘 2 得 (-128,-128)。
+                assertTrue(xml, xml.contains("x=\"-128\""))
+                assertTrue(xml, xml.contains("y=\"-128\""))
+                assertTrue(xml, xml.contains("width=\"256\""))
+                assertTrue(xml, xml.contains("height=\"256\""))
+                // path 是 images/ 内的裸名，不带目录段（1.0 §7.1）。
+                assertTrue(xml, xml.contains("path=\"hand.png\""))
+                assertTrue(xml, !xml.contains("path=\"images/"))
+                // 颜色归一成裸 6 位小写，alpha 丢给 opacity。
+                assertTrue(xml, xml.contains("color=\"112233\""))
+                // 根节点只剩规范属性。
+                val rootTag = xml.substringAfter("<Watch").substringBefore('>')
+                assertTrue(rootTag, !rootTag.contains("width="))
+                assertTrue(rootTag, !rootTag.contains("height="))
+            }
+        }
+
+    /** 认不出来的颜色原样保留 —— 那可能是主题引用，猜错比留着更糟。 */
+    @Test
+    fun colorNormalisationOnlyTouchesRealHexLiterals() {
+        assertEquals("112233", wffColorToWatchmakerHex("#FF112233"))
+        assertEquals("112233", wffColorToWatchmakerHex("112233"))
+        assertEquals("112233", wffColorToWatchmakerHex("  #112233 "))
+        assertEquals(null, wffColorToWatchmakerHex("[THEME_COLOR_1]"))
+        assertEquals(null, wffColorToWatchmakerHex("#123"))
+    }
+
     private fun zip(file: File, vararg entries: Pair<String, String>) {
         ZipOutputStream(file.outputStream()).use { output ->
             entries.forEach { (name, content) ->

@@ -56,11 +56,15 @@ internal fun rememberLegacyOverlayBlurBackdrop(
      * 否则通知背后会一直是过期画面。
      */
     visualKey: String,
+    advancedMaterialEnabled: Boolean = true,
 ): ImageBitmap? {
-    // O 以下没有 PixelCopy(Window,...)；S 及以上走 RenderEffect，都不需要这张。
+    // O 以下没有 PixelCopy(Window,...)；Android 12+ 仅在高级材质开启时走 RenderEffect。
     if (
         Build.VERSION.SDK_INT < Build.VERSION_CODES.O ||
-        Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
+        overlayBlurBackend(
+            sdkInt = Build.VERSION.SDK_INT,
+            advancedMaterialEnabled = advancedMaterialEnabled,
+        ) == OverlayBlurBackend.SYSTEM
     ) {
         return null
     }

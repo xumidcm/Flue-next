@@ -71,6 +71,7 @@ import com.flue.launcher.service.screenLockControlMode
 import com.flue.launcher.ui.anim.appListLaunchPlateValues
 import com.flue.launcher.ui.anim.appListLaunchValues
 import com.flue.launcher.ui.anim.appListLayerValues
+import com.flue.launcher.ui.anim.FlueTransitionMotion
 import com.flue.launcher.ui.anim.faceLayerValues
 import com.flue.launcher.ui.anim.returnUsesLaunchOrigin
 import com.flue.launcher.ui.anim.scaleBlurAlpha
@@ -82,6 +83,9 @@ import com.flue.launcher.ui.controlcenter.controlCenterCardPlacement
 import com.flue.launcher.ui.drawer.AppFolderOverlay
 import com.flue.launcher.ui.drawer.NativeListDrawerScreen
 import com.flue.launcher.ui.drawer.NativeAppListEdgeFadeOverlay
+import com.flue.launcher.applist.background.appListBackground
+import com.flue.launcher.applist.background.appListBackgroundSolidColor
+import com.flue.launcher.applist.background.rememberAppListBackgroundPainting
 import com.flue.launcher.applist.nativeview.NativeAppListPresentation
 import com.flue.launcher.ui.drawer.AppListBackend
 import com.flue.launcher.ui.drawer.appListBackend
@@ -89,6 +93,7 @@ import com.flue.launcher.ui.drawer.appListPalette
 import com.flue.launcher.ui.drawer.vibrateHaptic
 import com.flue.launcher.ui.common.flueOverlayMaskShape
 import com.flue.launcher.ui.home.WatchFaceLayer
+import com.flue.launcher.ui.home.WatchFaceLoadingMode
 import com.flue.launcher.ui.home.WatchFaceLoadingScreen
 import com.flue.launcher.ui.home.WatchFaceBottomFadeOverlay
 import com.flue.launcher.ui.home.WatchFaceStatusIndicatorOverlay
@@ -149,6 +154,15 @@ private const val WIDGET_HOST_LOG_TAG = "FlueWidgetHost"
  * 只会互相抢资源、把加载本身拖得更慢。让它们先跑一段。
  */
 private const val SIDE_PAGE_PREWARM_DELAY_MS = 300L
+
+/**
+ * 渲染等待覆层的硬揭开时限。
+ *
+ * 渲染器自己已经有一道保底（`WATCH_RENDER_READY_MAX_HOLD_MS`，4 秒），这里比它宽
+ * 一点当第二道网：就绪信号万一因为某条没想到的路径永远不来（比如表盘还没被布局
+ * 就被切走），也绝不能让用户一直盯着转圈。
+ */
+private const val FACE_RENDER_GATE_MAX_HOLD_MS = 6_000L
 
 internal fun notificationUnderlayBlurProgress(
     notificationReturnState: ScreenState,
@@ -290,6 +304,9 @@ private fun Intent.isLauncherHomeIntent(): Boolean {
 
 @Composable
 fun LauncherScreen(vm: LauncherViewModel) {
+    // 转场动画风格：**独立于界面风格**的一项设置（平移 / 缩放）。
+    val transitionMotion by vm.transitionMotion.collectAsStateWithLifecycle()
+
     val context = LocalContext.current
     val screenState by vm.screenState.collectAsStateWithLifecycle()
     val launcherInteractive by vm.launcherInteractive.collectAsStateWithLifecycle()
@@ -322,11 +339,15 @@ fun LauncherScreen(vm: LauncherViewModel) {
     val appListFisheyeRangeRows by vm.appListFisheyeRangeRows.collectAsStateWithLifecycle()
     val appListFisheyeStrengthPercent by vm.appListFisheyeStrengthPercent.collectAsStateWithLifecycle()
     val appListEdgeSpacingCompressionEnabled by vm.appListEdgeSpacingCompressionEnabled.collectAsStateWithLifecycle()
+    val appListFlowCrescentBulgePercent by vm.appListFlowCrescentBulgePercent.collectAsStateWithLifecycle()
+    val appListFlowCrescentToRight by vm.appListFlowCrescentToRight.collectAsStateWithLifecycle()
     val appListScalePercent by vm.appListScalePercent.collectAsStateWithLifecycle()
     val overlayMaskCornerRadiusDp by vm.overlayMaskCornerRadiusDp.collectAsStateWithLifecycle()
     val appListRowBorderEnabled by vm.appListRowBorderEnabled.collectAsStateWithLifecycle()
+    val appListGridIconPlateEnabled by vm.appListGridIconPlateEnabled.collectAsStateWithLifecycle()
     val appListFoldersEnabled by vm.appListFoldersEnabled.collectAsStateWithLifecycle()
-    val twoToneIconsEnabled by vm.twoToneIconsEnabled.collectAsStateWithLifecycle()
+    val appListScrollIndicatorEnabled by
+        vm.appListScrollIndicatorEnabled.collectAsStateWithLifecycle()
     val iconShadowEnabled by vm.iconShadowEnabled.collectAsStateWithLifecycle()
     val appListReturnShrinkEnabled by vm.appListReturnShrinkEnabled.collectAsStateWithLifecycle()
     val legacyAppListTransitionEnabled by vm.legacyAppListTransitionEnabled.collectAsStateWithLifecycle()
@@ -354,6 +375,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
     val watchfaceGravityBackdropBlurEnabled by
         vm.watchfaceGravityBackdropBlurEnabled.collectAsStateWithLifecycle()
     val doubleTapLockScreenEnabled by vm.doubleTapLockScreenEnabled.collectAsStateWithLifecycle()
+    val faceIgnoresBackKey by vm.faceIgnoresBackKey.collectAsStateWithLifecycle()
     val powerMenuButtonEnabled by vm.powerMenuButtonEnabled.collectAsStateWithLifecycle()
     val uiStyle by vm.uiStyle.collectAsStateWithLifecycle()
     val notificationAccessGranted by vm.notificationAccessGranted.collectAsStateWithLifecycle()
@@ -502,6 +524,10 @@ fun LauncherScreen(vm: LauncherViewModel) {
         uiStyle = uiStyle,
         useWatchFaceColor = useAppListWatchFaceColors
     )
+    val appListBackgroundConfig by vm.appListBackground.collectAsStateWithLifecycle()
+    /** 背景的纯色底。启动遮罩与直启底板都读它，自定义纯色档才不会在转场里闪一下系统黑白。 */
+    val appListSolidBackgroundColor =
+        appListBackgroundSolidColor(appListBackgroundConfig, appListColors.background)
     val watchFaceFadeSeed = if (uiStyle == UiStyle.MATERIAL_3 && appListThemeColor.alpha <= 0.01f) {
         launcherStyle.accentColor
     } else {
@@ -519,7 +545,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
     // translucent black here made light-mode launches flash black and exposed
     // a second colour boundary while the list was shrinking on return.
     val launchBackdropColor = when (launchBackdropSourceState) {
-        ScreenState.Apps -> appListColors.background
+        ScreenState.Apps -> appListSolidBackgroundColor
         else -> launcherStyle.screenBackground
     }.copy(alpha = 1f)
     val layerBlurEnabled =
@@ -932,8 +958,12 @@ fun LauncherScreen(vm: LauncherViewModel) {
         isClosingAppListToFace -> activeMotionProfile.appListEnter
         else -> activeMotionProfile.appListEnter
     }
-    val appListMotionSpec = remember(appListMotionPhase, reduceDynamicEffects) {
-        appListMotionPhase.asFloatAnimationSpec(allowOvershoot = !reduceDynamicEffects)
+    // 越界回弹除了「减弱动态效果」能关，开着「还原老式转场动画」时也一律不给：
+    // 老动画本身是硬切风格（表盘 2.5 倍冲脸），收尾再荡一下与它的性格不符，
+    // 而且老师点名要去掉。这里跟 reduceDynamicEffects 取并集，两者任一成立就不回弹。
+    val appListOvershootAllowed = !reduceDynamicEffects && !legacyAppListTransitionEnabled
+    val appListMotionSpec = remember(appListMotionPhase, appListOvershootAllowed) {
+        appListMotionPhase.asFloatAnimationSpec(allowOvershoot = appListOvershootAllowed)
     }
     // alpha / blur 比位移慢一档，让「表盘先暗下让位、列表再模糊浮现」有先后
     // 而不是所有量一起冲完——三者共用同一条 spec 的观感就是又快又硬。
@@ -1079,13 +1109,32 @@ fun LauncherScreen(vm: LauncherViewModel) {
     // 启动/返回期间遮罩、列表层、底色板、边缘罩共用 launchMotionProgress 这
     // 一个时钟（graphicsLayer 逐帧读，零重组）。p=0 时 provider 精确回到
     // Apps 静止态，外部时钟撤走零跳变。
+    // 文件夹内启动应用时，背后那层应用列表不参与转场（老师指定：「打开文件夹内的
+    // 应用，后面的应用列表不需要一起动，播放动画」）。
+    //
+    // openFolder 在启动与返回的**全程**都不清空（见下面 folderHeldForLaunch 那段的
+    // 注释），所以它非空就等价于「这趟启动是从文件夹里发起的」，不必另记一个标志。
+    val launchStartedInsideFolder = openFolder != null
     val appListLaunchDriven =
-        showLaunchBackdrop && launchSourceState == ScreenState.Apps
-    val appListLaunchValuesProvider = remember(uiStyle, appListReturnShrinkEnabled) {
+        showLaunchBackdrop && launchSourceState == ScreenState.Apps && !launchStartedInsideFolder
+    /**
+     * 喂给列表层求目标值的状态。
+     *
+     * 单独撤走 externallyDriven 是不够的：那只是把共享时钟拿掉，`targetValues` 仍按
+     * 真实的 `screenState`（此刻已是 App）算出「缩小 + 淡出」，于是列表改用自己的
+     * 弹簧照样缩下去 —— 只是不再跟遮罩同步，反而更难看。要让它站住，目标值本身
+     * 就得按静止的 Apps 态算。
+     */
+    val appListMotionState = if (launchStartedInsideFolder && showLaunchBackdrop) {
+        ScreenState.Apps
+    } else {
+        screenState
+    }
+    val appListLaunchValuesProvider = remember(transitionMotion, appListReturnShrinkEnabled) {
         {
             appListLaunchValues(
                 progress = launchMotionProgress.value,
-                uiStyle = uiStyle,
+                motion = transitionMotion,
                 shrinkOnAppReturn = appListReturnShrinkEnabled,
             )
         }
@@ -1096,11 +1145,11 @@ fun LauncherScreen(vm: LauncherViewModel) {
     // 边缘渐隐遮罩的 provider：只跟 alpha 走，不跟 scale / translation 走。
     // 遮罩不参与缩放，它必须始终铺满屏幕顶底边界——否则缩小时遮罩一起收，
     // 顶底露出未覆盖的区域，屏幕外的行内容就会从边缘钻进来。
-    val appListLaunchFadeProvider = remember(uiStyle, appListReturnShrinkEnabled) {
+    val appListLaunchFadeProvider = remember(transitionMotion, appListReturnShrinkEnabled) {
         {
             appListLaunchValues(
                 progress = launchMotionProgress.value,
-                uiStyle = uiStyle,
+                motion = transitionMotion,
                 shrinkOnAppReturn = appListReturnShrinkEnabled,
             ).copy(scale = 1f, translationX = 0f, translationY = 0f)
         }
@@ -1139,6 +1188,22 @@ fun LauncherScreen(vm: LauncherViewModel) {
         val density = LocalDensity.current
         val screenWidthPx = with(density) { maxWidth.toPx() }
         val screenHeightPx = with(density) { maxHeight.toPx() }
+        // 应用列表背景：解析图源 + 解码 + （30 及以下）预烘焙模糊只做一次，两个绘制点
+        // （下面那块不缩放的背板、以及 NativeListDrawerScreen 的层内底色）共用同一份
+        // 描述。分头各算一份必然出现「缩放中途看到两种背景的边界」。
+        val appListBackgroundPainting = rememberAppListBackgroundPainting(
+            config = appListBackgroundConfig,
+            fallbackColor = appListColors.background,
+            darkMode = effectiveDarkMode,
+            viewportWidthPx = screenWidthPx.toInt(),
+            viewportHeightPx = screenHeightPx.toInt(),
+            watchFaceId = selectedWatchFaceId,
+            watchFaceStableKey = selectedWatchFace.stableKey,
+            watchFacePreviewPath = selectedWatchFace.previewFilePath,
+            builtInPhotoPath = builtInPhotoPath,
+            builtInVideoPath = builtInVideoPath,
+            watchFaceRefreshToken = watchFaceRefreshToken,
+        )
         val notificationProgress = notificationGestureProgress.coerceIn(0f, 1f)
         val keepNotificationLayer = notificationProgress > 0.001f || notificationSceneActive || notificationGestureActive
         // 拖动阶段直接写一个同步 FloatState，不再为每个 pointer frame 启动
@@ -1385,13 +1450,13 @@ fun LauncherScreen(vm: LauncherViewModel) {
         ) {
             val start = faceLayerValues(
                 ScreenState.Face,
-                uiStyle,
+                transitionMotion,
                 shrinkOnFaceReturn = faceReturnShrinkEnabled,
                 legacyTransition = legacyAppListTransitionEnabled,
             )
             val end = faceLayerValues(
                 ScreenState.Apps,
-                uiStyle,
+                transitionMotion,
                 shrinkOnFaceReturn = faceReturnShrinkEnabled,
                 legacyTransition = legacyAppListTransitionEnabled,
             )
@@ -1428,14 +1493,14 @@ fun LauncherScreen(vm: LauncherViewModel) {
         ) {
             val start = appListLayerValues(
                 ScreenState.Face,
-                uiStyle,
+                transitionMotion,
                 shrinkOnAppReturn = appListReturnShrinkEnabled,
                 shrinkOnFaceReturn = faceReturnShrinkEnabled,
                 legacyTransition = legacyAppListTransitionEnabled,
             )
             val end = appListLayerValues(
                 ScreenState.Apps,
-                uiStyle,
+                transitionMotion,
                 shrinkOnAppReturn = appListReturnShrinkEnabled,
                 shrinkOnFaceReturn = faceReturnShrinkEnabled,
                 legacyTransition = legacyAppListTransitionEnabled,
@@ -1521,8 +1586,49 @@ fun LauncherScreen(vm: LauncherViewModel) {
                 Runtime.getRuntime().exit(0)
             }
         }
+
+        // ---- 表盘「渲染就绪」门控（加载页什么时候能撤）-------------------------
+        //
+        // watchFaceSelectionReady 只表示「知道该显示哪块表盘」。Watchmaker 的
+        // prepareSource() 一张位图都不解码，素材是绘制期异步来的，所以选中就绪
+        // 之后画面往往还是半成品 —— 老师报的「冷启动加载 UI 直接消失、过一会儿
+        // 表盘才好」就是这段缝，切换表盘同理。
+        //
+        // 键同时含 stableKey 与 refreshToken：切表盘 / 编辑器保存返回的瞬间它天然
+        // 不匹配，加载覆层自动回来，不会闪一下上一块表盘的残帧。
+        val faceRenderReadyKey = "${selectedWatchFace.stableKey}#$watchFaceRefreshToken"
+        var reportedFaceRenderReadyKey by remember { mutableStateOf<String?>(null) }
+        // 只有原生渲染器那两种需要等；内置 Compose 表盘与兜底分支立即算就绪。
+        val faceNeedsRenderGate = selectedWatchFace.isWatchmaker || selectedWatchFace.isJbWatch
+        var faceRenderGateExpired by remember(faceRenderReadyKey) { mutableStateOf(false) }
+        LaunchedEffect(faceRenderReadyKey, faceNeedsRenderGate) {
+            if (!faceNeedsRenderGate) return@LaunchedEffect
+            // 第二道兜底（渲染器自己那道见 WATCH_RENDER_READY_MAX_HOLD_MS）：
+            // 就绪信号万一有 bug，也绝不能让用户一直盯着转圈。
+            delay(FACE_RENDER_GATE_MAX_HOLD_MS)
+            faceRenderGateExpired = true
+        }
+        val faceRenderReady = !faceNeedsRenderGate ||
+            faceRenderGateExpired ||
+            reportedFaceRenderReadyKey == faceRenderReadyKey
+        val markFaceRenderReady: (Int) -> Unit = { reportedFaceRenderReadyKey = faceRenderReadyKey }
+
         LaunchedEffect(backPressRequests) {
             if (backPressRequests > 0L) {
+                // 米兔适配：这台机器把「从左往右滑」直接映射成系统返回键，而那正是
+                // 拉开负一屏的手势 —— 于是负一屏刚划出来就被同一个动作发出的返回给
+                // 关掉了。手势与按键是同一个物理动作，应用层分不开，只能让表盘侧
+                // 忽略这记返回。
+                //
+                // 吞掉的范围刻意收窄到「表盘上」与「负一屏手势正在飞」这两种情形：
+                // 负一屏完全落定之后的返回仍然有效（那是用户真的想退出），不然开了
+                // 这个开关就再也退不出负一屏了。
+                val swallowForMituGesture = faceIgnoresBackKey &&
+                    (screenState == ScreenState.Face ||
+                        overlayGestureTarget == OverlayGestureTarget.Stack)
+                if (swallowForMituGesture) {
+                    return@LaunchedEffect
+                }
                 if (screenState == ScreenState.Notifications) {
                     closeNotificationsToOrigin()
                 } else {
@@ -1676,6 +1782,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
             viewportSize = legacyWatchFaceBounds?.let { bounds ->
                 IntSize(bounds.width(), bounds.height())
             },
+            advancedMaterialEnabled = blurEnabled,
         )
         // API 31+ 不再在转场期间降档行级模糊：settle 帧把 OFF→SYSTEM 的
         // RenderEffect 全量装回（applyConfigToAttachedRows 逐行 reapply）正是
@@ -1807,9 +1914,12 @@ fun LauncherScreen(vm: LauncherViewModel) {
                         // Startup preference hydration used to paint a hard
                         // black window even in light mode.  Keep the same
                         // palette as the layer that is about to be shown.
+                        //
+                        // 自定义背景开着时这块底也要跟着走 —— 不然直启列表会先闪一下
+                        // 系统黑白再换成老师选的背景。
                         .background(
                             if (screenState == ScreenState.Apps) {
-                                appListColors.background
+                                appListSolidBackgroundColor
                             } else {
                                 launcherStyle.screenBackground
                             },
@@ -1928,14 +2038,16 @@ fun LauncherScreen(vm: LauncherViewModel) {
                         // Android 12+ 全部表盘统一使用窗口当前帧。内置 Compose
                         // 表盘的 GraphicsLayer 在部分设备上会录到空层，表现为下拉
                         // 时直接变黑；PixelCopy 同时让内置图片/视频也不再切缩略图。
-                        hardwareCaptureRequired = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S,
+                        hardwareCaptureRequired =
+                            Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && blurEnabled,
+                        advancedMaterialEnabled = blurEnabled,
                     )
                     // API 31+ 由 scaleBlurAlpha / RenderEffect 实时模糊；
                     // API 27-30 的清晰/预制模糊帧混合已由 flueBackdropFill 处理。
                     .scaleBlurAlpha(
                         targetValues = faceLayerValues(
                             faceAnimState,
-                            uiStyle,
+                            transitionMotion,
                             shrinkOnFaceReturn = faceReturnShrinkEnabled,
                             legacyTransition = legacyAppListTransitionEnabled,
                         ),
@@ -2016,6 +2128,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
                                     vm.fallbackToBuiltIn("${descriptor.displayName}: ${rootCause.message ?: rootCause.javaClass.simpleName}")
                                 },
                                 dataProvider = watchmakerDataProvider,
+                                onRenderReady = markFaceRenderReady,
                                 canvasSettings = watchfaceCanvasSettings,
                                 gravityParallaxEnabled = watchfaceGravityParallaxEnabled,
                                 gravityBackdropBlurEnabled = watchfaceGravityBackdropBlurEnabled,
@@ -2048,6 +2161,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
                                     val rootCause = generateSequence(error) { it.cause }.last()
                                     vm.fallbackToBuiltIn("${descriptor.displayName}: ${rootCause.message ?: rootCause.javaClass.simpleName}")
                                 },
+                                onRenderReady = markFaceRenderReady,
                                 textEntryAnimationEnabled = watchFaceTextEntryAnimation,
                                 textExitAnimationEnabled = watchFaceTextExitAnimation,
                                 textExitAnimationActive = overlayBackdropActive,
@@ -2084,6 +2198,24 @@ fun LauncherScreen(vm: LauncherViewModel) {
                         )
                     }
                 }
+                // 渲染等待覆层。刻意是 AnimatedContent 的**兄弟**而不是它的一个分支：
+                // 做成分支的话新表盘根本不会被组合，也就永远不会开始加载素材、
+                // 永远报不了就绪 —— 直接死锁。放在这里，表盘在底下照常加载，
+                // 覆层盖着它，就绪后淡出。
+                //
+                // 放在这个 Box 内还顺带继承同一套 flueBackdropFill / scaleBlurAlpha，
+                // 下拉进应用列表时覆层跟着表盘一起缩放，不会多出一层不动的黑板。
+                androidx.compose.animation.AnimatedVisibility(
+                    visible = watchFaceSelectionReady && !faceRenderReady,
+                    enter = fadeIn(tween(90)),
+                    exit = fadeOut(tween(180)),
+                    modifier = Modifier.fillMaxSize(),
+                ) {
+                    WatchFaceLoadingScreen(
+                        onFallbackToDefault = fallbackToDefaultWatchFaceAndRestart,
+                        mode = WatchFaceLoadingMode.Switching,
+                    )
+                }
             }
 
             Box(
@@ -2119,8 +2251,8 @@ fun LauncherScreen(vm: LauncherViewModel) {
                     .zIndex(if (appListLayerRaised) 2.9f else -0.1f)
                     .scaleBlurAlpha(
                         targetValues = appListLayerValues(
-                            screenState,
-                            uiStyle,
+                            appListMotionState,
+                            transitionMotion,
                             shrinkOnAppReturn = appListReturnShrinkEnabled,
                             shrinkOnFaceReturn = faceReturnShrinkEnabled,
                             legacyTransition = legacyAppListTransitionEnabled,
@@ -2138,7 +2270,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
                         },
                         externallyDriven = appListLaunchDriven || appListGestureDriven,
                     )
-                    .background(appListColors.background),
+                    .appListBackground(appListBackgroundPainting),
             )
 
             Box(
@@ -2147,8 +2279,8 @@ fun LauncherScreen(vm: LauncherViewModel) {
                     .zIndex(if (appListLayerRaised) 3f else 0f)
                     .scaleBlurAlpha(
                         targetValues = appListLayerValues(
-                            screenState,
-                            uiStyle,
+                            appListMotionState,
+                            transitionMotion,
                             shrinkOnAppReturn = appListReturnShrinkEnabled,
                             shrinkOnFaceReturn = faceReturnShrinkEnabled,
                             legacyTransition = legacyAppListTransitionEnabled,
@@ -2173,7 +2305,9 @@ fun LauncherScreen(vm: LauncherViewModel) {
                 when (val backend = activeAppListBackend) {
                     AppListBackend.NATIVE_LINEAR,
                     AppListBackend.NATIVE_HONEYCOMB,
-                    AppListBackend.NATIVE_DENSE_GRID -> NativeListDrawerScreen(
+                    AppListBackend.NATIVE_DENSE_GRID,
+                    AppListBackend.NATIVE_FLOW,
+                    AppListBackend.NATIVE_RING -> NativeListDrawerScreen(
                         apps = apps,
                         blurEnabled = blurEnabled,
                         edgeBlurEnabled = edgeBlurEnabled,
@@ -2191,17 +2325,19 @@ fun LauncherScreen(vm: LauncherViewModel) {
                         // 转场期间那块不缩放的背板已经在铺同色底，层内底色
                         // 让位，避免黑底跟着图标一起缩。
                         backgroundHandledByPlate = appListLayerRaised,
+                        backgroundPainting = appListBackgroundPainting,
                         folderOpen = openFolder != null,
                         folderOverlayProgress = folderOverlayProgress,
                         useWatchFaceColors = useAppListWatchFaceColors,
                         rowBorderEnabled = appListRowBorderEnabled,
+                        gridIconPlateEnabled = appListGridIconPlateEnabled,
                         allowFolderCreation = appListFoldersEnabled,
+                        scrollIndicatorEnabled = appListScrollIndicatorEnabled,
                         fisheyeEnabled = appListFisheyeEnabled,
                         fisheyeRangeRows = appListFisheyeRangeRows,
                         fisheyeStrengthPercent = appListFisheyeStrengthPercent,
                         honeycombTopFisheyeEnabled = materialHoneycombTopFisheyeEnabled,
                         edgeSpacingCompressionEnabled = appListEdgeSpacingCompressionEnabled,
-                        twoToneIconsEnabled = twoToneIconsEnabled,
                         iconShadowEnabled = effectiveIconShadowEnabled,
                         themeColor = appListThemeColor,
                         uiStyle = uiStyle,
@@ -2212,8 +2348,12 @@ fun LauncherScreen(vm: LauncherViewModel) {
                             AppListBackend.NATIVE_LINEAR -> NativeAppListPresentation.LINEAR
                             AppListBackend.NATIVE_HONEYCOMB -> NativeAppListPresentation.HONEYCOMB
                             AppListBackend.NATIVE_DENSE_GRID -> NativeAppListPresentation.DENSE_GRID
+                            AppListBackend.NATIVE_FLOW -> NativeAppListPresentation.FLOW
+                            AppListBackend.NATIVE_RING -> NativeAppListPresentation.RING
                         },
                         honeycombNarrowColumns = honeycombCols,
+                        flowCrescentBulgePercent = appListFlowCrescentBulgePercent,
+                        flowCrescentToRight = appListFlowCrescentToRight,
                         onAppClick = { appInfo, origin ->
                             launchAppFromLauncher(appInfo, origin, ScreenState.Apps)
                         },
@@ -2261,8 +2401,8 @@ fun LauncherScreen(vm: LauncherViewModel) {
                         // 会露出没有渐变覆盖的区域，屏幕外的行内容就会在
                         // 缩小时从顶底钻进来。
                         targetValues = appListLayerValues(
-                            screenState,
-                            uiStyle,
+                            appListMotionState,
+                            transitionMotion,
                             shrinkOnAppReturn = appListReturnShrinkEnabled,
                             shrinkOnFaceReturn = faceReturnShrinkEnabled,
                             legacyTransition = legacyAppListTransitionEnabled,
@@ -2313,8 +2453,9 @@ fun LauncherScreen(vm: LauncherViewModel) {
                     listMode = layoutMode == LayoutMode.List,
                     iconShape = folderIconShape,
                     blurEnabled = blurEnabled,
-                    twoToneIconsEnabled = twoToneIconsEnabled,
                     iconShadowEnabled = effectiveIconShadowEnabled,
+                    // 面板的玻璃高光与 dock / 通知条共用同一项设置。
+                    glassHighlightEnabled = glassHighlightEnabled,
                     onAppClick = { appInfo, origin ->
                         // 不关面板：返回时仍停在文件夹内。
                         launchAppFromLauncher(appInfo, origin, ScreenState.Apps)
@@ -2380,6 +2521,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
                         .flueLegacyBlur(
                             progress = sidePageNotificationBlurProgress,
                             enabled = true,
+                            advancedMaterialEnabled = blurEnabled,
                         )
                         .graphicsLayer {
                             // 纯位移进场：图层自身永远不透明也不缩放。以前
@@ -2401,7 +2543,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
                             renderEffect = if (
                                 shouldRenderLayerBlur(
                                     sdkInt = Build.VERSION.SDK_INT,
-                                    blurEnabled = true,
+                                    blurEnabled = blurEnabled,
                                     alpha = alpha,
                                     radiusPx = radiusPx,
                                 )
@@ -2522,6 +2664,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
                         .flueLegacyBlur(
                             progress = controlCenterNotificationBlurProgress,
                             enabled = true,
+                            advancedMaterialEnabled = blurEnabled,
                         )
                         .graphicsLayer {
                             val offscreen = size.height.coerceAtLeast(screenHeightPx)
@@ -2535,7 +2678,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
                             renderEffect = if (
                                 shouldRenderLayerBlur(
                                     sdkInt = Build.VERSION.SDK_INT,
-                                    blurEnabled = true,
+                                    blurEnabled = blurEnabled,
                                     alpha = alpha,
                                     radiusPx = radiusPx,
                                 )
@@ -2568,6 +2711,18 @@ fun LauncherScreen(vm: LauncherViewModel) {
                         onPowerClick = openPowerDialogWithAccessibility,
                         glassHighlightEnabled = glassHighlightEnabled,
                         overlayMaskCornerRadiusDp = overlayMaskCornerRadiusDp,
+                        // 这一层常驻组合，靠位移移出屏外，所以它自己看不出「又被打开了」。
+                        // 用打开态喂给它，好让滚动在开场那一帧回到顶部。
+                        //
+                        // 这里必须用 controlCenterVisible 而不是 controlCenterTarget：后者跟着
+                        // **离散的** screenState 走，而下拉是手势驱动的 —— screenState 只在松手
+                        // 那一刻才翻成 ControlCenter。于是整段拖动过程里 target 仍是 0、复位不
+                        // 触发，内容早就带着上次退出时的滚动位置露在屏幕上了；等松手再复位，
+                        // 看见的是内容「跳」回顶部。这就是老师报的「再次下拉是从退出位置进入」。
+                        //
+                        // controlCenterVisible 在手势第一帧就成立（updateOverlayGesture 会把
+                        // controlCenterMounted 置真），复位落在内容还基本在屏外的时候，看不见。
+                        contentVisible = controlCenterVisible,
                     )
                 }
             }
@@ -2606,6 +2761,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
                         sideScreenShortcuts.size.toString(),
                         notificationGroups.size.toString(),
                     ).joinToString("|"),
+                    advancedMaterialEnabled = blurEnabled,
                 )
             } else {
                 null

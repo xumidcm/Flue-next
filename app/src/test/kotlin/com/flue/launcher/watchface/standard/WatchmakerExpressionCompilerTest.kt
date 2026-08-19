@@ -136,12 +136,17 @@ class WatchmakerExpressionCompilerTest {
     }
 
     @Test
-    fun 取不到的tag在裸位置是nil在引号内是空串() {
+    fun 取不到的tag在裸位置是中性0在引号内是空串() {
         val scope = WatchExpressionScope.EMPTY
 
-        val bare = compileWatchAttr("{nope} == nil", scope) as WatchAttr.Dynamic
-        assertTrue(evaluateWatchExpr(bare.node, scope, resolver()).isTruthy())
+        // 这里曾断言 `{nope} == nil` 为真 —— 那正是「少认识一个变量就把整块表盘弄花」
+        // 的来源：nil 一进算术或比较，整条表达式求值失败，属性落回默认值
+        // （opacity → 100、x/y → 0）。现在缺值的裸 tag 取中性 0，只影响读它的那一个字段。
+        // 上游 CloX 也是让未知变量落成一个静态值（`""`）让式子算得完，而不是让式子废掉。
+        val bare = compileWatchAttr("{nope} + 1", scope) as WatchAttr.Dynamic
+        assertEquals(1.0, evaluateWatchExpr(bare.node, scope, resolver()).asNumber())
 
+        // 引号内仍然是空串：文本语境不该冒出一个凭空的 0。
         val quoted = compileWatchAttr("'[{nope}]'", scope) as WatchAttr.Dynamic
         assertEquals("[]", evaluateWatchExpr(quoted.node, scope, resolver()).renderText())
     }

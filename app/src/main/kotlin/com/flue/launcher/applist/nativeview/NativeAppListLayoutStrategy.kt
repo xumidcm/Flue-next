@@ -95,3 +95,21 @@ object DenseGridNativeAppListLayoutStrategy : NativeAppListLayoutStrategy {
         configProvider: () -> NativeAppListConfig,
     ): RecyclerView.LayoutManager = NativeDenseGridLayoutManager(configProvider)
 }
+
+object FlowNativeAppListLayoutStrategy : NativeAppListLayoutStrategy {
+    override val semanticKey: Any = "flow"
+
+    override fun createLayoutManager(
+        context: Context,
+        configProvider: () -> NativeAppListConfig,
+    ): RecyclerView.LayoutManager = NativeFlowLayoutManager(configProvider)
+}
+
+object RingNativeAppListLayoutStrategy : NativeAppListLayoutStrategy {
+    override val semanticKey: Any = "ring"
+
+    override fun createLayoutManager(
+        context: Context,
+        configProvider: () -> NativeAppListConfig,
+    ): RecyclerView.LayoutManager = NativeRingLayoutManager(configProvider)
+}

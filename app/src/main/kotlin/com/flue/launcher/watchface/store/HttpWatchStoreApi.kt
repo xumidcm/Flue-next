@@ -59,6 +59,22 @@ class HttpWatchStoreApi(
         return download(url, destination, MAX_PREVIEW_BYTES, expectPreview = true, onProgress = null)
     }
 
+    /**
+     * H2 / H3 / H5 — 头像这类站内图片。
+     *
+     * 地址是**服务端 JSON 里的字符串**，所以先过 [WatchStoreUrlPolicy.siteImageUrlOrNull]：
+     * 解析不出来、或者解析出来落在站外，一律拒绝。跟着远端数据往任意主机发请求，等于让
+     * 服务端指挥客户端出站 —— 这条防线比「少显示一张头像」重要得多。
+     *
+     * 体积与内容类型按预览图那一档收（`expectPreview = true` 会校验响应是图片），头像比
+     * 预览图小得多，这个上限只是兜底。
+     */
+    override fun downloadSiteImage(rawUrl: String?, destination: File): File {
+        val url = WatchStoreUrlPolicy.siteImageUrlOrNull(base, rawUrl)
+            ?: throw WatchStoreProtocolException("图片地址不在市场站点内")
+        return download(url, destination, MAX_PREVIEW_BYTES, expectPreview = true, onProgress = null)
+    }
+
     override fun downloadWatchFace(id: String, destination: File): File {
         val url = WatchStoreUrlPolicy.download(base, id)
         return download(url, destination, MAX_WATCH_BYTES, expectPreview = false, onProgress = null)
@@ -94,6 +110,7 @@ class HttpWatchStoreApi(
         description: String,
         screenType: WatchStoreScreenType,
         categoryId: String,
+        tags: List<String> = emptyList(),
         onProgress: ((sentBytes: Long, totalBytes: Long) -> Unit)? = null,
     ) {
         val safeToken = token.trim()
@@ -113,6 +130,17 @@ class HttpWatchStoreApi(
         require(screenType != WatchStoreScreenType.UNKNOWN) { "屏幕形状无效" }
         val normalizedCategoryId = categoryId.trim().lowercase(Locale.ROOT)
         require(UPLOAD_CATEGORY_ID_PATTERN.matches(normalizedCategoryId)) { "分类无效，请重新选择" }
+        val normalizedTags = tags.asSequence()
+            .map(String::trim)
+            .filter(String::isNotEmpty)
+            .distinct()
+            .take(MAX_UPLOAD_TAGS)
+            .onEach { require(it.length <= MAX_UPLOAD_TAG_LENGTH) { "标签过长" } }
+            .toList()
+        // 按商店规则先在本地查一遍。服务端对创建请求**永远返回 201**，扫描不通过只是
+        // 悄悄转成待审 + 站内通知，所以不在这里拦住的话，作者只会看到「上传成功」。
+        // 两个上传入口（编辑器与商店页）都经这里，查一次两边都覆盖。
+        WatchStoreUploadPreflight.requireCompliant(file)
 
         fun uploadMultipart(url: URI, includeMetadata: Boolean, progress: ((Long, Long) -> Unit)?) {
             val boundary = "FlueWatchStore${UUID.randomUUID().toString().replace("-", "")}"
@@ -122,6 +150,9 @@ class HttpWatchStoreApi(
                     appendFormField(boundary, "description", trimmedDescription)
                     appendFormField(boundary, "screen_type", screenType.apiValue)
                     appendFormField(boundary, "category_id", normalizedCategoryId)
+                    if (normalizedTags.isNotEmpty()) {
+                        appendFormField(boundary, "tags", normalizedTags.joinToString(","))
+                    }
                 }
                 append("--").append(boundary).append("\r\n")
                 append("Content-Disposition: form-data; name=\"file\"; filename=\"upload.watch\"\r\n")
@@ -163,6 +194,58 @@ class HttpWatchStoreApi(
         // creates the authenticated record with metadata.
         uploadMultipart(WatchStoreUrlPolicy.myWatchFacesParse(base), includeMetadata = false, progress = null)
         uploadMultipart(WatchStoreUrlPolicy.myWatchFacesList(base), includeMetadata = true, progress = onProgress)
+    }
+
+    /**
+     * Parses an archive without storing it. The response is deliberately exposed to the UI so
+     * server-extracted metadata can prefill the editable upload form.
+     */
+    fun parseWatchFace(token: String, file: File): WatchStoreUploadParseResult {
+        val safeToken = token.trim()
+        require(safeToken.isNotEmpty() && safeToken.none { it.isWhitespace() || it.isISOControl() }) {
+            "登录令牌无效，请重新登录"
+        }
+        require(file.isFile) { "找不到要解析的 .watch 文件" }
+        val totalFileBytes = file.length()
+        if (totalFileBytes <= 0L) throw WatchStoreProtocolException("要解析的 .watch 文件是空的")
+        if (totalFileBytes > MAX_UPLOAD_BYTES) {
+            throw WatchStorePayloadTooLargeException(MAX_UPLOAD_BYTES)
+        }
+        val boundary = "FlueWatchStoreParse${UUID.randomUUID().toString().replace("-", "")}"
+        val head = buildString {
+            append("--").append(boundary).append("\r\n")
+            append("Content-Disposition: form-data; name=\"file\"; filename=\"upload.watch\"\r\n")
+            append("Content-Type: application/octet-stream\r\n\r\n")
+        }.toByteArray(Charsets.UTF_8)
+        val tail = "\r\n--$boundary--\r\n".toByteArray(Charsets.UTF_8)
+        return post(
+            url = WatchStoreUrlPolicy.myWatchFacesParse(base),
+            contentType = "multipart/form-data; boundary=$boundary",
+            contentLength = head.size.toLong() + totalFileBytes + tail.size.toLong(),
+            headers = mapOf("Authorization" to "Bearer $safeToken"),
+            readTimeoutMs = maxOf(config.readTimeoutMs, UPLOAD_READ_TIMEOUT_MS),
+            writeBody = { output ->
+                output.write(head)
+                file.inputStream().use { input ->
+                    val buffer = ByteArray(32 * 1024)
+                    var sent = 0L
+                    while (true) {
+                        val count = input.read(buffer)
+                        if (count < 0) break
+                        sent += count
+                        if (sent > totalFileBytes) {
+                            throw WatchStoreProtocolException("解析期间 .watch 文件发生了变化")
+                        }
+                        output.write(buffer, 0, count)
+                    }
+                    if (sent != totalFileBytes) {
+                        throw WatchStoreProtocolException("解析期间 .watch 文件发生了变化")
+                    }
+                }
+                output.write(tail)
+            },
+            parse = WatchStoreJsonParser::uploadParse,
+        )
     }
 
     /**
@@ -218,6 +301,8 @@ class HttpWatchStoreApi(
         val archive = replacementFile
         val totalFileBytes = archive?.let { file ->
             require(file.isFile) { "找不到要替换的 .watch 文件" }
+            // 换包也要过同一道预检 —— 否则「改一版再传」正好绕开上传时的检查。
+            WatchStoreUploadPreflight.requireCompliant(file)
             file.length().also { length ->
                 if (length <= 0L) throw WatchStoreProtocolException("要替换的 .watch 文件是空的")
                 if (length > MAX_UPLOAD_BYTES) throw WatchStorePayloadTooLargeException(MAX_UPLOAD_BYTES)
@@ -271,6 +356,396 @@ class HttpWatchStoreApi(
                 output.write(tail)
             },
         ) { }
+    }
+
+    // ── B1：个人中心 ─────────────────────────────────────────────────────────
+
+    fun getAccount(token: String): WatchStoreAccount = requestJsonWithAuth(
+        url = WatchStoreUrlPolicy.myAccount(base),
+        token = requireBearerToken(token),
+        maxBytes = MAX_JSON_BYTES,
+        parser = WatchStoreJsonParser::account,
+    )
+
+    /**
+     * 改资料。只提交非 null 的字段（上游按「任意子集」处理）。
+     *
+     * 用的是 **PATCH**：Android 的 `HttpURLConnection` 由 OkHttp 支撑、允许 PATCH，
+     * 桌面 JDK 的实现不允许 —— 测试里用的是假的连接工厂，所以不受影响。
+     */
+    fun updateProfile(token: String, update: WatchStoreProfileUpdate): WatchStoreAccount {
+        val bearer = requireBearerToken(token)
+        val body = JSONObject().apply {
+            update.description?.let { put("description", it) }
+            update.timezone?.let { put("timezone", it) }
+            update.language?.let { put("language", it) }
+        }.toString().toByteArray(Charsets.UTF_8)
+        return write(
+            method = "PATCH",
+            url = WatchStoreUrlPolicy.myProfile(base),
+            contentType = "application/json; charset=utf-8",
+            contentLength = body.size.toLong(),
+            headers = mapOf("Authorization" to "Bearer $bearer"),
+            writeBody = { output -> output.write(body) },
+            parse = WatchStoreJsonParser::account,
+        )
+    }
+
+    /**
+     * 上传头像。
+     *
+     * 上游按 **magic bytes** 校验类型（不看扩展名）、限 2MB，所以这里只做尺寸预检，
+     * 类型交给服务端 —— 客户端猜类型猜错了反而会拦下合法文件。
+     */
+    fun uploadAvatar(token: String, avatar: File): String? {
+        val bearer = requireBearerToken(token)
+        require(avatar.isFile) { "头像文件不存在" }
+        val length = avatar.length()
+        require(length in 1..MAX_AVATAR_BYTES) { "头像需要小于 2MB" }
+        val boundary = "----FlueAvatar${System.nanoTime().toString(16)}"
+        val header = StringBuilder()
+            .append("--").append(boundary).append("\r\n")
+            .append("Content-Disposition: form-data; name=\"file\"; filename=\"avatar\"\r\n")
+            .append("Content-Type: application/octet-stream\r\n\r\n")
+            .toString()
+            .toByteArray(Charsets.UTF_8)
+        val footer = "\r\n--$boundary--\r\n".toByteArray(Charsets.UTF_8)
+        return post(
+            url = WatchStoreUrlPolicy.myProfileAvatar(base),
+            contentType = "multipart/form-data; boundary=$boundary",
+            contentLength = header.size + length + footer.size,
+            headers = mapOf("Authorization" to "Bearer $bearer"),
+            writeBody = { output ->
+                output.write(header)
+                avatar.inputStream().use { input -> input.copyTo(output, DEFAULT_COPY_BUFFER) }
+                output.write(footer)
+            },
+            parse = WatchStoreJsonParser::avatarUrl,
+        )
+    }
+
+    fun changePassword(token: String, currentPassword: String, newPassword: String) {
+        val bearer = requireBearerToken(token)
+        require(newPassword.length >= MIN_PASSWORD_LENGTH) { "密码至少需要 $MIN_PASSWORD_LENGTH 位" }
+        require(newPassword.length <= MAX_PASSWORD_LENGTH) { "密码过长" }
+        require(newPassword != currentPassword) { "新密码不能与当前密码相同" }
+        val body = JSONObject()
+            .put("currentPassword", currentPassword)
+            .put("newPassword", newPassword)
+            .toString()
+            .toByteArray(Charsets.UTF_8)
+        post(
+            url = WatchStoreUrlPolicy.myPassword(base),
+            contentType = "application/json; charset=utf-8",
+            contentLength = body.size.toLong(),
+            headers = mapOf("Authorization" to "Bearer $bearer"),
+            expectJson = false,
+            writeBody = { output -> output.write(body) },
+            parse = { },
+        )
+    }
+
+    // ── B1：上架状态 ─────────────────────────────────────────────────────────
+
+    fun unlistMyWatchFace(token: String, id: String) =
+        postEmptyWithAuth(WatchStoreUrlPolicy.myWatchFaceUnlist(base, id), token)
+
+    fun republishMyWatchFace(token: String, id: String) =
+        postEmptyWithAuth(WatchStoreUrlPolicy.myWatchFaceRepublish(base, id), token)
+
+    // ── B1：评论 ─────────────────────────────────────────────────────────────
+
+    fun getComments(watchFaceId: String): List<WatchStoreComment> = requestJson(
+        url = WatchStoreUrlPolicy.comments(base, watchFaceId),
+        maxBytes = MAX_JSON_BYTES,
+        parser = WatchStoreJsonParser::comments,
+    )
+
+    fun postComment(
+        token: String,
+        watchFaceId: String,
+        content: String,
+        parentCommentId: String? = null,
+    ): WatchStoreComment {
+        val bearer = requireBearerToken(token)
+        val trimmed = content.trim()
+        require(trimmed.isNotEmpty() && trimmed.length <= MAX_COMMENT_LENGTH) {
+            "评论需要 1-$MAX_COMMENT_LENGTH 个字符"
+        }
+        val body = JSONObject().apply {
+            put("content", trimmed)
+            // 上游只做一级回复，所以这里也只透传一层 parentId，不做嵌套。
+            parentCommentId?.let { put("parentId", WatchStoreUrlPolicy.requireId(it)) }
+        }.toString().toByteArray(Charsets.UTF_8)
+        return post(
+            url = WatchStoreUrlPolicy.comments(base, watchFaceId),
+            contentType = "application/json; charset=utf-8",
+            contentLength = body.size.toLong(),
+            headers = mapOf("Authorization" to "Bearer $bearer"),
+            writeBody = { output -> output.write(body) },
+            parse = WatchStoreJsonParser::comment,
+        )
+    }
+
+    fun editMyComment(token: String, commentId: String, content: String): WatchStoreComment {
+        val bearer = requireBearerToken(token)
+        val trimmed = content.trim()
+        require(trimmed.isNotEmpty() && trimmed.length <= MAX_COMMENT_LENGTH) {
+            "评论需要 1-$MAX_COMMENT_LENGTH 个字符"
+        }
+        val body = JSONObject().put("content", trimmed).toString().toByteArray(Charsets.UTF_8)
+        return put(
+            url = WatchStoreUrlPolicy.myComment(base, commentId),
+            contentType = "application/json; charset=utf-8",
+            contentLength = body.size.toLong(),
+            headers = mapOf("Authorization" to "Bearer $bearer"),
+            writeBody = { output -> output.write(body) },
+            parse = WatchStoreJsonParser::comment,
+        )
+    }
+
+    fun deleteMyComment(token: String, commentId: String) = deleteWithAuth(
+        WatchStoreUrlPolicy.myComment(base, commentId),
+        requireBearerToken(token),
+    )
+
+    // ── B1：喜欢 ─────────────────────────────────────────────────────────────
+
+    /** @return 操作后是否已收藏。 */
+    fun addFavorite(token: String, watchFaceId: String): Boolean = postEmptyWithAuth(
+        url = WatchStoreUrlPolicy.favorite(base, watchFaceId),
+        token = token,
+        parse = WatchStoreJsonParser::favoriteState,
+    )
+
+    fun removeFavorite(token: String, watchFaceId: String) = deleteWithAuth(
+        WatchStoreUrlPolicy.favorite(base, watchFaceId),
+        requireBearerToken(token),
+    )
+
+    fun listMyFavorites(token: String): List<WatchStoreWatchFace> = requestJsonWithAuth(
+        url = WatchStoreUrlPolicy.myFavorites(base),
+        token = requireBearerToken(token),
+        maxBytes = MAX_JSON_BYTES,
+        parser = WatchStoreJsonParser::favorites,
+    )
+
+    fun isFavorited(token: String, watchFaceId: String): Boolean = requestJsonWithAuth(
+        url = WatchStoreUrlPolicy.myFavoriteState(base, watchFaceId),
+        token = requireBearerToken(token),
+        maxBytes = MAX_JSON_BYTES,
+        parser = WatchStoreJsonParser::favoriteState,
+    )
+
+    // ── B1：评分 ─────────────────────────────────────────────────────────────
+
+    fun getRating(watchFaceId: String): WatchStoreRatingSummary = requestJson(
+        url = WatchStoreUrlPolicy.rating(base, watchFaceId),
+        maxBytes = MAX_JSON_BYTES,
+        parser = WatchStoreJsonParser::ratingSummary,
+    )
+
+    fun setRating(token: String, watchFaceId: String, rating: Int): WatchStoreRatingSummary {
+        val bearer = requireBearerToken(token)
+        require(rating in 1..5) { "评分需要在 1-5 之间" }
+        val body = JSONObject().put("rating", rating).toString().toByteArray(Charsets.UTF_8)
+        return post(
+            url = WatchStoreUrlPolicy.rating(base, watchFaceId),
+            contentType = "application/json; charset=utf-8",
+            contentLength = body.size.toLong(),
+            headers = mapOf("Authorization" to "Bearer $bearer"),
+            writeBody = { output -> output.write(body) },
+            parse = WatchStoreJsonParser::ratingSummary,
+        )
+    }
+
+    fun getMyRating(token: String, watchFaceId: String): Int? = requestJsonWithAuth(
+        url = WatchStoreUrlPolicy.myRating(base, watchFaceId),
+        token = requireBearerToken(token),
+        maxBytes = MAX_JSON_BYTES,
+        parser = WatchStoreJsonParser::myRating,
+    )
+
+    // ── B1：通知 ─────────────────────────────────────────────────────────────
+
+    fun listNotifications(token: String, limit: Int = 20): WatchStoreNotificationPage =
+        requestJsonWithAuth(
+            url = WatchStoreUrlPolicy.myNotifications(base, limit),
+            token = requireBearerToken(token),
+            maxBytes = MAX_JSON_BYTES,
+            parser = WatchStoreJsonParser::notifications,
+        )
+
+    fun getUnreadNotificationCount(token: String): Int = requestJsonWithAuth(
+        url = WatchStoreUrlPolicy.myNotificationsUnreadCount(base),
+        token = requireBearerToken(token),
+        maxBytes = MAX_JSON_BYTES,
+        parser = WatchStoreJsonParser::unreadCount,
+    )
+
+    fun markNotificationRead(token: String, notificationId: String) =
+        postEmptyWithAuth(
+            WatchStoreUrlPolicy.myNotificationRead(base, notificationId),
+            token,
+        )
+
+    fun markAllNotificationsRead(token: String) =
+        postEmptyWithAuth(WatchStoreUrlPolicy.myNotificationsReadAll(base), token)
+
+    // ── B1：创作者 ───────────────────────────────────────────────────────────
+
+    fun getTopCreators(limit: Int = 10): List<WatchStoreCreator> = requestJson(
+        url = WatchStoreUrlPolicy.topCreators(base, limit),
+        maxBytes = MAX_JSON_BYTES,
+        parser = WatchStoreJsonParser::creators,
+    )
+
+    fun getCreator(username: String): WatchStoreCreator = requestJson(
+        url = WatchStoreUrlPolicy.creator(base, username),
+        maxBytes = MAX_JSON_BYTES,
+        parser = WatchStoreJsonParser::creator,
+    )
+
+    fun listCreatorWatchFaces(username: String, page: Int = 1, limit: Int = 20): WatchStorePage =
+        requestJson(
+            url = WatchStoreUrlPolicy.creatorWatchFaces(base, username, page, limit),
+            maxBytes = MAX_JSON_BYTES,
+            parser = WatchStoreJsonParser::page,
+        )
+
+    // ── B1：合集 ─────────────────────────────────────────────────────────────
+
+    fun listMyCollections(token: String): List<WatchStoreCollection> = requestJsonWithAuth(
+        url = WatchStoreUrlPolicy.myCollections(base),
+        token = requireBearerToken(token),
+        maxBytes = MAX_JSON_BYTES,
+        parser = WatchStoreJsonParser::collections,
+    )
+
+    fun createCollection(token: String, name: String) {
+        val bearer = requireBearerToken(token)
+        val trimmed = name.trim()
+        require(trimmed.isNotEmpty() && trimmed.length <= MAX_COLLECTION_NAME_LENGTH) {
+            "合集名称需要 1-$MAX_COLLECTION_NAME_LENGTH 个字符"
+        }
+        val body = JSONObject().put("name", trimmed).toString().toByteArray(Charsets.UTF_8)
+        post(
+            url = WatchStoreUrlPolicy.myCollections(base),
+            contentType = "application/json; charset=utf-8",
+            contentLength = body.size.toLong(),
+            headers = mapOf("Authorization" to "Bearer $bearer"),
+            expectJson = false,
+            writeBody = { output -> output.write(body) },
+            parse = { },
+        )
+    }
+
+    fun renameCollection(token: String, collectionId: String, name: String) {
+        val bearer = requireBearerToken(token)
+        val trimmed = name.trim()
+        require(trimmed.isNotEmpty() && trimmed.length <= MAX_COLLECTION_NAME_LENGTH) {
+            "合集名称需要 1-$MAX_COLLECTION_NAME_LENGTH 个字符"
+        }
+        val body = JSONObject().put("name", trimmed).toString().toByteArray(Charsets.UTF_8)
+        write(
+            method = "PATCH",
+            url = WatchStoreUrlPolicy.myCollection(base, collectionId),
+            contentType = "application/json; charset=utf-8",
+            contentLength = body.size.toLong(),
+            headers = mapOf("Authorization" to "Bearer $bearer"),
+            expectJson = false,
+            writeBody = { output -> output.write(body) },
+            parse = { },
+        )
+    }
+
+    fun deleteCollection(token: String, collectionId: String) = deleteWithAuth(
+        WatchStoreUrlPolicy.myCollection(base, collectionId),
+        requireBearerToken(token),
+    )
+
+    fun listCollectionItems(token: String, collectionId: String): List<WatchStoreCollectionItem> =
+        requestJsonWithAuth(
+            url = WatchStoreUrlPolicy.myCollectionItems(base, collectionId),
+            token = requireBearerToken(token),
+            maxBytes = MAX_JSON_BYTES,
+            parser = WatchStoreJsonParser::collectionItems,
+        )
+
+    fun addCollectionItem(token: String, collectionId: String, watchFaceId: String) {
+        val bearer = requireBearerToken(token)
+        val body = JSONObject()
+            .put("watchface_id", WatchStoreUrlPolicy.requireId(watchFaceId))
+            .toString()
+            .toByteArray(Charsets.UTF_8)
+        post(
+            url = WatchStoreUrlPolicy.myCollectionItems(base, collectionId),
+            contentType = "application/json; charset=utf-8",
+            contentLength = body.size.toLong(),
+            headers = mapOf("Authorization" to "Bearer $bearer"),
+            expectJson = false,
+            writeBody = { output -> output.write(body) },
+            parse = { },
+        )
+    }
+
+    fun removeCollectionItem(token: String, collectionId: String, watchFaceId: String) =
+        deleteWithAuth(
+            WatchStoreUrlPolicy.myCollectionItem(base, collectionId, watchFaceId),
+            requireBearerToken(token),
+        )
+
+    // ── B1：举报与功能开关 ───────────────────────────────────────────────────
+
+    fun reportWatchFace(
+        token: String,
+        watchFaceId: String,
+        reason: WatchStoreReportReason,
+        message: String? = null,
+    ) {
+        val bearer = requireBearerToken(token)
+        val body = JSONObject().apply {
+            put("reason", reason.apiValue)
+            message?.trim()?.takeIf(String::isNotEmpty)?.let { put("message", it.take(MAX_REPORT_MESSAGE_LENGTH)) }
+        }.toString().toByteArray(Charsets.UTF_8)
+        post(
+            url = WatchStoreUrlPolicy.report(base, watchFaceId),
+            contentType = "application/json; charset=utf-8",
+            contentLength = body.size.toLong(),
+            headers = mapOf("Authorization" to "Bearer $bearer"),
+            expectJson = false,
+            writeBody = { output -> output.write(body) },
+            parse = { },
+        )
+    }
+
+    /** 公开开关，不带 token。UI 必须尊重它 —— 禁用的功能隐藏入口，别让用户点了才吃 403。 */
+    fun getFeatureFlags(): WatchStoreFeatureFlags = requestJson(
+        url = WatchStoreUrlPolicy.config(base),
+        maxBytes = MAX_JSON_BYTES,
+        parser = WatchStoreJsonParser::featureFlags,
+    )
+
+    /** 无请求体的鉴权 POST（unlist / republish / 标记已读 / 收藏）。 */
+    private fun <T> postEmptyWithAuth(url: URI, token: String, parse: (String) -> T): T = post(
+        url = url,
+        contentType = "application/json; charset=utf-8",
+        contentLength = EMPTY_JSON_BODY.size.toLong(),
+        headers = mapOf("Authorization" to "Bearer ${requireBearerToken(token)}"),
+        writeBody = { output -> output.write(EMPTY_JSON_BODY) },
+        parse = parse,
+    )
+
+    private fun postEmptyWithAuth(url: URI, token: String) {
+        post(
+            url = url,
+            contentType = "application/json; charset=utf-8",
+            contentLength = EMPTY_JSON_BODY.size.toLong(),
+            headers = mapOf("Authorization" to "Bearer ${requireBearerToken(token)}"),
+            expectJson = false,
+            writeBody = { output -> output.write(EMPTY_JSON_BODY) },
+            parse = { },
+        )
     }
 
     private fun requireBearerToken(token: String): String {
@@ -856,8 +1331,24 @@ class HttpWatchStoreApi(
         /** Server-side cap for one uploaded `.watch` archive. */
         const val MAX_UPLOAD_BYTES: Long = 20L * 1024L * 1024L
         private const val MAX_UPLOAD_NAME_LENGTH = 100
-        private const val MIN_PASSWORD_LENGTH = 6
-        private const val MAX_PASSWORD_LENGTH = 128
+        private const val MAX_UPLOAD_TAGS = 10
+        private const val MAX_UPLOAD_TAG_LENGTH = 50
+
+        /** 界面侧的密码框也要按它拦，不然只有 `require` 抛异常一条路（H2 的改密码）。 */
+        const val MIN_PASSWORD_LENGTH = 6
+
+        // ── B1 ───────────────────────────────────────────────────────────────
+        /** 上游按 magic bytes 校验类型、限 2MB。与 [WatchStoreAvatarRules.MAX_BYTES] 是同一个数。 */
+        const val MAX_AVATAR_BYTES: Long = 2L * 1024L * 1024L
+        private const val MAX_COMMENT_LENGTH = 1_000
+
+        /** 界面侧的输入框也要按它截断，不然只有 `require` 抛异常一条路。 */
+        const val MAX_COLLECTION_NAME_LENGTH = 100
+        private const val MAX_REPORT_MESSAGE_LENGTH = 1_000
+        private const val DEFAULT_COPY_BUFFER = 32 * 1024
+        /** 无请求体的鉴权 POST 也要给一个合法 JSON —— 空体有些反代会直接 400。 */
+        private val EMPTY_JSON_BODY = "{}".toByteArray(Charsets.UTF_8)
+        const val MAX_PASSWORD_LENGTH = 128
 
         /** Preview parsing happens server-side during upload; give it room. */
         private const val UPLOAD_READ_TIMEOUT_MS = 120_000

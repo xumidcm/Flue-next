@@ -2,6 +2,7 @@ package com.flue.launcher.watchface.standard
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -267,6 +268,32 @@ class WatchmakerRuntimeContractsTest {
     }
 
     @Test
+    fun studioImageRingUsesBoundedPercentageAndAuthoredSweep() {
+        assertEquals(90f, watchRingImageSweep(25f, 360f), 0.0001f)
+        assertEquals(180f, watchRingImageSweep(50f, 360f), 0.0001f)
+        assertEquals(270f, watchRingImageSweep(75f, 360f), 0.0001f)
+        assertEquals(120f, watchRingImageSweep(100f, 120f), 0.0001f)
+        assertEquals(0f, watchRingImageSweep(-10f, 360f), 0.0001f)
+        assertEquals(360f, watchRingImageSweep(140f, 360f), 0.0001f)
+    }
+
+    @Test
+    fun structuredStudioLayersUseBundledAssetNamesOnly() {
+        assertEquals(listOf("sunarc_classic.webp"), watchStructuredAssetCandidates("sunarc", "classic"))
+        assertEquals(listOf("daylight_map2.webp"), watchStructuredAssetCandidates("daylight", "map2"))
+        assertEquals(
+            listOf(
+                "progress_arrow1.webp",
+                "progress_arrow1.png",
+                "shapes/progress_arrow1.webp",
+                "shapes/progress_arrow1.png",
+            ),
+            watchStructuredAssetCandidates("progress_image", "arrow1"),
+        )
+        assertTrue(watchStructuredAssetCandidates("horizon", "classic").isEmpty())
+    }
+
+    @Test
     fun linearRasterOnlyForAnisotropicScaleComposedFromCanvasAncestorsAndLayer() {
         // 等比缩放（含画布基变换的非 1 缩放）一律不触发：312 的 181 个 text 图层
         // 全靠字形缓存，误开 LINEAR_TEXT_FLAG 会让它们每帧重新栅格化、拖慢整帧。
@@ -520,21 +547,28 @@ class WatchmakerRuntimeContractsTest {
             settings = settings,
         )
 
-        // 0 与负数被夹到下限 0.1，画布仍然可见、可交互。
+        // 0 与负数被夹到下限 0.01，画布仍然可见、可交互。
         assertEquals(
-            0.625f * 0.1f,
+            0.625f * 0.01f,
             transformWith(WatchCanvasSettings(zoomX = 0f)).scaleX,
             0.0001f,
         )
         assertEquals(
-            0.625f * 0.1f,
+            0.625f * 0.01f,
             transformWith(WatchCanvasSettings(zoomX = -3f)).scaleX,
             0.0001f,
         )
-        // 上限 5，防止一个滑到底的滑杆把位图放大到 OOM。
+        // 上限 20，防止一个滑到底的滑杆把位图放大到 OOM。区间刻意比滑块量程宽，
+        // 因为手输框只校验 isFinite()（见 canvasInputValueOrNull）。
         assertEquals(
-            0.625f * 5f,
+            0.625f * 20f,
             transformWith(WatchCanvasSettings(zoomX = 100f)).scaleX,
+            0.0001f,
+        )
+        // 手输能给到的中间值不该被削：8 在滑块量程外但在渲染区间内，原样通过。
+        assertEquals(
+            0.625f * 8f,
+            transformWith(WatchCanvasSettings(zoomX = 8f)).scaleX,
             0.0001f,
         )
         // NaN / 无穷回落到中性值，而不是继续污染整条矩阵。
@@ -554,13 +588,13 @@ class WatchmakerRuntimeContractsTest {
             0.0001f,
         )
         assertEquals(
-            4_096f,
+            16_384f,
             transformWith(WatchCanvasSettings(offsetX = 1_000_000f)).left,
             0.0001f,
         )
         // 负方向同样夹住：40 是 FIT 在这个视口下的居中留边，兜底只削偏移那一项。
         assertEquals(
-            40f - 4_096f,
+            40f - 16_384f,
             transformWith(WatchCanvasSettings(offsetY = -1_000_000f)).top,
             0.0001f,
         )
@@ -599,6 +633,36 @@ class WatchmakerRuntimeContractsTest {
         )
         assertTrue(WatchCanvasSettings.DEFAULT.isDefault)
         assertFalse(settings.isDefault)
+    }
+
+    /**
+     * 出厂全局默认是「铺满」，而解码兜底仍是中性 FIT —— 两者必须分开：
+     * 合成一个的话，改默认铺法会顺手改掉所有坏数据的回落值。
+     */
+    @Test
+    fun globalCanvasDefaultFillsWhileDecodeFallbackStaysNeutral() {
+        assertEquals(WatchCanvasPreset.FILL, WatchCanvasSettings.GLOBAL_DEFAULT.preset)
+        assertEquals(WatchCanvasPreset.FIT, WatchCanvasSettings.DEFAULT.preset)
+        assertNotEquals(WatchCanvasSettings.GLOBAL_DEFAULT, WatchCanvasSettings.DEFAULT)
+        // 出厂默认只换铺法，缩放与偏移仍是中性值。
+        assertEquals(1f, WatchCanvasSettings.GLOBAL_DEFAULT.zoomX, 0f)
+        assertEquals(1f, WatchCanvasSettings.GLOBAL_DEFAULT.zoomY, 0f)
+        assertEquals(0f, WatchCanvasSettings.GLOBAL_DEFAULT.offsetX, 0f)
+        assertEquals(0f, WatchCanvasSettings.GLOBAL_DEFAULT.offsetY, 0f)
+        // 存量 force_fill 开关的两种取值仍各自映射，升级用户的显式选择不被顶掉。
+        assertEquals(
+            WatchCanvasSettings.GLOBAL_DEFAULT,
+            WatchCanvasSettings.fromForceFill(true),
+        )
+        assertEquals(
+            WatchCanvasSettings.DEFAULT,
+            WatchCanvasSettings.fromForceFill(false),
+        )
+        // 出厂默认也要能编码往返，否则第一次落盘就丢铺法。
+        assertEquals(
+            WatchCanvasSettings.GLOBAL_DEFAULT,
+            WatchCanvasSettings.decode(WatchCanvasSettings.GLOBAL_DEFAULT.encode()),
+        )
     }
 
     @Test
@@ -1138,8 +1202,11 @@ class WatchmakerRuntimeContractsTest {
                 true,
             ) { WatchTagResolution.Resolved("0") },
         )
+        // 没有天气源时 {wtemp} 取中性 0 —— 于是这条式子算得完（0 + 1），不再整条
+        // 失败落回 42。区别在真实表盘上很大：`opacity="{wtemp} > 30 and 100 or 0"`
+        // 旧行为整条废掉 → opacity 落回默认 100 → 该藏起来的图层反而常亮。
         assertEquals(
-            42f,
+            1f,
             WatchmakerExpressionEvaluator.evaluateNumber("{wtemp} + 1", 42f, resolver),
             0.001f,
         )
@@ -1277,6 +1344,28 @@ class WatchmakerRuntimeContractsTest {
                 setOf("var_mode == 1 and 100 or 0"),
                 definition.compatibilityReport.unsupportedExpressions,
             )
+        }
+
+    @Test
+    fun studioStructuredLayersAreDispatchedAsSupportedStandardPrimitives() =
+        withTemporaryDirectory { root ->
+            val definition = WatchmakerDefinitionParser().parse(
+                File(root, "watch.xml").apply {
+                    writeText(
+                        """
+                        <Watch name="Studio structured">
+                          <Layer type="ring_image" path="ring.webp" />
+                          <Layer type="daylight" daylight_map="city" />
+                          <Layer type="horizon" width="512" />
+                          <Layer type="sunarc" sun_preset="classic" />
+                          <Layer type="progress_image" progress_shape="arrow1" />
+                        </Watch>
+                        """.trimIndent(),
+                    )
+                },
+            )
+
+            assertTrue(definition.compatibilityReport.unsupportedLayerTypes.isEmpty())
         }
 
     @Test
@@ -1876,11 +1965,24 @@ class WatchmakerRuntimeContractsTest {
         })
     }
 
+    @Test
+    fun dayOfYearTagMatchesCloxOneBasedCalendarDay() {
+        val snapshot = WatchDataSnapshot()
+        fun dayOfYear(year: Int, month: Int, day: Int): String {
+            val calendar = Calendar.getInstance().apply { clear(); set(year, month, day, 12, 0, 0) }
+            return WatchmakerTagResolver.resolve("ddy", calendar, snapshot).renderedValue
+        }
+
+        assertEquals("1", dayOfYear(2026, Calendar.JANUARY, 1))
+        assertEquals("225", dayOfYear(2026, Calendar.AUGUST, 13))
+        assertEquals("366", dayOfYear(2024, Calendar.DECEMBER, 31))
+    }
+
     /** 新补的这批 tag 必须全部进 builtIn 词表，否则编译期就被判 Unsupported。 */
     @Test
     fun newlyAddedTagsAreRecognisedAsBuiltIn() {
         val tags = listOf(
-            "dw", "ddim", "alangcode", "alangreg", "d24h", "cnc",
+            "ddy", "dw", "ddim", "alangcode", "alangreg", "d24h", "cnc",
             "stsc", "sscp", "wsr", "wss", "wmp",
             "ddw_1", "ddww_2", "ddw1_3", "ddw2_6",
         )

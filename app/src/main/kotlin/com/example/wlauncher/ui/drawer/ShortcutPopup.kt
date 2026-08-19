@@ -41,11 +41,12 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -59,7 +60,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.flue.launcher.data.model.AppInfo
-import com.flue.launcher.ui.common.flueElasticNestedScroll
+import com.flue.launcher.ui.style.flueOverscroll
+import com.flue.launcher.ui.theme.LauncherTheme
 
 @Composable
 fun AppShortcutOverlay(
@@ -115,8 +117,20 @@ fun AppShortcutOverlay(
         animationSpec = spring(dampingRatio = 0.78f, stiffness = 520f),
         label = "overlay_scale"
     )
-    SideEffect {
-        onTransitionProgress(animAlpha)
+    // **进度要在能观察到动画的地方上报**。
+    //
+    // 原来写的是 `SideEffect { onTransitionProgress(animAlpha) }`。SideEffect 的 lambda 在组合
+    // 应用之后才执行，里面的 State 读**不算进重组作用域** —— 动画每帧推进都不会让这个 composable
+    // 重组，于是这一句只在 showing / dismissing 变化那两次组合里跑到：
+    //
+    // - 长按打开：那一次组合时 alpha 才刚起步（≈0），报出去的就是 0 —— 列表全程不模糊；
+    // - 按返回 / 点空白：这一次组合读到的是早就跑满的 1，模糊**突然出现**；
+    // - 紧接着 overlay 卸载，列表侧把进度清 0，模糊又**突然消失**。
+    //
+    // 正好是老师描述的现象。snapshotFlow 会真正订阅这个 State，每帧都 emit 一次。
+    val reportProgress by rememberUpdatedState(onTransitionProgress)
+    LaunchedEffect(Unit) {
+        snapshotFlow { animAlpha }.collect { reportProgress(it) }
     }
 
     if (renameDialogVisible) {
@@ -173,7 +187,7 @@ fun AppShortcutOverlay(
                     .width(panelWidth)
                     .heightIn(max = panelMaxHeight)
                     .padding(horizontal = 8.dp, vertical = 12.dp)
-                    .flueElasticNestedScroll(panelScrollState)
+                    .flueOverscroll(panelScrollState)
                     .verticalScroll(panelScrollState)
                     .graphicsLayer {
                         scaleX = animScale
@@ -187,7 +201,7 @@ fun AppShortcutOverlay(
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .clip(RoundedCornerShape(16.dp))
+                        .clip(LauncherTheme.style.cardShape)
                         .background(Color(0xFF2C2C2E))
                 ) {
                     if (app.isFolder) {

@@ -39,7 +39,6 @@ class NativeAppListProjectionFactoryTest {
 
         val projection = NativeAppListProjectionFactory().project(
             apps = listOf(app, shortcut, folder),
-            useTwoTone = false,
         )
 
         assertEquals(0L, projection.content.snapshot.generation)
@@ -62,8 +61,8 @@ class NativeAppListProjectionFactoryTest {
         val app = appInfo()
         val factory = NativeAppListProjectionFactory()
 
-        val first = factory.project(listOf(app), useTwoTone = false)
-        val second = factory.project(listOf(app), useTwoTone = false)
+        val first = factory.project(listOf(app))
+        val second = factory.project(listOf(app))
 
         assertSame(first, second)
         assertSame(first.content, second.content)
@@ -73,11 +72,10 @@ class NativeAppListProjectionFactoryTest {
     fun iconIdentityChangeAdvancesOnlyTheIconRevision() {
         val factory = NativeAppListProjectionFactory()
         val firstApp = appInfo()
-        val first = factory.project(listOf(firstApp), useTwoTone = false)
+        val first = factory.project(listOf(firstApp))
         val replacementIcon = bitmap().asImageBitmap()
         val second = factory.project(
             apps = listOf(firstApp.copy(cachedIcon = replacementIcon)),
-            useTwoTone = false,
         )
 
         assertEquals(first.content.snapshot.generation, second.content.snapshot.generation)
@@ -89,14 +87,12 @@ class NativeAppListProjectionFactoryTest {
     fun structuralChangeAdvancesSnapshotAndResetsIconRevision() {
         val factory = NativeAppListProjectionFactory()
         val app = appInfo(label = "Before")
-        val initial = factory.project(listOf(app), useTwoTone = false)
+        val initial = factory.project(listOf(app))
         val iconOnly = factory.project(
             listOf(app.copy(cachedIcon = bitmap().asImageBitmap())),
-            useTwoTone = false,
         )
         val structural = factory.project(
             listOf(app.copy(label = "After", cachedIcon = iconOnly.appsByKey.values.single().cachedIcon)),
-            useTwoTone = false,
         )
 
         assertEquals(initial.content.snapshot.generation + 1L, structural.content.snapshot.generation)
@@ -112,10 +108,9 @@ class NativeAppListProjectionFactoryTest {
             shortcutIntentUri = "intent:#Intent;action=test;end",
             pinnedShortcutId = "before",
         )
-        val initial = factory.project(listOf(shortcut), useTwoTone = false)
+        val initial = factory.project(listOf(shortcut))
         val updated = factory.project(
             listOf(shortcut.copy(pinnedShortcutId = "after")),
-            useTwoTone = false,
         )
 
         assertSame(initial.content, updated.content)

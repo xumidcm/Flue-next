@@ -8,6 +8,7 @@ import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
+import com.flue.launcher.applist.background.AppListBackgroundJson
 import com.flue.launcher.data.repository.WidgetRepository
 import com.flue.launcher.viewmodel.LauncherViewModel
 import com.flue.launcher.viewmodel.dataStore
@@ -52,6 +53,30 @@ data class FlueBackupOptions(
             watchFiles = watchFiles && available.watchFiles
         )
     }
+
+    /**
+     * 勾选的分区，按声明顺序给出稳定 key。UI 侧据此查 strings 拼展示名，
+     * 于是「顺序」与「key→名称」各只有一处定义，两边不会写歪。
+     */
+    fun selectedSectionKeys(): List<String> = buildList {
+        if (settings) add(SECTION_SETTINGS)
+        if (appOrder) add(SECTION_APP_ORDER)
+        if (widgetOrder) add(SECTION_WIDGET_ORDER)
+        if (sideScreenOrder) add(SECTION_SIDE_SCREEN_ORDER)
+        if (photoWatchFace) add(SECTION_PHOTO_WATCH_FACE)
+        if (videoWatchFace) add(SECTION_VIDEO_WATCH_FACE)
+        if (watchFiles) add(SECTION_WATCH_FILES)
+    }
+
+    companion object {
+        const val SECTION_SETTINGS = "settings"
+        const val SECTION_APP_ORDER = "appOrder"
+        const val SECTION_WIDGET_ORDER = "widgetOrder"
+        const val SECTION_SIDE_SCREEN_ORDER = "sideScreenOrder"
+        const val SECTION_PHOTO_WATCH_FACE = "photoWatchFace"
+        const val SECTION_VIDEO_WATCH_FACE = "videoWatchFace"
+        const val SECTION_WATCH_FILES = "watchFiles"
+    }
 }
 
 data class FlueBackupPreview(
@@ -59,6 +84,45 @@ data class FlueBackupPreview(
     val createdAt: String,
     val availableOptions: FlueBackupOptions
 )
+
+/** 导出结果摘要，供「导出完成」页显示内容 / 大小 / 时间三行灰字。 */
+data class FlueBackupExportSummary(
+    /** 实际落盘的分区（就是传给 [FlueBackupManager.exportBackup] 的那份）。 */
+    val sections: FlueBackupOptions,
+    /**
+     * 备份包字节数。在写出流上累计得到，**不**写完再 openFileDescriptor 读
+     * statSize —— SAF provider 不保证 statSize 可靠，累计值更准。
+     */
+    val bytes: Long,
+    /** 与包内 manifest 的 createdAt 同源，格式 `yyyy-MM-dd HH:mm:ss`。 */
+    val createdAt: String,
+)
+
+/** 只做字节计数的透传流，用来在写出过程中得到备份包真实大小。 */
+internal class CountingOutputStream(
+    private val delegate: java.io.OutputStream,
+) : java.io.OutputStream() {
+    var count: Long = 0L
+        private set
+
+    override fun write(b: Int) {
+        delegate.write(b)
+        count += 1L
+    }
+
+    override fun write(b: ByteArray, off: Int, len: Int) {
+        delegate.write(b, off, len)
+        count += len.toLong()
+    }
+
+    override fun flush() {
+        delegate.flush()
+    }
+
+    override fun close() {
+        delegate.close()
+    }
+}
 
 object FlueBackupManager {
     private const val SCHEMA_VERSION = 1
@@ -68,6 +132,21 @@ object FlueBackupManager {
     private const val FONT_ENTRY = "watchfaces/font/current"
 
     private const val WATCH_ARCHIVES_PREFIX = "watchfaces/watch/"
+
+    /**
+     * 自定义应用列表背景图在备份包里的条目。
+     *
+     * 设置里存的是**绝对路径**，只带路径过去没用：换机 / 重装后那个文件不在，配置就变成
+     * 一个指向空气的路径（渲染侧会落回纯色，不崩，但老师的背景没了）。所以图跟着走。
+     */
+    private const val APP_LIST_BACKGROUND_ENTRY = "app_list_background/image"
+
+    /**
+     * 还原时背景图落进哪个子目录。与图片 / 视频表盘同一套 `internal_watchfaces/<folder>`
+     * 布局，于是 [copyInternalWatchFaceMedia] 的「先清目录再写」语义直接复用 ——
+     * 一份背景图只留一张，不会随着反复恢复堆积。
+     */
+    private const val APP_LIST_BACKGROUND_MEDIA_FOLDER = "app_list_background"
 
     private val appOrderKey = LauncherViewModel.KEY_APP_ORDER.name
     private val sideScreenShortcutsKey = LauncherViewModel.KEY_SIDE_SCREEN_SHORTCUTS.name
@@ -132,13 +211,19 @@ object FlueBackupManager {
         return "Flue${version}_backup_${date}.zip"
     }
 
-    suspend fun exportBackup(context: Context, targetUri: Uri, options: FlueBackupOptions) {
+    suspend fun exportBackup(
+        context: Context,
+        targetUri: Uri,
+        options: FlueBackupOptions,
+    ): FlueBackupExportSummary {
         require(options.hasAny) { "没有选择要导出的内容" }
         val prefs = context.dataStore.data.first()
+        // manifest 与「导出完成」页共用同一个时间源，别另起一套。
+        val createdAt = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US).format(Date())
         val manifest = JSONObject()
             .put("schemaVersion", SCHEMA_VERSION)
             .put("appVersion", appVersion(context))
-            .put("createdAt", SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US).format(Date()))
+            .put("createdAt", createdAt)
             .put("sections", options.toJson())
 
         if (options.settings) {
@@ -163,6 +248,22 @@ object FlueBackupManager {
         val fontMedia = prefs[LauncherViewModel.KEY_WATCHFACE_FONT_PATH]
             ?.let(::File)
             ?.takeIf { it.isFile }
+        // 自定义应用列表背景图。路径藏在 app_list_background 那份 JSON 里，所以要先解出来。
+        val appListBackgroundMedia = if (options.settings) {
+            AppListBackgroundJson
+                .decodeOrDefault(prefs[LauncherViewModel.KEY_APP_LIST_BACKGROUND])
+                .imagePath
+                ?.let(::File)
+                ?.takeIf { it.isFile }
+        } else {
+            null
+        }
+        val appListBackgroundEntry = appListBackgroundMedia?.let {
+            "$APP_LIST_BACKGROUND_ENTRY.${it.extension.ifBlank { "png" }}"
+        }
+        if (appListBackgroundEntry != null) {
+            manifest.put("appListBackgroundEntry", appListBackgroundEntry)
+        }
 
         if (options.photoWatchFace) {
             manifest.put(
@@ -198,8 +299,10 @@ object FlueBackupManager {
             manifest.put("watchFiles", JSONObject().put("archives", entries))
         }
 
-        context.contentResolver.openOutputStream(targetUri)?.use { rawOutput ->
-            ZipOutputStream(rawOutput.buffered()).use { zip ->
+        val output = context.contentResolver.openOutputStream(targetUri) ?: error("无法写入备份文件")
+        val counting = CountingOutputStream(output)
+        counting.use { counted ->
+            ZipOutputStream(counted.buffered()).use { zip ->
                 zip.writeTextEntry(MANIFEST_ENTRY, manifest.toString(2))
                 if (options.photoWatchFace && photoMedia != null) {
                     zip.writeFileEntry(manifest.getJSONObject("photoWatchFace").getString("mediaEntry"), photoMedia)
@@ -210,6 +313,9 @@ object FlueBackupManager {
                 if ((options.photoWatchFace || options.videoWatchFace) && fontMedia != null) {
                     val entry = "$FONT_ENTRY.${fontMedia.extension.ifBlank { "ttf" }}"
                     zip.writeFileEntry(entry, fontMedia)
+                }
+                if (appListBackgroundEntry != null && appListBackgroundMedia != null) {
+                    zip.writeFileEntry(appListBackgroundEntry, appListBackgroundMedia)
                 }
                 // 把每个已安装表盘目录打成内嵌 .watch（ZIP），写进备份包。
                 if (options.watchFiles) {
@@ -231,7 +337,13 @@ object FlueBackupManager {
                     }
                 }
             }
-        } ?: error("无法写入备份文件")
+        }
+        // ZipOutputStream 关闭时才写完中央目录并 flush 到 counting，所以在 use 之后读。
+        return FlueBackupExportSummary(
+            sections = options,
+            bytes = counting.count,
+            createdAt = createdAt,
+        )
     }
 
     suspend fun readPreview(context: Context, sourceUri: Uri): FlueBackupPreview {
@@ -265,6 +377,7 @@ object FlueBackupManager {
                         validWidgetKeys = validWidgetKeys,
                         excludeNames = settingsExcludedNames
                     )
+                    restoreAppListBackgroundImage(context, tempRoot, prefs, manifest)
                 }
                 if (selected.appOrder) {
                     val appOrder = manifest.optJSONArray("appOrder")
@@ -334,6 +447,36 @@ object FlueBackupManager {
         }
     }
 
+    /**
+     * 还原自定义应用列表背景图。
+     *
+     * 必须在 `applyPreferenceJson` **之后**跑：那一步刚把备份里的 `app_list_background`
+     * JSON（含来源机的绝对路径）写进 prefs，这里再把图落到本机 filesDir 并把路径改成本机的。
+     * 顺序反了就会留下一个指向来源机的路径。
+     *
+     * 备份包里没图（旧版备份、或当时就没选图）时**什么都不做** —— 让配置自己按
+     * `AppListBackgroundConfig.effectiveMode` 落回纯色，而不是在这里再判一遍。
+     */
+    private fun restoreAppListBackgroundImage(
+        context: Context,
+        tempRoot: File,
+        prefs: MutablePreferences,
+        manifest: JSONObject,
+    ) {
+        val entry = manifest.optString("appListBackgroundEntry")
+            .takeIf { it.isNotBlank() && it != "null" }
+            ?: return
+        val source = File(tempRoot, entry).takeIf { it.isFile } ?: return
+        val restoredPath = runCatching {
+            copyInternalWatchFaceMedia(context, source, APP_LIST_BACKGROUND_MEDIA_FOLDER)
+        }.getOrNull() ?: return
+        val config = AppListBackgroundJson
+            .decodeOrDefault(prefs[LauncherViewModel.KEY_APP_LIST_BACKGROUND])
+            .copy(imagePath = restoredPath)
+        prefs[LauncherViewModel.KEY_APP_LIST_BACKGROUND] =
+            runCatching { AppListBackgroundJson.encode(config) }.getOrNull() ?: return
+    }
+
     private fun restoreMediaWatchFace(
         context: Context,
         tempRoot: File,
@@ -370,7 +513,7 @@ object FlueBackupManager {
         targetRoot.listFiles()?.forEach { existing -> if (existing.isFile) existing.delete() }
         val extension = source.extension.ifBlank {
             when (folder) {
-                "photo" -> "png"
+                "photo", APP_LIST_BACKGROUND_MEDIA_FOLDER -> "png"
                 "video" -> "mp4"
                 else -> "ttf"
             }

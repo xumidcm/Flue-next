@@ -125,6 +125,22 @@ internal fun shouldRenderLayerBlur(
         alpha > 0.01f &&
         radiusPx > 0
 
+internal enum class OverlayBlurBackend {
+    LEGACY,
+    SYSTEM,
+}
+
+internal fun overlayBlurBackend(
+    sdkInt: Int,
+    advancedMaterialEnabled: Boolean,
+): OverlayBlurBackend = if (
+    sdkInt >= Build.VERSION_CODES.S && advancedMaterialEnabled
+) {
+    OverlayBlurBackend.SYSTEM
+} else {
+    OverlayBlurBackend.LEGACY
+}
+
 @Composable
 internal fun Modifier.scaleBlurAlpha(
     targetValues: LayerAnimValues,

@@ -357,6 +357,14 @@ fun JbWatchFaceHost(
     onLoadFailure: (WatchFaceDescriptor, Throwable) -> Unit,
     onLongPress: (() -> Unit)? = null,
     onDoubleTap: (() -> Unit)? = null,
+    /**
+     * 渲染就绪回调，桌面据此撤「表盘加载中」。
+     *
+     * JBWatch 这边比 Watchmaker 简单：[JbWatchParser.parse] 里的
+     * `prewarmJbInitialVisualFrames` 已经在**发布 face 之前**把每个图层的首帧位图
+     * 与 GIF 预热好了，所以 `face != null` 本身就是完整就绪信号，不需要静默判定。
+     */
+    onRenderReady: ((Int) -> Unit)? = null,
     dataProvider: WatchDataProvider? = null,
     textEntryAnimationEnabled: Boolean = true,
     textExitAnimationEnabled: Boolean = true,
@@ -385,6 +393,11 @@ fun JbWatchFaceHost(
     }
     LaunchedEffect(loadError) {
         loadError?.let { onLoadFailure(descriptor, it) }
+    }
+    // 解析成功即完整就绪（首帧素材已在解析里预热）。解析失败走 onLoadFailure
+    // 那条兜底切换，不在这里假报就绪 —— 否则加载页撤了却停在黑屏。
+    LaunchedEffect(face, descriptor.stableKey, refreshToken) {
+        if (face != null) onRenderReady?.invoke(refreshToken)
     }
     var nowMillis by remember { mutableStateOf(System.currentTimeMillis()) }
     var textAnimationStartedAtUptimeMs by remember(descriptor.stableKey, refreshToken) {

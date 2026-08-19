@@ -378,19 +378,39 @@ object MiuixIcons {
 
     /** 通知（铃铛）。 */
     val Notification: ImageVector by lazyIcon("Notification") {
+        // 重画过两次。
+        //
+        // 第一版钟体 5.6..17.3（高 11.7）、宽 10.6 —— 老师说「太扁」。
+        // 第二版把高度拉到 14.2、宽度仍是 11.2，于是**比旁边两个图标窄了一圈**：
+        // 市场顶栏里铃铛、宫格、三点是并排的，宫格那种方形图标在 24 视口里横跨约 15 单位，
+        // 而 11.2 宽的铃铛在同一个 20dp 框里看着就是「小一号」。老师这次说的
+        // 「还是太扁，应该和旁边两个图标等宽」指的就是这件事。
+        //
+        // 现在整个剪影 x ∈ [4.8, 19.2]（宽 14.4）、y ∈ [3.9, 19.9]（高 16.0），
+        // 与方形图标横向齐平，纵向只高出一点点 —— 圆钝形状比正方形略大一点才视觉等重，
+        // 这是图标设计里的常规光学补偿。
+        //
+        // 钟体本身仍然是「高 > 宽」的正常钟形（12.1 高 vs 14.4 宽的罩子 + 顶钮 + 摆锤
+        // 一起把纵向撑起来），不会回到第一版那种矮墩墩的观感。
         stroke {
-            moveTo(6.7f, 17.3f)
-            curveTo(7.8f, 16.3f, 8.1f, 15.3f, 8.1f, 13.9f)
-            verticalLineTo(10.4f)
-            curveTo(8.1f, 7.7f, 9.75f, 5.6f, 12f, 5.6f)
-            curveTo(14.25f, 5.6f, 15.9f, 7.7f, 15.9f, 10.4f)
-            verticalLineTo(13.9f)
-            curveTo(15.9f, 15.3f, 16.2f, 16.3f, 17.3f, 17.3f)
+            moveTo(4.8f, 17.6f)
+            curveTo(6.5f, 15.8f, 7.2f, 14.2f, 7.2f, 12.1f)
+            verticalLineTo(9.8f)
+            curveTo(7.2f, 6.9f, 9.2f, 5.5f, 12f, 5.5f)
+            curveTo(14.8f, 5.5f, 16.8f, 6.9f, 16.8f, 9.8f)
+            verticalLineTo(12.1f)
+            curveTo(16.8f, 14.2f, 17.5f, 15.8f, 19.2f, 17.6f)
             close()
         }
+        // 顶钮：短竖线而不是小圆，20dp 显示尺寸下圆点会糊成一团。
         stroke {
-            moveTo(10.3f, 20.1f)
-            arcTo(2f, 2f, 0f, isMoreThanHalf = false, isPositiveArc = false, x1 = 13.7f, y1 = 20.1f)
+            moveTo(12f, 5.5f)
+            verticalLineTo(3.9f)
+        }
+        // 摆锤。与底沿留 1 单位空隙，不然会和钟口的横线并成一条。
+        stroke {
+            moveTo(10.3f, 18.6f)
+            arcTo(1.75f, 1.75f, 0f, isMoreThanHalf = false, isPositiveArc = false, x1 = 13.7f, y1 = 18.6f)
         }
     }
 

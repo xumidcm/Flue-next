@@ -25,6 +25,90 @@ class WatchmakerRuntimePrimitivesTest {
             WatchTapActionParser.parse("w_link:https://example.com/watch"),
         )
     }
+
+    @Test
+    fun `the upstream configurable action names are all recognized`() {
+        // WM_TAP_ACTIONS.md §3 那 26 个名字。漏一个就会掉进 Unsupported，
+        // 点一下弹「表盘点击动作不可用」—— 老师报的「很多 Action 不支持」有一半是这个。
+        // widget_* / w_fit / w_heart_rate 三个在 Flue 里有更具体的实现，所以单列。
+        listOf(
+            "tap_launcher", "w_agenda", "w_compass", "w_keep", "m_email", "m_calendar",
+            "voice_search", "w_contacts", "w_sports", "w_gallery", "w_messaging",
+            "w_camera", "w_dialer", "w_music", "w_clock", "w_calculator",
+            "w_payment", "w_map", "browser", "flashlight", "socialmedia",
+        ).forEach { raw ->
+            assertEquals(raw, WatchTapAction.Named(raw), WatchTapActionParser.parse(raw))
+        }
+        assertEquals(WatchTapAction.Calendar, WatchTapActionParser.parse("widget_calendar"))
+        assertEquals(WatchTapAction.Weather, WatchTapActionParser.parse("widget_weather"))
+        assertEquals(WatchTapAction.HeartRate, WatchTapActionParser.parse("widget_health"))
+        assertEquals(WatchTapAction.HeartRate, WatchTapActionParser.parse("w_fit"))
+    }
+
+    /**
+     * 被短路成强类型的那几个名字，**仍然必须**算「用户可配置」。
+     *
+     * 这是老师报的「点右上角天气组件提示无法打开目标应用」的判据：`widget_weather`
+     * 会被解析器短路成 [WatchTapAction.Weather]，运行时如果只看解析结果，就会直接去拼
+     * `CATEGORY_APP_WEATHER` —— 手表上没人声明这个类目，于是设置里明明指了应用也打不开。
+     * 渲染层靠 [WatchTapActionParser.isConfigurable] 判断「要不要先查用户映射表」，
+     * 所以这几个名字一旦从可配置名单里掉出去，那个 bug 就会原样复发。
+     */
+    @Test
+    fun `short circuited widget actions stay user configurable`() {
+        listOf(
+            "widget_weather", "widget_calendar", "widget_health",
+            "w_fit", "w_heart_rate", "w_weather", "m_weather",
+        ).forEach { raw ->
+            assertTrue(raw, WatchTapActionParser.isConfigurable(raw))
+            // 大小写与空白都要吃得下：属性值直接来自表盘 XML，作者怎么写的都有。
+            assertTrue(raw, WatchTapActionParser.isConfigurable("  ${raw.uppercase(Locale.ROOT)} "))
+        }
+        // 内建动作不可配置：它们不该被「先查映射表」那一步截走
+        // （上游的 dispatch 顺序是 built-in first, then configurable）。
+        listOf("media_play_pause", "vol_up", "vol_down", "battery_status", "open_settings")
+            .forEach { raw -> assertFalse(raw, WatchTapActionParser.isConfigurable(raw)) }
+        assertFalse(WatchTapActionParser.isConfigurable(null))
+        assertFalse(WatchTapActionParser.isConfigurable("   "))
+    }
+
+    @Test
+    fun `built in media and volume actions parse`() {
+        assertEquals(
+            WatchTapAction.Media(WatchMediaKey.PLAY_PAUSE),
+            WatchTapActionParser.parse("media_play_pause"),
+        )
+        assertEquals(
+            WatchTapAction.Media(WatchMediaKey.PLAY),
+            WatchTapActionParser.parse("MEDIA_PLAY"),
+        )
+        assertEquals(
+            WatchTapAction.Media(WatchMediaKey.PAUSE),
+            WatchTapActionParser.parse("media_pause"),
+        )
+        assertEquals(
+            WatchTapAction.Media(WatchMediaKey.NEXT),
+            WatchTapActionParser.parse(" media_next "),
+        )
+        assertEquals(
+            WatchTapAction.Media(WatchMediaKey.PREVIOUS),
+            WatchTapActionParser.parse("media_prev"),
+        )
+        assertEquals(WatchTapAction.Volume(raise = true), WatchTapActionParser.parse("vol_up"))
+        assertEquals(WatchTapAction.Volume(raise = false), WatchTapActionParser.parse("vol_down"))
+    }
+
+    @Test
+    fun `set alarm carries a validated clock time`() {
+        assertEquals(WatchTapAction.SetAlarm(7, 30), WatchTapActionParser.parse("set_alarm_07:30"))
+        assertEquals(WatchTapAction.SetAlarm(23, 59), WatchTapActionParser.parse("set_alarm_23:59"))
+        assertEquals(WatchTapAction.SetAlarm(0, 0), WatchTapActionParser.parse("set_alarm_0:0"))
+        // 脏钟点不能透传给 AlarmClock 的 extra —— 解析期就打回。
+        listOf("set_alarm_24:00", "set_alarm_07:60", "set_alarm_", "set_alarm_7", "set_alarm_a:b")
+            .forEach { raw ->
+                assertTrue(raw, WatchTapActionParser.parse(raw) is WatchTapAction.Unsupported)
+            }
+    }
     @Test
     fun animatedImageFallbackIdentityChangesWhenReusedLayerGetsNewMaterial() {
         val imported = WatchImageFallbackKey(

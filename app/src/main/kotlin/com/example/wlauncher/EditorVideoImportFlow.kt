@@ -62,6 +62,7 @@ import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import com.flue.launcher.ui.common.isFlueScreenRound
+import com.flue.launcher.ui.style.FlueSlider
 import com.flue.launcher.watchface.editor.WatchEditorCropAspect
 import com.flue.launcher.watchface.editor.WatchEditorCropRect
 import com.flue.launcher.watchface.editor.WatchEditorVideoCrop
@@ -314,7 +315,7 @@ internal fun EditorVideoImportFlow(
             )
             // 播放进度：显示播放头 + 可拖动定位。范围是片段而非整段视频，
             // 因为预览本身就只在片段内循环。
-            Slider(
+            FlueSlider(
                 value = positionMs.coerceIn(startMs, endMs),
                 onValueChange = { value ->
                     scrubbing = true
@@ -619,7 +620,9 @@ private class EditorVideoPreviewView(context: Context) : TextureView(context), T
             if (active != null) {
                 val position = runCatching { active.currentPosition.toLong() }.getOrDefault(startMs)
                 if (runCatching { active.isPlaying }.getOrDefault(false) && position >= endMs - 20L) {
-                    runCatching { active.seekTo(startMs, MediaPlayer.SEEK_CLOSEST_SYNC) }
+                    // 循环回片段开头也走精确 seek：SYNC 会退到前一个关键帧，
+                    // 每循环一圈都先播一段裁掉的内容。
+                    runCatching { active.seekTo(startMs, MediaPlayer.SEEK_CLOSEST) }
                     // 刚跳回片段开头，把开头而不是越界值报出去。
                     positionListener?.invoke(startMs)
                 } else {
@@ -651,12 +654,14 @@ private class EditorVideoPreviewView(context: Context) : TextureView(context), T
             if (runCatching { active.isPlaying }.getOrDefault(false)) runCatching { active.pause() }
             val position = runCatching { active.currentPosition.toLong() }.getOrDefault(this.startMs)
             if (startChanged || position !in this.startMs until this.endMs) {
-                runCatching { active.seekTo(this.startMs, MediaPlayer.SEEK_CLOSEST_SYNC) }
+                // 与 seekTo 同一个理由：SYNC 会退到前一个关键帧，裁剪起点看起来
+                // 根本不是用户选的那一帧。
+                runCatching { active.seekTo(this.startMs, MediaPlayer.SEEK_CLOSEST) }
             }
         } else if (!runCatching { active.isPlaying }.getOrDefault(false)) {
             val position = runCatching { active.currentPosition.toLong() }.getOrDefault(this.startMs)
             if (position !in this.startMs until this.endMs) {
-                runCatching { active.seekTo(this.startMs, MediaPlayer.SEEK_CLOSEST_SYNC) }
+                runCatching { active.seekTo(this.startMs, MediaPlayer.SEEK_CLOSEST) }
             }
             runCatching { active.start() }
         }
@@ -667,11 +672,19 @@ private class EditorVideoPreviewView(context: Context) : TextureView(context), T
         positionListener = listener
     }
 
-    /** 把播放头挪到片段内的指定位置。暂停态也生效，画面跟着跳。 */
+    /**
+     * 把播放头挪到片段内的指定位置。暂停态也生效，画面跟着跳。
+     *
+     * 必须用 [MediaPlayer.SEEK_CLOSEST] 而不是 `SEEK_CLOSEST_SYNC`：后者只落在**关键帧**
+     * 上，而导出/录屏来的视频 GOP 常常是 8 秒，于是整条进度条只有 0 / 8 / 16 秒能停，
+     * 手指松开后播放器上报的真实位置又把滑块拽回那几个点（老师报的「拉到其他地方会被
+     * 强制拉回来」）。SEEK_CLOSEST 从前一个关键帧解到目标帧，慢一点但落点精确 ——
+     * 拖动定位一次只发生一次，这点开销换的是「拉到哪就停哪」。
+     */
     fun seekTo(milliseconds: Long) {
         val target = milliseconds.coerceIn(startMs, endMs)
         val active = player ?: return
-        runCatching { active.seekTo(target, MediaPlayer.SEEK_CLOSEST_SYNC) }
+        runCatching { active.seekTo(target, MediaPlayer.SEEK_CLOSEST) }
     }
 
     private fun maybePrepare() {
@@ -686,7 +699,7 @@ private class EditorVideoPreviewView(context: Context) : TextureView(context), T
             next.setSurface(targetSurface)
             next.setOnPreparedListener { prepared ->
                 preparing = false
-                prepared.seekTo(startMs, MediaPlayer.SEEK_CLOSEST_SYNC)
+                prepared.seekTo(startMs, MediaPlayer.SEEK_CLOSEST)
                 if (shouldPlay) prepared.start()
             }
             next.setOnErrorListener { _, _, _ ->

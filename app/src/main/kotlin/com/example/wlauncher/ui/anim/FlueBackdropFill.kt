@@ -168,6 +168,8 @@ internal fun Modifier.flueBackdropFill(
     hardwareCapturedFrame: LegacyWatchFaceCapturedFrame? = null,
     /** Never fall back to preview/Compose recording when the face needs PixelCopy. */
     hardwareCaptureRequired: Boolean = false,
+    /** Disable system blur together with the advanced-material setting. */
+    advancedMaterialEnabled: Boolean = true,
 ): Modifier {
     if (!enabled) return this
     val backdropLayer = rememberGraphicsLayer()
@@ -175,7 +177,10 @@ internal fun Modifier.flueBackdropFill(
     val captureState = remember(hardwareCaptureRequired, hardwareCapturedFrame?.visualKey) {
         BackdropCaptureState()
     }
-    val canHardwareBlur = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
+    val canHardwareBlur = overlayBlurBackend(
+        sdkInt = Build.VERSION.SDK_INT,
+        advancedMaterialEnabled = advancedMaterialEnabled,
+    ) == OverlayBlurBackend.SYSTEM
     val hardwareCapturedImage = remember(hardwareCapturedFrame?.generation) {
         hardwareCapturedFrame
             ?.bitmap

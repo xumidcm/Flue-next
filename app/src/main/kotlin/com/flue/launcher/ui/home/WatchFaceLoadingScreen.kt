@@ -31,16 +31,37 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.flue.launcher.R
 import kotlinx.coroutines.delay
-import top.yukonga.miuix.kmp.basic.InfiniteProgressIndicator
+import com.flue.launcher.ui.style.FlueLoadingIndicator
+import com.flue.launcher.ui.style.FlueLoadingIndicatorUsage
 import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.basic.TextButton
 
+/** 加载页的两种用法，行为差别不小，所以显式分档。 */
+enum class WatchFaceLoadingMode {
+    /**
+     * 冷启动：偏好与磁盘扫描都还没就绪，压根不知道该显示哪块表盘。
+     * 吃返回键、5 秒后给逃生按钮（落盘默认表盘 + 重启）。
+     */
+    ColdStart,
+
+    /**
+     * 已经知道显示哪块表盘，但它还没渲染完（切表盘、编辑器保存返回、冷启动后半段）。
+     * 只吃触摸不吃返回键、无逃生按钮 —— 手势本来就被覆层挡住了，再锁返回键的话
+     * 每次从编辑器保存返回都要「卡」一下，反而像死机。
+     */
+    Switching,
+}
+
 /**
- * 冷启动时的表盘加载页。
+ * 表盘加载页。
  *
  * 存在的理由：偏好（选中哪块表盘）与磁盘扫描都是异步的，而 ViewModel 里
  * `_selectedWatchFace` 的初始值是内置表盘。在两者就绪之前直接渲染，用户会先
  * 看到一瞬间默认表盘再跳到自己那块 —— 老师报的就是这个。所以就绪之前这里顶住。
+ *
+ * 光「知道显示哪块」还不够：Watchmaker 的 `prepareSource()` 一张位图都不解码，
+ * 素材是绘制期异步来的，所以选中就绪之后还要等渲染静默（见 `watchRenderReadiness`）。
+ * 那一段用 [WatchFaceLoadingMode.Switching] 覆在表盘上面。
  *
  * 这段时间同时被用来预热小组件（见 LauncherActivity 的预热挂载），所以加载页
  * 停留得久一点反而有收益。
@@ -50,18 +71,24 @@ fun WatchFaceLoadingScreen(
     /** 超时后的逃生出口：落盘默认表盘并重启进程。挂起直到落盘完成。 */
     onFallbackToDefault: () -> Unit,
     modifier: Modifier = Modifier,
+    mode: WatchFaceLoadingMode = WatchFaceLoadingMode.ColdStart,
 ) {
+    val coldStart = mode == WatchFaceLoadingMode.ColdStart
     var showEscape by remember { mutableStateOf(false) }
     var escapeRequested by remember { mutableStateOf(false) }
-    LaunchedEffect(Unit) {
+    LaunchedEffect(coldStart) {
+        if (!coldStart) return@LaunchedEffect
         delay(ESCAPE_HATCH_DELAY_MS)
         showEscape = true
     }
 
-    // 加载没完成不允许退出：返回键吃掉。上滑应用列表 / 侧滑负一屏那些手势挂在
-    // 更外层的容器上，光靠下面的 pointerInput 拦不住，所以 LauncherScreen 那边
-    // 还有一道门控把它们整个停掉；这里是第二道防线。
-    BackHandler(enabled = true) {}
+    // 冷启动阶段加载没完成不允许退出：返回键吃掉。上滑应用列表 / 侧滑负一屏那些
+    // 手势挂在更外层的容器上，光靠下面的 pointerInput 拦不住，所以 LauncherScreen
+    // 那边还有一道门控把它们整个停掉；这里是第二道防线。
+    //
+    // 渲染等待阶段**不**吃返回键：那时桌面手势并没有被锁，吞掉返回键会让用户
+    // 觉得按不动。
+    BackHandler(enabled = coldStart) {}
 
     Box(
         modifier = modifier
@@ -86,9 +113,9 @@ fun WatchFaceLoadingScreen(
             verticalArrangement = Arrangement.Center,
             modifier = Modifier.padding(horizontal = 24.dp),
         ) {
-            InfiniteProgressIndicator(
-                color = Color.White,
+            FlueLoadingIndicator(
                 size = 28.dp,
+                usage = FlueLoadingIndicatorUsage.WATCH_FACE_LOADING,
             )
             Spacer(Modifier.height(14.dp))
             Text(

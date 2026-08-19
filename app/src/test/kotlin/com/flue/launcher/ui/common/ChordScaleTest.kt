@@ -126,13 +126,6 @@ class ChordScaleTest {
 
     @Test
     fun `tall market cards can explicitly opt into chord scaling`() {
-        val guarded = chordScaleForItemGeometry(
-            itemCenterY = 750f,
-            itemHeight = 600f,
-            viewportWidth = width,
-            screenCenterY = centerY,
-            allowTallItem = false,
-        )
         val marketCard = chordScaleForItemGeometry(
             itemCenterY = 750f,
             itemHeight = 600f,
@@ -141,8 +134,67 @@ class ChordScaleTest {
             allowTallItem = true,
         )
 
-        assertEquals(1f, guarded, 0f)
         assertTrue(marketCard < 1f)
         assertEquals(chordScaleForPosition(750f, width, centerY), marketCard, 0f)
+    }
+
+    /**
+     * 高项不再**突然**变成平铺。
+     *
+     * 这是老师报的「调大整体缩放后，有些选项没有鱼眼而是平铺、有些正常」的判据：
+     * 以前 `itemHeight > radius` 一律返回 1f，而全局缩放放大 density 会让一部分行
+     * 刚好越过这条线 —— 越线的平铺、没越线的照常缩，同一页混两种观感。
+     */
+    @Test
+    fun `crossing the tall-item threshold no longer snaps to no scaling`() {
+        val radius = width / 2f
+        fun scaleAt(height: Float) = chordScaleForItemGeometry(
+            itemCenterY = centerY + 300f,
+            itemHeight = height,
+            viewportWidth = width,
+            screenCenterY = centerY,
+        )
+
+        // 半径以内：与纯位置版逐值相同（改动前的行为，不能变）。
+        val short = scaleAt(radius - 1f)
+        assertEquals(chordScaleForPosition(centerY + 300f, width, centerY), short, 0f)
+
+        // 跨过阈值只允许极小的变化 —— 曾经是 0.8 → 1.0 的跳变。
+        val justOver = scaleAt(radius + 1f)
+        assertTrue(
+            "crossing the threshold jumped from $short to $justOver",
+            kotlin.math.abs(justOver - short) < 0.01f,
+        )
+
+        // 高度继续增长时单调回到 1f，且中途不越界。
+        var previous = short
+        for (multiple in 10..20) {
+            val scale = scaleAt(radius * multiple / 10f)
+            assertTrue("scale $scale should stay within [short, 1]", scale in short..1.0001f)
+            assertTrue("scale should grow with height", scale >= previous - 0.0001f)
+            previous = scale
+        }
+    }
+
+    /**
+     * 高到两倍半径以上的整段（编辑器那一大块按钮）仍然恒 1f。
+     *
+     * 老护栏的意图是对的 —— 一个 scale 代表不了那么高的一段，整块被夹到下限比
+     * 不缩放更难看。这一档继续吃圆屏的静态内边距。
+     */
+    @Test
+    fun `blocks taller than the diameter keep the old no-scaling behaviour`() {
+        listOf(0f, 200f, 400f).forEach { offset ->
+            assertEquals(
+                1f,
+                chordScaleForItemGeometry(
+                    itemCenterY = centerY + offset,
+                    itemHeight = width,
+                    viewportWidth = width,
+                    screenCenterY = centerY,
+                ),
+                0f,
+            )
+        }
     }
 }

@@ -29,12 +29,10 @@ class NativeAppListProjectionFactory {
     private var previousIconSources: Map<IconKey, ImageBitmap>? = null
     private var previousApps: List<AppInfo>? = null
     private var previousAppsReference: List<AppInfo>? = null
-    private var previousUseTwoTone: Boolean? = null
     private var previousProjection: NativeAppListProjection? = null
 
     fun project(
         apps: List<AppInfo>,
-        useTwoTone: Boolean,
     ): NativeAppListProjection {
         // Compose can re-enter this boundary for unrelated launcher state. If
         // the repository handed us the same immutable list, returning here
@@ -42,8 +40,7 @@ class NativeAppListProjectionFactory {
         // Compose ImageBitmap on the main thread.
         if (
             previousProjection != null &&
-            previousAppsReference === apps &&
-            previousUseTwoTone == useTwoTone
+            previousAppsReference === apps
         ) {
             return previousProjection!!
         }
@@ -56,7 +53,7 @@ class NativeAppListProjectionFactory {
             check(appsByKey.put(entry.key, app) == null) {
                 "App list keys must be unique: ${entry.key.value}"
             }
-            val image = app.iconForDisplay(useTwoTone)
+            val image = app.iconForDisplay()
             iconSources[entry.iconKey] = image
             val previousSource = previousIconSources?.get(entry.iconKey)
             val previousBitmap = previousIcons?.get(entry.iconKey)
@@ -103,7 +100,6 @@ class NativeAppListProjectionFactory {
         previousIcons = projection.content.iconsByKey
         previousIconSources = Collections.unmodifiableMap(LinkedHashMap(iconSources))
         previousAppsReference = apps
-        previousUseTwoTone = useTwoTone
         previousApps = Collections.unmodifiableList(ArrayList(apps))
         previousProjection = projection
         return projection
@@ -150,13 +146,12 @@ data class NativeAppListProjection(
 @Composable
 fun rememberNativeAppListProjection(
     apps: List<AppInfo>,
-    useTwoTone: Boolean,
 ): NativeAppListProjection {
     val factory = remember { NativeAppListProjectionFactory() }
     // Do not use `apps` as a Compose remember key: list equality walks every
     // AppInfo (including image wrappers) during unrelated recompositions. The
     // stateful factory performs cheap identity/content checks instead.
-    return factory.project(apps, useTwoTone)
+    return factory.project(apps)
 }
 
 fun AppInfo.toNativeAppListEntry(): AppListEntry = AppListEntry(

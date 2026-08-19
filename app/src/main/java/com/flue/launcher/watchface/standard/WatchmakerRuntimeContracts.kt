@@ -1,5 +1,6 @@
 package com.flue.launcher.watchface.standard
 
+import android.os.SystemClock
 import java.io.File
 import java.io.FileInputStream
 import java.io.InputStream
@@ -117,6 +118,144 @@ fun watchTextRingType(raw: String?): String = raw.orEmpty().trim().ifBlank { "1-
 
 /** Bounded high-density marker count; CloX accepts the sample's authored 600 ticks. */
 fun watchMarkerCount(raw: Float): Int = raw.roundToInt().coerceIn(1, 1_200)
+
+/** Studio 2.0 ring_image progress is a percentage over the authored sweep. */
+fun watchRingImageSweep(percent: Float, angleTotal: Float): Float {
+    val total = angleTotal.takeIf { it.isFinite() && it > 0f } ?: 360f
+    return total * (percent.takeIf(Float::isFinite)?.coerceIn(0f, 100f) ?: 0f) / 100f
+}
+
+/** Candidate bundled assets for Studio 2.0 sunarc/daylight layers. */
+fun watchStructuredAssetCandidates(type: String, presetOrMap: String?): List<String> =
+    when (type.lowercase()) {
+        "daylight" -> listOfNotNull(presetOrMap?.takeIf(String::isNotBlank)?.let { "daylight_$it.webp" })
+        "sunarc" -> listOfNotNull(presetOrMap?.takeIf(String::isNotBlank)?.let { "sunarc_$it.webp" })
+        // Studio bundles the three repeated-progress glyphs as regular image
+        // assets. Keep several exporter naming variants for old packages;
+        // missing files remain a no-op at render time.
+        "progress_image" -> presetOrMap
+            ?.trim()
+            ?.takeIf(String::isNotEmpty)
+            ?.let { shape ->
+                listOf(
+                    "progress_$shape.webp",
+                    "progress_$shape.png",
+                    "shapes/progress_$shape.webp",
+                    "shapes/progress_$shape.png",
+                )
+            }
+            .orEmpty()
+        else -> emptyList()
+    }
+
+/**
+ * `ring` 的端帽形状。
+ *
+ * @param rounding 端帽倒角，已夹在 `[0, 环厚/2]`。等于上限就是经典半圆帽。
+ * @param square Flue 自己早年加的 `end_style="square"`（clox 的 ring 不读 `end_style`）。
+ */
+data class WatchRingCap(val rounding: Float, val square: Boolean)
+
+/**
+ * 解析 `ring` 的端帽。
+ *
+ * 规范（`WM_FORMAT_1.0.md` §7.3）：`radius` 是**端帽倒角**，夹在 `[0, (外半径−内半径)/2]`，
+ * **省略时取上限** —— 上限正好让两个凸出角的圆角相接，退化成今天无条件在用的半圆帽。
+ * 所以没写 `radius` 的表盘一帧都不会变。
+ *
+ * `end_style` 只在 `radius` 缺席时起作用：它是 Flue 的扩展，留着是为了不回退按 Flue
+ * 写出来的表盘，但一旦作者写了规范里的 `radius`，就以 `radius` 为准。
+ *
+ * @param radiusValue 已求值的 `radius`；属性缺席 / 空白时传 `null`。
+ * @param stroke 环厚（外半径 − 内半径）。
+ */
+fun watchRingCap(radiusValue: Float?, endStyle: String?, stroke: Float): WatchRingCap {
+    val capMax = (stroke / 2f).coerceAtLeast(0f)
+    if (radiusValue != null) {
+        return WatchRingCap(radiusValue.coerceIn(0f, capMax), square = false)
+    }
+    return when {
+        endStyle.equals("butt", ignoreCase = true) -> WatchRingCap(0f, square = false)
+        endStyle.equals("square", ignoreCase = true) -> WatchRingCap(capMax, square = true)
+        else -> WatchRingCap(capMax, square = false)
+    }
+}
+
+/** `markers` / `markers_hm` 的刻度字形。 */
+enum class WatchMarkerGlyph { SQUARE, CIRCLE, TRIANGLE }
+
+/**
+ * 刻度字形的取值。
+ *
+ * `shape`（`Square` / `Circle` / `Triangle`）是 1.0 就有的字段，也是 clox 唯一读的那个。
+ * `markers_shape` 是 2.0 新增的「布局 / 圆角风格」（`Circle` 或 `Rounded`）—— **clox 的渲染器
+ * 根本不读它**，Studio 的导入器只拿它做「字形消歧」。所以这里只在 `shape` 缺席时让它顶上：
+ * `Circle` 当圆字形，`Rounded` 仍是方块（圆角另由调用方按它决定）。
+ */
+fun watchMarkerGlyph(shape: String?, markersShape: String?): WatchMarkerGlyph {
+    val explicit = shape?.trim()?.takeIf(String::isNotEmpty)
+    val effective = explicit ?: markersShape?.trim()?.takeIf(String::isNotEmpty)
+    return when {
+        effective.equals("Circle", ignoreCase = true) -> WatchMarkerGlyph.CIRCLE
+        effective.equals("Triangle", ignoreCase = true) -> WatchMarkerGlyph.TRIANGLE
+        else -> WatchMarkerGlyph.SQUARE
+    }
+}
+
+/** `markers_hm` 的一个档位：尺寸步进 + 字形。`step == 0` 表示这一套刻度不画。 */
+data class WatchMarkerPreset(
+    val step: Float,
+    val glyph: WatchMarkerGlyph = WatchMarkerGlyph.SQUARE,
+)
+
+/**
+ * `m_hour` / `m_minute` 档位。
+ *
+ * clox 的表只有 `None/Tiny/Small/Medium/Large` → `0/1/2/3/4`，缺省 `Medium`。
+ * `WM_FORMAT_2.0.md` 把这一列扩到 `None, Tiny, Small, Medium, Large, XLarge, Circle,
+ * Triangle` —— 后三个 clox 还不认。这里按最合理的方式落地：
+ *
+ * - `XLarge` 顺着 1/2/3/4 的数列取 **5**；
+ * - `Circle` / `Triangle` 是**字形**而不是尺寸，取 Medium 的尺寸配对应字形。
+ *
+ * 认不出来的值一律回落 Medium（而不是不画）：把刻度整层吞掉比画得略有出入糟得多。
+ */
+fun watchHourMinuteMarkerPreset(raw: String?): WatchMarkerPreset {
+    val value = raw.orEmpty().trim()
+    return when {
+        value.equals("None", ignoreCase = true) -> WatchMarkerPreset(0f)
+        value.equals("Tiny", ignoreCase = true) -> WatchMarkerPreset(1f)
+        value.equals("Small", ignoreCase = true) -> WatchMarkerPreset(2f)
+        value.equals("Large", ignoreCase = true) -> WatchMarkerPreset(4f)
+        value.equals("XLarge", ignoreCase = true) -> WatchMarkerPreset(5f)
+        value.equals("Circle", ignoreCase = true) ->
+            WatchMarkerPreset(MARKER_PRESET_MEDIUM, WatchMarkerGlyph.CIRCLE)
+        value.equals("Triangle", ignoreCase = true) ->
+            WatchMarkerPreset(MARKER_PRESET_MEDIUM, WatchMarkerGlyph.TRIANGLE)
+        else -> WatchMarkerPreset(MARKER_PRESET_MEDIUM)
+    }
+}
+
+private const val MARKER_PRESET_MEDIUM = 3f
+
+/**
+ * `squarify` —— 把刻度圈从圆形拉向方形。
+ *
+ * 与 clox 的 `squarifyRadius` 逐式相同：`r * ((1 - f) + f / max(|cos|, |sin|))`，
+ * `f = squarify / 100`。`0` 就是原样的圆；`100` 时四个对角方向被推到 √2 倍，圈变成正方形。
+ *
+ * 传进来的角度用**画布角度**（0° 在 3 点钟）都不影响结果：公式只用到 |cos| 与 |sin|，
+ * y 轴朝哪边、从哪里起算都一样。
+ */
+fun squarifiedRadius(radius: Float, angleDegrees: Float, squarifyPercent: Float): Float {
+    if (squarifyPercent <= 0f) return radius
+    val fraction = (squarifyPercent / 100f).coerceIn(0f, 1f)
+    val radians = Math.toRadians(angleDegrees.toDouble())
+    val maxAxis = max(abs(cos(radians)), abs(sin(radians))).toFloat()
+    // 极端角度下 max(|cos|,|sin|) 不可能真的到 0（两者不会同时为 0），但浮点上要防一手。
+    if (maxAxis < 1e-4f) return radius
+    return radius * ((1f - fraction) + fraction / maxAxis)
+}
 
 data class WatchTextRingItem(
     val label: String,
@@ -427,8 +566,10 @@ enum class WatchCanvasPreset {
 /**
  * 一套完整的画布调节参数。
  *
- * [DEFAULT] 必须等价于改动前的 `forceFill = false`，这样没配置过的表盘
- * 位置一个像素都不动。
+ * [DEFAULT] 是**中性变换**（FIT / zoom 1 / offset 0），拆双轴之前的输出与它逐位
+ * 相同，所以解码兜底、坏字段回落都用它。
+ *
+ * 出厂的**全局默认**是另一回事：见 [GLOBAL_DEFAULT]。
  */
 data class WatchCanvasSettings(
     val preset: WatchCanvasPreset = WatchCanvasPreset.FIT,
@@ -437,11 +578,23 @@ data class WatchCanvasSettings(
     val offsetX: Float = 0f,
     val offsetY: Float = 0f,
 ) {
-    /** 是否与出厂默认完全一致 —— 供 UI 决定要不要显示「已自定义」标记。 */
+    /** 是否与中性变换完全一致。 */
     val isDefault: Boolean get() = this == DEFAULT
 
     companion object {
+        /** 中性变换：解码兜底与坏字段回落用这一份，不是出厂默认。 */
         val DEFAULT = WatchCanvasSettings()
+
+        /**
+         * 出厂的全局默认铺法：**铺满**。
+         *
+         * 与 [DEFAULT] 分开是刻意的 —— 前者是「没配置时用什么」，后者是「解析不出
+         * 来时退回什么」。合成一个的话，改默认铺法会顺手改掉所有坏数据的回落值。
+         *
+         * 存量用户若显式动过旧的 `watchmaker_force_fill` 开关，读路径仍尊重那个
+         * 选择（见 `LauncherViewModel` 的画布默认加载），只有从没配置过的才吃这个。
+         */
+        val GLOBAL_DEFAULT = WatchCanvasSettings(preset = WatchCanvasPreset.FILL)
 
         /** 存量全局开关的等价配置，供迁移期使用。 */
         fun fromForceFill(forceFill: Boolean): WatchCanvasSettings = WatchCanvasSettings(
@@ -570,16 +723,22 @@ internal fun watchCanvasTransform(
     offsetY = settings.offsetY,
 )
 
-/** 缩放倍率的合法区间。下限不取 0：0 会让画布彻底消失且无法交互退回。 */
-private const val MIN_CANVAS_ZOOM = 0.1f
-private const val MAX_CANVAS_ZOOM = 5f
+/**
+ * 缩放倍率的合法区间。下限不取 0：0 会让画布彻底消失且无法交互退回。
+ *
+ * 区间刻意比画布调节滑块的量程宽 —— 手输框只校验 `isFinite()`（见
+ * `canvasInputValueOrNull`），滑块量程只管手感，真正的上下限只有这一处。
+ * 上限也不敢真放开：zoom 取到 1e9 会让变换矩阵退化，画面直接空掉。
+ */
+private const val MIN_CANVAS_ZOOM = 0.01f
+private const val MAX_CANVAS_ZOOM = 20f
 
 /**
  * 偏移上限（**视图像素**，因为它直接加在 view 空间的 `left`/`top` 上）。
  *
- * 4096 远大于任何手表屏，够用；它挡的是脏配置把表盘整块推出屏幕后再也调不回来。
+ * 16384 远大于任何手表屏，够用；它挡的是脏配置把表盘整块推出屏幕后再也调不回来。
  */
-private const val MAX_CANVAS_OFFSET = 4_096f
+private const val MAX_CANVAS_OFFSET = 16_384f
 
 private fun Float.sanitizedCanvasZoom(): Float =
     if (isFinite()) coerceIn(MIN_CANVAS_ZOOM, MAX_CANVAS_ZOOM) else 1f
@@ -602,6 +761,77 @@ fun watchFaceShape(raw: String?): WatchFaceShape {
         else -> WatchFaceShape.UNKNOWN
     }
 }
+
+/** [watchRenderReadiness] 的三种结论。 */
+enum class WatchRenderReadiness {
+    /** 就绪：这一帧画出来的就是完整画面，加载页可以撤了。 */
+    READY,
+
+    /**
+     * 还在等，但**不需要**额外推帧：有在飞的解码，每个解码完成都会 `invalidate()`，
+     * 下一帧自然会来，届时重新判定。
+     */
+    WAITING,
+
+    /**
+     * 还在等，而且一个在飞的解码都没有 —— 本帧要画的素材没能拿到解码额度
+     * （常见于上一代表盘的取消请求还占着并发槽）。这种情况没人会来叫醒我们，
+     * 必须自己 `postInvalidateOnAnimation()` 推下一帧。
+     */
+    RETRY_NEXT_FRAME,
+}
+
+/**
+ * 「表盘渲染就绪」判定 —— 决定桌面那层加载页什么时候能撤。
+ *
+ * 为什么需要它：`watchFaceSelectionReady` 只表示「偏好读完、磁盘扫完，知道该显示
+ * 哪块表盘」，与那块表盘渲染到哪一步毫无关系。而 `prepareSource()` 只解析 watch.xml
+ * 并建渲染计划，**一张位图都不解码** —— 位图 / GIF / 字体全是绘制期按需异步加载。
+ * 所以连 `onSourceReady` 都只等于「结构就绪」，图还没来。老师报的「冷启动加载页直接
+ * 消失、过一会儿表盘才好」就是这个缝。
+ *
+ * 判定用**静默条件**：这一趟绘制结束时，本代没有在飞的资产加载，且本帧没有
+ * 「该画却拿不到素材」的图层。注意不能只看「加载表是空的」—— 第一次绘制**之前**
+ * 表天然是空的（还没人请求任何素材），所以必须绘完一趟再判，并在之后每帧重判。
+ *
+ * 这个函数只做判定、不碰状态，方便直接单测。调用方在 `onDraw` 末尾调。
+ *
+ * @param faceVisible 表盘当前是否可见。不可见时立即算就绪 —— 拿加载页盖一块看不见的
+ *   表盘没有意义，而且不可见时 tick 不跑，可能一帧都不再绘。
+ * @param sourceReady 结构是否就绪（`loadedDescriptorKey` / `loadedRefreshToken` 与当次
+ *   bind 对齐）。没就绪时画面是纯黑，当然不能撤。
+ * @param transitionFrameVisible 跨表盘过渡帧（上一块表盘的快照）是否还盖在上面。
+ *   盖着就说明新表盘还没露出来，撤加载页只会露出旧表盘。
+ * @param pendingAssetLoads 本代在飞的资产解码数量。
+ * @param frameHasUnreadyVisualAsset 本帧有图层解析出了素材引用，却既没位图也没 Movie。
+ * @param holdExpired 保底时限是否已到。**失败的素材算已结算**（进了 failure 冷却表就
+ *   不再有在飞的解码），但「解析得到却永远拿不到」的素材会让上一项一直为真，
+ *   所以必须有这道闸 —— 否则一个坏素材能把加载页顶满整个失败重试冷却期。
+ */
+fun watchRenderReadiness(
+    faceVisible: Boolean,
+    sourceReady: Boolean,
+    transitionFrameVisible: Boolean,
+    pendingAssetLoads: Int,
+    frameHasUnreadyVisualAsset: Boolean,
+    holdExpired: Boolean,
+): WatchRenderReadiness {
+    if (!sourceReady) return WatchRenderReadiness.WAITING
+    if (!faceVisible) return WatchRenderReadiness.READY
+    if (holdExpired) return WatchRenderReadiness.READY
+    if (transitionFrameVisible) return WatchRenderReadiness.WAITING
+    if (pendingAssetLoads > 0) return WatchRenderReadiness.WAITING
+    if (frameHasUnreadyVisualAsset) return WatchRenderReadiness.RETRY_NEXT_FRAME
+    return WatchRenderReadiness.READY
+}
+
+/**
+ * 渲染就绪的保底时限，从 bind 建立新代开始计。
+ *
+ * 4 秒远长于本地素材解码所需（重表盘也在 1~2 秒量级），又短到出问题时不会让用户
+ * 觉得是死机。桌面那层还有各自的硬揭开兜底，这里是第一道。
+ */
+const val WATCH_RENDER_READY_MAX_HOLD_MS = 4_000L
 
 /**
  * A validated, read-only font index. Building the index performs all file I/O
@@ -784,6 +1014,93 @@ data class WatchDataSnapshot(
     val weatherTemperatureUnit: String? = null,
     val weatherHumidity: Int? = null,
     val weatherLocation: String? = null,
+
+    // ── 以下是 N5 为「已认识但无数据」的那批变量补的数据源 ──────────────────
+    // 全部由 provider 侧填（要 Context / 系统服务），解析器仍是纯函数。
+    // 单位一律取**规范单位**（字节、摄氏度、米、毫秒、度），换算与格式化留在解析器里，
+    // 免得同一个量在快照里出现两种单位。
+
+    /** {btc} / {btf} / {btcd} / {btfd}。摄氏度，来自电池广播的 EXTRA_TEMPERATURE。 */
+    val batteryTemperatureCelsius: Float? = null,
+
+    /** {amu} / {amf} / {amt} 一族。字节。 */
+    val ramUsedBytes: Long? = null,
+    val ramFreeBytes: Long? = null,
+    val ramTotalBytes: Long? = null,
+
+    /** {adsu} / {adsf} / {adst} 一族。字节，取内部存储卷。 */
+    val storageUsedBytes: Long? = null,
+    val storageFreeBytes: Long? = null,
+    val storageTotalBytes: Long? = null,
+
+    /** {aman} / {amodel} / {aname} / {aosv} / {awname}。 */
+    val deviceManufacturer: String? = null,
+    val deviceModel: String? = null,
+    val deviceName: String? = null,
+    val osVersion: String? = null,
+    val watchName: String? = null,
+
+    /** {around} / {atyre}。圆屏与「扁轮胎」（底部截平的圆屏）。 */
+    val screenRound: Boolean? = null,
+    val screenFlatTyre: Boolean? = null,
+
+    /** {avol} 媒体音量 0–100、{abrt} 屏幕亮度 0–255。 */
+    val volumePercent: Int? = null,
+    val screenBrightness: Int? = null,
+
+    /** {alowpw} 省电模式、{adark} 深色模式。 */
+    val lowPowerMode: Boolean? = null,
+    val darkMode: Boolean? = null,
+
+    /** {areboot} 上次重启时刻，`yyyy-MM-dd HH:mm`。 */
+    val lastRebootText: String? = null,
+
+    /**
+     * {abright} 是否亮屏（非息屏）、{adimlo} 息屏是否只支持低位色、
+     * {abss} / {abssl} 亮屏以来的毫秒数（息屏时按规范给 -1）。
+     */
+    val brightMode: Boolean? = null,
+    val dimLowBitOnly: Boolean? = null,
+    val millisSinceBright: Long? = null,
+
+    /** {scr} / {sct} / {scb} 一族。罗盘方位角 0–360（0 = 北）。 */
+    val compassHeadingDegrees: Float? = null,
+
+    /** {alat} / {alon} / {aalt} 一族。复用天气那份已授权的定位，不另外申请权限。 */
+    val latitude: Double? = null,
+    val longitude: Double? = null,
+    val altitudeMeters: Double? = null,
+
+    /** {sw*} 一族。由 `sw_start_stop` / `sw_reset` 点击动作驱动（见 [WatchStopwatch]）。 */
+    val stopwatchRunning: Boolean? = null,
+    val stopwatchElapsedMs: Long? = null,
+
+    /**
+     * {cex} 与 {cNxx} 一族的日程。
+     *
+     * **null 与空列表语义不同**：null = 读不到（没授权 / 没开这个功能），走 Unavailable
+     * 渲染 `--`；空列表 = 读到了、确实没有日程，于是 {cex} 是 "false"。混成一个的话
+     * 「没授权」会被显示成「今天没有安排」，那是在骗用户。
+     */
+    val calendarEvents: List<WatchCalendarEvent>? = null,
+)
+
+/**
+ * 一条日程。字段与 WM_TAGS.md §Calendar 的 {cNxx} 一一对应。
+ *
+ * 纯数据：读 `CalendarContract` 的活由宿主侧做（要 Context 与权限），解析器只负责把
+ * 它格式化成表盘要的样子。
+ */
+data class WatchCalendarEvent(
+    val id: String? = null,
+    val title: String? = null,
+    val location: String? = null,
+    val calendarName: String? = null,
+    /** `RRGGBB`，不带 `#` —— 与 {ucolor} 一族同一形状。 */
+    val colorRgb: String? = null,
+    val allDay: Boolean = false,
+    val beginEpochMs: Long? = null,
+    val endEpochMs: Long? = null,
 )
 
 fun interface WatchDataProvider {
@@ -896,6 +1213,13 @@ data class WatchWeatherSnapshot(
     val temperatureUnit: String? = null,
     val humidity: Int? = null,
     val location: String? = null,
+    /**
+     * {wws} 风速。规范说的是「mph 或 m/s」—— 我们统一存 **m/s**，因为数据源
+     * （Open-Meteo）本来就能直接要 m/s，不必在渲染侧再猜一遍单位。
+     */
+    val windSpeedMetersPerSecond: Double? = null,
+    /** {wwd} / {wwdb} / {wwdbb} 风向，气象学约定：度数是风**来自**的方向，0 = 北。 */
+    val windDirectionDegrees: Double? = null,
 )
 
 /**
@@ -985,6 +1309,54 @@ object WatchNotificationCounts {
     }
 
     internal fun current(): Int = count
+}
+
+/**
+ * 表盘共享的秒表。`{sw*}` 一族读它，`sw_start_stop` / `sw_reset` 两个点击动作驱动它。
+ *
+ * ## 为什么是进程级单例
+ *
+ * 与 CloX 一致：秒表是**一块表盘共享的一个**，不是每个图层一份 —— 表盘上通常有好几个
+ * 图层同时显示时/分/秒，它们必须读同一个计时。上游把它放在渲染层
+ * （`WM_TAP_ACTIONS.md` §6：`sw_start_stop` / `sw_reset` 由渲染器处理、没有 Java handler），
+ * 所以这里也不经宿主，直接由 provider 读进快照。
+ *
+ * 计时基准用 [android.os.SystemClock.elapsedRealtime] 的语义（由调用方传入 `nowMs`）
+ * 而不是墙上时钟：改系统时间或跨时区不该让秒表跳。
+ */
+object WatchStopwatch {
+    private val lock = Any()
+
+    /** 正在跑时的起点；停着时为 null。 */
+    private var startedAtMs: Long? = null
+
+    /** 之前几段跑过的累计。 */
+    private var accumulatedMs: Long = 0L
+
+    val isRunning: Boolean get() = synchronized(lock) { startedAtMs != null }
+
+    /** 到 [nowMs] 为止的累计毫秒。 */
+    fun elapsedMs(nowMs: Long): Long = synchronized(lock) {
+        val started = startedAtMs ?: return accumulatedMs
+        (accumulatedMs + (nowMs - started)).coerceAtLeast(0L)
+    }
+
+    /** `sw_start_stop`：跑着就停、停着就跑。 */
+    fun toggle(nowMs: Long) = synchronized(lock) {
+        val started = startedAtMs
+        if (started == null) {
+            startedAtMs = nowMs
+        } else {
+            accumulatedMs = (accumulatedMs + (nowMs - started)).coerceAtLeast(0L)
+            startedAtMs = null
+        }
+    }
+
+    /** `sw_reset`：归零并停表。 */
+    fun reset() = synchronized(lock) {
+        startedAtMs = null
+        accumulatedMs = 0L
+    }
 }
 
 /** Converts legacy string weather payloads into the typed Celsius contract. */
@@ -1568,6 +1940,39 @@ internal fun WatchTagResolution.expressionValue(): String? = when (this) {
 }
 
 /**
+ * 属性表达式路径的取值：**缺数据的变量给中性 0，而不是 nil**。
+ *
+ * ## 为什么不能给 nil
+ *
+ * 属性表达式代入 nil 之后，一进算术或比较就整条求值失败，于是属性**落回默认值** ——
+ * opacity 落回 100、x/y 落回 0。也就是说少认识一个变量，代价不是那一个字段显示异常，
+ * 而是整块表盘看起来加载不了：图层全亮叠在一起，或者全部堆到左上角。老师转述的
+ * 「编辑器缺少关键变量导致加载不了」就是这个。同一个机理之前还以另一种面目出现过一次
+ * （表达式长度上限卡住 9 条天气图标的 opacity，九个图标同时全亮）。
+ *
+ * 给 0 之后，缺变量只影响真正读它的那一个字段，其余图层照常。上游 CloX 走的是同一个
+ * 思路 —— 它的引擎把未知变量登记成静态 `""`（`wf_expr.lua` 的 `engine:activate`），
+ * 表达式照样算得完，而不是让整条式子废掉。我们这边属性是数值语境，中性值取 0。
+ *
+ * ## 为什么 Lua 那条路不改
+ *
+ * [expressionValue] 仍然保留 nil：Lua 脚本里 `0` 是**真值**，把 nil 换成 0 会让
+ * `if wm_tag("cal") then` 从走假分支变成走真分支，那是把一类问题换成另一类。脚本作者
+ * 是按 nil 语义写的，那条路照旧。
+ *
+ * 文本语境也不走这里：模板节点只取 [WatchTagResolution.Resolved] 的
+ * [WatchTagResolution.renderedValue]，缺数据自然落成空串 / `--`。
+ */
+internal fun WatchTagResolution.attributeExpressionValue(): String? = when (this) {
+    is WatchTagResolution.Resolved -> renderedValue
+    is WatchTagResolution.Unavailable -> expressionFallback ?: MISSING_TAG_NEUTRAL_VALUE
+    is WatchTagResolution.Unsupported -> MISSING_TAG_NEUTRAL_VALUE
+}
+
+/** 属性表达式里「这个变量没有值」的中性替身。见 [attributeExpressionValue]。 */
+internal const val MISSING_TAG_NEUTRAL_VALUE: String = "0"
+
+/**
  * Bounded, immutable variables visible to attribute expressions. Only simple
  * top-level `var_* = literal` declarations are imported; function bodies and
  * executable Lua statements are never run by the Canvas fallback runtime.
@@ -1682,9 +2087,17 @@ object WatchmakerTagResolver {
         "weather", "wp", "wr",
         "cal", "calendar", "next_event",
         "phone_battery", "pbl", "pblp", "pbc",
-        "bv", "bi", "btc", "btf",
-        "alat", "alon",
+        "bv", "bi",
         "sax", "say", "saz", "sprs", "pwc", "nwip", "nc", "ncc", "ncs", "ngc",
+        // ── 以下都是「词表里认识、但 Flue 没有数据源」──────────────────────
+        // 认识就够了：走 Unavailable 渲染 `--`、在属性表达式里取中性 0，表盘照样
+        // 加载，只有真正读它的那个字段显示不可用。不认识才是灾难 —— 那会让含它的
+        // 表达式整条失败、属性落回默认值，整块表盘看起来加载不了。
+        //
+        // 手机电池温度：独立手表没有配对手机，本机温度走 {btc}/{btf}。
+        "pbtc", "pbtf", "pbtcd", "pbtfd",
+        // what3words 需要第三方服务与 API key。
+        "aw3w", "aw3w1", "aw3w2", "aw3w3",
     )
 
     private val builtInTags = setOf(
@@ -1693,7 +2106,7 @@ object WatchmakerTagResolver {
         "dm", "dmz", "ds", "dsz", "dss", "dssz", "dsps",
         "drss", "drs", "drms", "drm", "drm0", "drh", "drh0", "drh24", "drmh24",
         "dz", "dzz", "dtp",
-        "dd", "ddz", "ddw0", "ddw", "ddw1", "ddw2", "ddww",
+        "dd", "ddz", "ddy", "ddw0", "ddw", "ddw1", "ddw2", "ddww",
         "dn", "dnn", "dnnn", "dnnnn", "dy", "dyy", "dyyyy",
         // {dw} = 一年中的第几周（**不是**星期几），{ddim} = 本月天数。
         "dw", "ddim",
@@ -1724,6 +2137,47 @@ object WatchmakerTagResolver {
         "wfdh", "wfdl", "wfdct", "wfdci",
         "wfeh", "wfel", "wfect", "wfeci",
         "ucolor",
+        // ── 以下是本次按 WM_TAGS.md 补齐的、能就地算出真值的部分 ──────────────
+        // 日期时间派生：位数提取、字钟读法、Unix 秒、UTC 偏移、今年天数、本月周序。
+        "dh23i", "depoch", "dutcoff", "ddiy", "dwm",
+        "dh23tt", "dh23to", "dhtt", "dhto", "dh11tt", "dh11to", "dh24tt", "dh24to",
+        "dmt", "dmo", "dst", "dso",
+        "dht", "dh24t", "dmat", "dmtt", "dmot", "dsat", "dstt", "dsot",
+        // 时区 1 = 设备当前时区，全部可由 TimeZone 算出。2/3 需要用户另配，见
+        // knownUnavailableTags 的族正则。
+        "tz1l", "tz1ll", "tz1o", "tz1om", "tz1dst", "tz1t", "tz1rh", "tz1rh24", "tz1rm",
+        // 语言全名 / 系统名 / 蓝牙开关。
+        "alangfull", "aos", "abtc",
+        // 配色切换器的另外三档。
+        "ucolor2", "ucolor3", "ucolor_b",
+        // 日出日落在一天中的位置（由已有的 sunriseText/sunsetText 换算）。
+        "wsrp", "wssp",
+        // 本机电量旋转值。
+        "br",
+        // ── N5 接上数据源之后从 knownUnavailableTags 移过来的 ────────────────
+        // 罗盘（磁力计 + 加速度计融合）。
+        "scr", "sct", "sctd", "scb", "scbb", "sctdb", "sctdbb",
+        // 电池温度（电池广播的 EXTRA_TEMPERATURE）。
+        "btc", "btf", "btcd", "btfd",
+        // 设备与系统信息。
+        "aosv", "aname", "amodel", "aman", "awname", "around", "atyre",
+        "avol", "abrt", "alowpw", "adark", "areboot", "abright", "adimlo", "abss", "abssl",
+        // 内存与存储。
+        "amu", "amuf", "amup", "amf", "amff", "amfp", "amt", "amtf",
+        "adsu", "adsuf", "adsup", "adsf", "adsff", "adsfp", "adst", "adstf",
+        // 位置（复用天气那份已授权的定位）。
+        "alat", "alon", "alatd", "alatdd", "alond", "alondd", "aalt",
+        // 风。
+        "wws", "wwd", "wwdb", "wwdbb",
+        // 秒表（由 sw_start_stop / sw_reset 点击动作驱动）。
+        "swr", "swh", "swm", "sws", "swss", "swsss", "swsst",
+        "swrm", "swrs", "swrss",
+        // 健康扩展。没有健康数据源时与 clox 逐位同值（0 与硬编码目标），不是 `--`。
+        "scal", "stcal", "scalp", "sdst", "stdst", "sdstp", "sdstu",
+        "hfc", "ham", "htam", "hae", "htae", "has", "htas",
+        // 日程「有没有」。逐条事件 {cNxx} 由 CALENDAR_EVENT_TAG 族覆盖，两者共用
+        // 同一份 snapshot.calendarEvents。
+        "cex",
     )
 
     private val utcCapableTags = setOf(
@@ -1736,7 +2190,10 @@ object WatchmakerTagResolver {
     )
 
     private val fastTickTagPattern = Regex(
-        "\\{\\s*(?:utc_?)?(?:dssz?|dsps|drss|drms|drm|dtp)(?:_?utc)?\\s*\\}",
+        "\\{\\s*(?:utc_?)?(?:dssz?|dsps|drss|drms|drm|dtp)(?:_?utc)?\\s*\\}" +
+            // 秒表的亚秒读数：厘秒 / 毫秒 / 总毫秒 / 带毫秒平滑的秒针。
+            // 长的分支必须在前，否则 `swsss` 会先被 `swss` 吃掉。
+            "|\\{\\s*(?:swsss|swsst|swss|swrss)\\s*\\}",
         RegexOption.IGNORE_CASE,
     )
 
@@ -1748,8 +2205,106 @@ object WatchmakerTagResolver {
             utcBaseTag(normalized) != null ||
             forecastTagParts(normalized) != null ||
             hourlyForecastTagParts(normalized) != null ||
-            futureWeekdayTagParts(normalized) != null
+            futureWeekdayTagParts(normalized) != null ||
+            isUnavailableFamilyTag(normalized)
     }
+
+    /**
+     * 成族出现、我们暂时都没有数据源的标签。
+     *
+     * 写成正则而不是把几百个名字铺进集合：这三族分别是 10 × 16、4 × 5、2 × 9 条，
+     * 铺开将近 250 行，而且以后上游把日程从 10 条扩到 20 条时，正则不用改。
+     *
+     * 依然必须**认识**它们 —— 认识才会走 Unavailable（渲染 `--`、表达式里取中性 0），
+     * 不认识会让含它的表达式整条失败、属性落回默认值。
+     */
+    private fun isUnavailableFamilyTag(tag: String): Boolean =
+        CALENDAR_EVENT_TAG.matches(tag) ||
+            COMPLICATION_TAG.matches(tag) ||
+            ALTERNATE_TIMEZONE_TAG.matches(tag)
+
+    /**
+     * 日程标签求值。
+     *
+     * 返回 null 有两种情形，都该落到 Unavailable（`--`）：日程读不到
+     * （[WatchDataSnapshot.calendarEvents] 是 null），或者那个序号没有对应的日程
+     * （只有 2 条日程时的 {c5t}）。**唯独 {cNex} 例外** —— 它问的就是「有没有第 N 条」，
+     * 所以在能读到日程的前提下必须答 "false" 而不是 `--`。
+     */
+    private fun resolveCalendarTag(
+        tag: String,
+        snapshot: WatchDataSnapshot,
+        now: Calendar,
+    ): String? {
+        val events = snapshot.calendarEvents ?: return null
+        if (tag == "cex") return events.isNotEmpty().toString()
+        val match = CALENDAR_EVENT_TAG_PARTS.matchEntire(tag) ?: return null
+        val index = match.groupValues[1].toIntOrNull()?.minus(1) ?: return null
+        val field = match.groupValues[2]
+        val event = events.getOrNull(index)
+        if (field == "ex") return (event != null).toString()
+        if (event == null) return null
+        return when (field) {
+            "t" -> event.title?.takeIf(String::isNotBlank)
+            "l" -> event.location?.takeIf(String::isNotBlank)
+            "cal" -> event.calendarName?.takeIf(String::isNotBlank)
+            "c" -> event.colorRgb?.takeIf(String::isNotBlank)
+            "i" -> event.id?.takeIf(String::isNotBlank)
+            "ad" -> event.allDay.toString()
+            "b" -> event.beginEpochMs?.let { clockTextAt(it, now) }
+            "e" -> event.endEpochMs?.let { clockTextAt(it, now) }
+            "bd" -> event.beginEpochMs?.let { dateTextAt(it, now) }
+            "ed" -> event.endEpochMs?.let { dateTextAt(it, now) }
+            // 旋转值与百分比都是「在一天当中的位置」，只是量程不同（360 / 100）。
+            "br" -> event.beginEpochMs?.let { renderCompactNumber(dayFractionAt(it, now) * 360f) }
+            "bp" -> event.beginEpochMs?.let { renderCompactNumber(dayFractionAt(it, now) * 100f) }
+            "er" -> event.endEpochMs?.let { renderCompactNumber(dayFractionAt(it, now) * 360f) }
+            "ep" -> event.endEpochMs?.let { renderCompactNumber(dayFractionAt(it, now) * 100f) }
+            else -> null
+        }
+    }
+
+    /** 与 [CALENDAR_EVENT_TAG] 同一套分支，只是这里要把序号与字段名捕获出来。 */
+    private val CALENDAR_EVENT_TAG_PARTS =
+        Regex("^c(10|[1-9])(ex|bd|br|bp|ed|er|ep|cal|ad|t|b|e|l|c|i)$")
+
+    private fun calendarAtSameZone(epochMs: Long, now: Calendar): Calendar =
+        Calendar.getInstance(now.timeZone).apply { timeInMillis = epochMs }
+
+    private fun clockTextAt(epochMs: Long, now: Calendar): String =
+        calendarAtSameZone(epochMs, now).let {
+            "%02d:%02d".format(it.get(Calendar.HOUR_OF_DAY), it.get(Calendar.MINUTE))
+        }
+
+    private fun dateTextAt(epochMs: Long, now: Calendar): String =
+        calendarAtSameZone(epochMs, now).let {
+            "%04d-%02d-%02d".format(
+                it.get(Calendar.YEAR),
+                it.get(Calendar.MONTH) + 1,
+                it.get(Calendar.DAY_OF_MONTH),
+            )
+        }
+
+    private fun dayFractionAt(epochMs: Long, now: Calendar): Float =
+        calendarAtSameZone(epochMs, now).let {
+            (it.get(Calendar.HOUR_OF_DAY) * 60 + it.get(Calendar.MINUTE)) / 1_440f
+        }
+
+    /**
+     * 日程 1–10 的各字段（WM_TAGS.md §Calendar）。
+     *
+     * 交替分支**必须长的在前**：`bd` / `br` / `bp` 要先于 `b`，`ed` / `er` / `ep`
+     * 先于 `e`，`cal` 先于 `c`，否则 `c1bd` 会在 `b` 上匹配掉、剩下的 `d` 让整条失配。
+     */
+    private val CALENDAR_EVENT_TAG =
+        Regex("^c(?:10|[1-9])(?:ex|bd|br|bp|ed|er|ep|cal|ad|t|b|e|l|c|i)$")
+
+    /** 复杂功能槽 1–4 的字段（Studio 的 20 条 m 标签）。 */
+    private val COMPLICATION_TAG = Regex("^m[1-4](?:text|title|value|min|max)$")
+
+    /** 时区 2 / 3。同理长分支在前：`ll` 先于 `l`、`rh24` 先于 `rh`、`om` 先于 `o`。 */
+    private val ALTERNATE_TIMEZONE_TAG =
+        Regex("^tz[23](?:ll|rh24|rh|rm|dst|om|o|l|t)$")
 
     /** Shared high-refresh vocabulary for runtime and editor preview. */
     fun requiresFastTicks(raw: String): Boolean =
@@ -1830,6 +2385,8 @@ object WatchmakerTagResolver {
                 ?.take(2)
             "ddww" -> effectiveNow.getDisplayName(Calendar.DAY_OF_WEEK, Calendar.LONG, locale)
                 ?.trimEnd('.')
+            // CloX wf_tagdefs.lua:235: c.t.yday，1 月 1 日为 1。
+            "ddy" -> effectiveNow.get(Calendar.DAY_OF_YEAR).toString()
             // WM_TAGS.md:538 —— {dn} = Month number (1–12)。此前只实现了
             // dnn/dnnn/dnnnn，漏掉 dn 本体，用它的表盘月份直接渲染成不可用。
             "dn" -> (effectiveNow.get(Calendar.MONTH) + 1).toString()
@@ -1862,11 +2419,209 @@ object WatchmakerTagResolver {
                     effectiveNow.get(Calendar.SECOND) * 1_000L +
                     effectiveNow.get(Calendar.MILLISECOND)).toFloat() / 86_400_000f,
             )
+            // {dh23i} = 恒 24 小时制、忽略设备的 12/24 设置。我们的 {dh23} 读的就是
+            // Calendar.HOUR_OF_DAY，本来就不受设备设置影响，所以两者同值。
+            "dh23i" -> hour24.toString()
+            // Unix 秒。WM_TAGS.md:468。
+            "depoch" -> (effectiveNow.timeInMillis / 1_000L).toString()
+            // ±HHMM。WM_TAGS.md:455 的例子是 `+0800`（没有冒号，与 {tz1o} 不同）。
+            "dutcoff" -> formatUtcOffsetCompact(
+                effectiveNow.timeZone.getOffset(effectiveNow.timeInMillis),
+            )
+            // 今年天数 365/366。注意与 {ddy}（今天是第几天）区分。
+            "ddiy" -> effectiveNow.getActualMaximum(Calendar.DAY_OF_YEAR).toString()
+            // 本月第几周 1–5。
+            "dwm" -> effectiveNow.get(Calendar.WEEK_OF_MONTH).toString()
+            // 位数提取（WM_TAGS.md §Digit Extraction）。全是纯算术，没有数据源。
+            "dh23tt" -> (hour24 / 10).toString()
+            "dh23to" -> (hour24 % 10).toString()
+            "dhtt" -> (hour12 / 10).toString()
+            "dhto" -> (hour12 % 10).toString()
+            "dh11tt" -> ((hour24 % 12) / 10).toString()
+            "dh11to" -> ((hour24 % 12) % 10).toString()
+            "dh24tt" -> (if (hour24 == 0) 24 else hour24).let { it / 10 }.toString()
+            "dh24to" -> (if (hour24 == 0) 24 else hour24).let { it % 10 }.toString()
+            "dmt" -> (effectiveNow.get(Calendar.MINUTE) / 10).toString()
+            "dmo" -> (effectiveNow.get(Calendar.MINUTE) % 10).toString()
+            "dst" -> (effectiveNow.get(Calendar.SECOND) / 10).toString()
+            "dso" -> (effectiveNow.get(Calendar.SECOND) % 10).toString()
+            // 文字读法（WM_TAGS.md §Text Representations）。英文 —— 上游那张拆分表
+            // 就是英文的（`o'clock` / `o'three` / `forty six`），换成本地语言会让
+            // 按它排版的字钟表盘直接错位。
+            "dht" -> englishNumberWord(hour12)
+            "dh24t" -> englishNumberWord(if (hour24 == 0) 24 else hour24)
+            "dmat" -> wordClockFull(effectiveNow.get(Calendar.MINUTE))
+            "dmtt" -> wordClockTens(effectiveNow.get(Calendar.MINUTE))
+            "dmot" -> wordClockOnes(effectiveNow.get(Calendar.MINUTE))
+            "dsat" -> wordClockFull(effectiveNow.get(Calendar.SECOND))
+            "dstt" -> wordClockTens(effectiveNow.get(Calendar.SECOND))
+            "dsot" -> wordClockOnes(effectiveNow.get(Calendar.SECOND))
+            // 时区 1 = 设备当前时区（WM_TAGS.md §Time Zone 1）。2 / 3 需要用户另外
+            // 配置两个时区，我们没有那份设置，交给 knownUnavailableTags 渲染 --。
+            "tz1l" -> effectiveNow.timeZone.id.substringAfterLast('/').replace('_', ' ')
+            "tz1ll" -> effectiveNow.timeZone.id
+            "tz1o" -> formatUtcOffsetColon(
+                effectiveNow.timeZone.getOffset(effectiveNow.timeInMillis),
+            )
+            "tz1om" -> (effectiveNow.timeZone.getOffset(effectiveNow.timeInMillis) / 60_000).toString()
+            "tz1dst" -> effectiveNow.timeZone.inDaylightTime(effectiveNow.time).toString()
+            "tz1t" -> "%02d:%02d".format(hour24, effectiveNow.get(Calendar.MINUTE))
+            "tz1rh" -> renderCompactNumber(
+                (hour24 % 12 + effectiveNow.get(Calendar.MINUTE) / 60f) * 30f,
+            )
+            "tz1rh24" -> renderCompactNumber(
+                (hour24 + effectiveNow.get(Calendar.MINUTE) / 60f) * 15f,
+            )
+            "tz1rm" -> renderCompactNumber(
+                (effectiveNow.get(Calendar.MINUTE) + effectiveNow.get(Calendar.SECOND) / 60f) * 6f,
+            )
+            // 语言全名（{alangcode} / {alangreg} 已有）。
+            "alangfull" -> locale.getDisplayLanguage(locale).takeIf(String::isNotBlank)
+            // 系统名。这是个常量，没有数据源可缺。
+            "aos" -> "Android"
+            // 蓝牙是否开启。快照里的 bluetoothEnabled 正是这个语义
+            // （{nbc} 是「已连接」，两者不同）。
+            "abtc" -> snapshot.bluetoothEnabled?.toString()
+
+            // ── 设备与系统（N5：由 provider 读进快照，解析器仍是纯函数）────────
+            "aosv" -> snapshot.osVersion
+            "aname" -> snapshot.deviceName
+            "amodel" -> snapshot.deviceModel
+            "aman" -> snapshot.deviceManufacturer
+            "awname" -> snapshot.watchName
+            "around" -> snapshot.screenRound?.toString()
+            "atyre" -> snapshot.screenFlatTyre?.toString()
+            "adark" -> snapshot.darkMode?.toString()
+            "alowpw" -> snapshot.lowPowerMode?.toString()
+            "avol" -> snapshot.volumePercent?.toString()
+            "abrt" -> snapshot.screenBrightness?.toString()
+            "areboot" -> snapshot.lastRebootText
+            "abright" -> snapshot.brightMode?.toString()
+            "adimlo" -> snapshot.dimLowBitOnly?.toString()
+            // 息屏时按规范给 -1，而不是 0 —— 表盘用 `< 0` 判断「现在是息屏」。
+            "abss" -> snapshot.millisSinceBright?.toString() ?: dimSentinel(snapshot)
+            "abssl" -> snapshot.millisSinceBright
+                ?.let { renderCompactNumber((it / 1_000f).coerceAtMost(ABSSL_CAP_SECONDS)) }
+                ?: dimSentinel(snapshot)
+
+            // ── 内存与存储。GB 一律按**十进制** 1e9 算（规范示例 106.4 对得上
+            // 128GB 机型的数据分区，按 GiB 算会是 99 左右）。
+            "amu" -> usedBytes(snapshot.ramUsedBytes, snapshot.ramTotalBytes, snapshot.ramFreeBytes)
+                ?.let(::renderGigabytes)
+            "amuf" -> usedBytes(snapshot.ramUsedBytes, snapshot.ramTotalBytes, snapshot.ramFreeBytes)
+                ?.let(::renderGigabytesWithUnit)
+            "amup" -> percentOf(
+                usedBytes(snapshot.ramUsedBytes, snapshot.ramTotalBytes, snapshot.ramFreeBytes),
+                snapshot.ramTotalBytes,
+            )
+            "amf" -> snapshot.ramFreeBytes?.let(::renderGigabytes)
+            "amff" -> snapshot.ramFreeBytes?.let(::renderGigabytesWithUnit)
+            "amfp" -> percentOf(snapshot.ramFreeBytes, snapshot.ramTotalBytes)
+            "amt" -> snapshot.ramTotalBytes?.let(::renderGigabytes)
+            "amtf" -> snapshot.ramTotalBytes?.let(::renderGigabytesWithUnit)
+            "adsu" -> usedBytes(
+                snapshot.storageUsedBytes,
+                snapshot.storageTotalBytes,
+                snapshot.storageFreeBytes,
+            )?.let(::renderGigabytes)
+            "adsuf" -> usedBytes(
+                snapshot.storageUsedBytes,
+                snapshot.storageTotalBytes,
+                snapshot.storageFreeBytes,
+            )?.let(::renderGigabytesWithUnit)
+            "adsup" -> percentOf(
+                usedBytes(
+                    snapshot.storageUsedBytes,
+                    snapshot.storageTotalBytes,
+                    snapshot.storageFreeBytes,
+                ),
+                snapshot.storageTotalBytes,
+            )
+            "adsf" -> snapshot.storageFreeBytes?.let(::renderGigabytes)
+            "adsff" -> snapshot.storageFreeBytes?.let(::renderGigabytesWithUnit)
+            "adsfp" -> percentOf(snapshot.storageFreeBytes, snapshot.storageTotalBytes)
+            "adst" -> snapshot.storageTotalBytes?.let(::renderGigabytes)
+            "adstf" -> snapshot.storageTotalBytes?.let(::renderGigabytesWithUnit)
+
+            // ── 电池温度。快照存摄氏，华氏在这里换。
+            // 取整：规范给的两个例子都是整数（34 / 94），而电池温度那 0.1°C 是噪声，
+            // 表盘上显示 `93.56°F` 只会显得没做完。
+            "btc" -> snapshot.batteryTemperatureCelsius?.let { it.roundToInt().toString() }
+            "btf" -> snapshot.batteryTemperatureCelsius
+                ?.let { (it * 9f / 5f + 32f).roundToInt().toString() }
+            "btcd" -> snapshot.batteryTemperatureCelsius?.let { "${it.roundToInt()}°C" }
+            "btfd" -> snapshot.batteryTemperatureCelsius
+                ?.let { "${(it * 9f / 5f + 32f).roundToInt()}°F" }
+
+            // ── 罗盘。{scr} 是**负的**方位角且保留小数（规范示例 -334.581），
+            // {sct} 是四舍五入的整数 —— 两者刻意不同，表盘拿 scr 直接当旋转值。
+            "scr" -> snapshot.compassHeadingDegrees?.let { renderCompactNumber(-it) }
+            "sct" -> snapshot.compassHeadingDegrees?.let { it.roundToInt().toString() }
+            "sctd" -> snapshot.compassHeadingDegrees?.let { "${it.roundToInt()}°" }
+            "scb" -> snapshot.compassHeadingDegrees?.let { compassBearing(it, sixteenWay = false) }
+            "scbb" -> snapshot.compassHeadingDegrees?.let { compassBearing(it, sixteenWay = true) }
+            // 度数 + **空格** + 方位（2026-07-07 对着 WM 截图核过，早先版本没空格）。
+            "sctdb" -> snapshot.compassHeadingDegrees
+                ?.let { "${it.roundToInt()}° ${compassBearing(it, sixteenWay = false)}" }
+            "sctdbb" -> snapshot.compassHeadingDegrees
+                ?.let { "${it.roundToInt()}° ${compassBearing(it, sixteenWay = true)}" }
+
+            // ── 位置。复用天气那份已授权的定位，不另外申请权限。
+            "alat" -> snapshot.latitude?.let(::renderCoordinate)
+            "alon" -> snapshot.longitude?.let(::renderCoordinate)
+            "alatd" -> snapshot.latitude?.let { renderOneDecimal(abs(it)) }
+            "alond" -> snapshot.longitude?.let { renderOneDecimal(abs(it)) }
+            "alatdd" -> snapshot.latitude
+                ?.let { "${renderOneDecimal(abs(it))}°${if (it < 0) "S" else "N"}" }
+            "alondd" -> snapshot.longitude
+                ?.let { "${renderOneDecimal(abs(it))}°${if (it < 0) "W" else "E"}" }
+            "aalt" -> snapshot.altitudeMeters?.let { renderCompactNumber(it.toFloat()) }
+
+            // ── 风。规范说 {wws} 是 mph 或 m/s，我们统一 m/s（数据源直接要 m/s）。
+            "wws" -> weather?.windSpeedMetersPerSecond?.let { renderOneDecimal(it) }
+            "wwd" -> weather?.windDirectionDegrees?.let { it.roundToInt().toString() }
+            "wwdb" -> weather?.windDirectionDegrees
+                ?.let { compassBearing(it.toFloat(), sixteenWay = false) }
+            "wwdbb" -> weather?.windDirectionDegrees
+                ?.let { compassBearing(it.toFloat(), sixteenWay = true) }
+
+            // ── 秒表。格式逐位照 clox（`wf_tagdefs.lua:138-144`）：时/分/秒/厘秒
+            // 两位补零、毫秒三位补零、{swsst} 是总毫秒整数、{swr} 是 "true"/"false"。
+            "swr" -> stopwatchRunning(snapshot).toString()
+            "swsst" -> stopwatchElapsed(snapshot).toString()
+            "swh" -> (stopwatchElapsed(snapshot) / 3_600_000L).toString().padStart(2, '0')
+            "swm" -> (stopwatchElapsed(snapshot) % 3_600_000L / 60_000L).toString().padStart(2, '0')
+            "sws" -> (stopwatchElapsed(snapshot) % 60_000L / 1_000L).toString().padStart(2, '0')
+            "swss" -> (stopwatchElapsed(snapshot) % 1_000L / 10L).toString().padStart(2, '0')
+            "swsss" -> (stopwatchElapsed(snapshot) % 1_000L).toString().padStart(3, '0')
+            "swrm" -> renderCompactNumber(
+                (stopwatchElapsed(snapshot) % 3_600_000L) / 60_000f * 6f,
+            )
+            "swrs" -> renderCompactNumber((stopwatchElapsed(snapshot) % 60_000L / 1_000L) * 6f)
+            "swrss" -> renderCompactNumber((stopwatchElapsed(snapshot) % 60_000L) / 1_000f * 6f)
+
+            // ── 健康扩展。**没有健康数据源时与 clox 逐位同值**，不是 `--`：
+            // clox 的 `WF.health_steps` 默认 distance/calories 都是 0
+            // （`watchface_bridge.lua:127`），目标值是硬编码的 8.0 km / 350 kcal
+            // （`wf_tagdefs.lua:352-357`），而 hae/ham/has/hfc 一族直接 return 0
+            // （`wf_tagdefs.lua:510-516`）。表盘在 clox 上看到的就是这些数，我们照抄
+            // 才叫兼容；自己按步数折算出一个距离反而是编数字。
+            "sdst" -> "0"
+            "stdst" -> DEFAULT_DISTANCE_GOAL_TEXT
+            "sdstp" -> "0"
+            "sdstu" -> "km"
+            "scal" -> "0"
+            "stcal" -> DEFAULT_CALORIE_GOAL.toString()
+            "scalp" -> "0"
+            "hae", "ham", "has", "hfc", "htae", "htam", "htas" -> "0"
             "bl", "batt", "battery", "battery_level" -> snapshot.batteryPercent?.toString()
             "blp" -> snapshot.batteryPercent?.let { "$it%" }
             "pbl" -> snapshot.batteryPercent?.toString()
             "pblp" -> snapshot.batteryPercent?.let { "$it%" }
             "pbr" -> snapshot.batteryPercent?.let { (it * 3.6f).toString() }
+            // {br} = 表盘电量的旋转值，每 1% 3.6°。与 {pbr} 同一算法，只是数据源是
+            // 本机电量而不是手机电量。WM_TAGS.md:333。
+            "br" -> snapshot.batteryPercent?.let { (it * 3.6f).toString() }
             "bc" -> if (snapshot.isCharging == true) "Charging" else "Discharging"
             "charging", "is_charging" -> if (snapshot.isCharging == true) "1" else "0"
             "ssc", "steps", "step_count" -> snapshot.steps?.toString()
@@ -1933,6 +2688,15 @@ object WatchmakerTagResolver {
                     }.format(updatedAt)
                 }
             "ucolor" -> userColor
+            // 配色切换器的第二/第三档。我们只有一个用户强调色，所以两档都落回它 ——
+            // **不能**让它变成 `--`：这三个标签几乎只出现在 color 属性上，那里拿到
+            // 一个非颜色字符串，整个图层的颜色就崩了。上游 CloX 同样宁可返回一个
+            // 可用颜色（`wf_tagdefs.lua:598-601` 四个都桩成 "ffffff"），我们至少
+            // 还给的是用户真正选的那个色。
+            "ucolor2", "ucolor3" -> userColor
+            // 当前色的提亮版。按 35% 向白混合 —— 够亮到能当高光用，又不至于把
+            // 有色相的强调色洗成纯白。
+            "ucolor_b" -> userColor?.let(::brightenWatchColorLiteral)
             // ── 设备/系统信息（clox `wf_tagdefs.lua:442-443,473`）──
             // {alangcode}/{alangreg} 跟随 resolve 的 locale 形参，与日期/星期
             // 标签同源：设置里选了 zh/en/ja 时，表盘的语言码要一起变。
@@ -1953,6 +2717,12 @@ object WatchmakerTagResolver {
             // ── 日出/日落与月相 ──
             "wsr" -> weather?.sunriseText?.trim()?.takeIf(String::isNotEmpty)
             "wss" -> weather?.sunsetText?.trim()?.takeIf(String::isNotEmpty)
+            // 日出/日落在一天中的位置（0–1）。与 {wsr}/{wss} 同源，只是换算成分数，
+            // 好让表盘拿它直接当环形进度或指针角度用。
+            "wsrp" -> weather?.sunriseText?.let(::clockTextAsDayFraction)
+                ?.let(::renderCompactNumber)
+            "wssp" -> weather?.sunsetText?.let(::clockTextAsDayFraction)
+                ?.let(::renderCompactNumber)
             // {wmp} 必须是 0..9 的**整数**：表盘用 `{wmp}==5` 这种等值比较，
             // 推小数永远不匹配（clox `wf_tagdefs.lua:329-334` 记了这个坑）。
             // Flue 没有月相 provider，按 clox `WeatherProvider.kt:124` 的本地
@@ -1961,6 +2731,7 @@ object WatchmakerTagResolver {
             else -> resolveForecastTag(normalized, weather)
                 ?: resolveHourlyForecastTag(normalized, weather)
                 ?: resolveFutureWeekdayTag(normalized, effectiveNow, locale)
+                ?: resolveCalendarTag(normalized, snapshot, effectiveNow)
         }
         if (value != null) return WatchTagResolution.Resolved(value)
         return if (isKnown(requestedTag)) {
@@ -2124,6 +2895,217 @@ object WatchmakerTagResolver {
         } else {
             value.toString()
         }
+
+    // ── 文字读法（字钟）─────────────────────────────────────────────────────
+    // 拆分规则见 WM_TAGS.md §Text Representations 那张表。刻意写成英文：那张表
+    // 本身就是英文的（`o'clock` / `o'three` / `forty six`），而字钟表盘是按词的
+    // 长度和位置排版的，换成本地语言会直接错位。
+
+    private val ONES_WORDS = listOf(
+        "zero", "one", "two", "three", "four",
+        "five", "six", "seven", "eight", "nine",
+    )
+
+    private val TEEN_WORDS = listOf(
+        "ten", "eleven", "twelve", "thirteen", "fourteen",
+        "fifteen", "sixteen", "seventeen", "eighteen", "nineteen",
+    )
+
+    private val TENS_WORDS = mapOf(
+        2 to "twenty", 3 to "thirty", 4 to "forty", 5 to "fifty",
+        6 to "sixty", 7 to "seventy", 8 to "eighty", 9 to "ninety",
+    )
+
+    /** 0–99 的英文读法，复合数用空格分隔（`twenty one`）。 */
+    private fun englishNumberWord(value: Int): String {
+        val bounded = value.coerceIn(0, 99)
+        return when {
+            bounded < 10 -> ONES_WORDS[bounded]
+            bounded < 20 -> TEEN_WORDS[bounded - 10]
+            else -> {
+                val tens = TENS_WORDS[bounded / 10].orEmpty()
+                val ones = bounded % 10
+                if (ones == 0) tens else "$tens ${ONES_WORDS[ones]}"
+            }
+        }
+    }
+
+    /** 字钟的「十位部分」。0–9 是 `o'`，10–19 整个 teen 词都算十位部分。 */
+    private fun wordClockTens(value: Int): String {
+        val bounded = value.coerceIn(0, 59)
+        return when {
+            bounded < 10 -> "o'"
+            bounded < 20 -> TEEN_WORDS[bounded - 10]
+            else -> TENS_WORDS[bounded / 10].orEmpty()
+        }
+    }
+
+    /** 字钟的「个位部分」。0 是 `clock`（凑成 o'clock），10–19 与整十为空。 */
+    private fun wordClockOnes(value: Int): String {
+        val bounded = value.coerceIn(0, 59)
+        return when {
+            bounded == 0 -> "clock"
+            bounded < 10 -> ONES_WORDS[bounded]
+            bounded < 20 -> ""
+            bounded % 10 == 0 -> ""
+            else -> ONES_WORDS[bounded % 10]
+        }
+    }
+
+    /** 字钟完整读法。0–9 的 `o'` 后面**不加空格**，20 以上用空格分隔。 */
+    private fun wordClockFull(value: Int): String {
+        val bounded = value.coerceIn(0, 59)
+        if (bounded < 10) return "o'" + wordClockOnes(bounded)
+        return englishNumberWord(bounded)
+    }
+
+    // ── 时区偏移格式 ───────────────────────────────────────────────────────
+    // 两种写法都要，且刻意不合并：{dutcoff} 是 `+0800`（无冒号，WM_TAGS.md:455），
+    // {tz1o} 是 `-7:00`（有冒号且小时不补零，WM_TAGS.md:365）。混用会让按其中
+    // 一种做字符串比较的表盘失配。
+
+    private fun formatUtcOffsetCompact(offsetMs: Int): String {
+        val totalMinutes = offsetMs / 60_000
+        val sign = if (totalMinutes < 0) "-" else "+"
+        val absolute = abs(totalMinutes)
+        return "%s%02d%02d".format(sign, absolute / 60, absolute % 60)
+    }
+
+    private fun formatUtcOffsetColon(offsetMs: Int): String {
+        val totalMinutes = offsetMs / 60_000
+        val sign = if (totalMinutes < 0) "-" else "+"
+        val absolute = abs(totalMinutes)
+        return "%s%d:%02d".format(sign, absolute / 60, absolute % 60)
+    }
+
+    /**
+     * `HH:mm` → 一天中的位置（0–1）。供 {wsrp} / {wssp} 用。
+     *
+     * 解析失败返回 null 而不是 0：0 会被表盘当成「午夜日出」照着画，而 null 让这条
+     * 标签走 Unavailable，至少是诚实的「没有数据」。
+     */
+    private fun clockTextAsDayFraction(raw: String?): Float? {
+        val parts = raw?.trim()?.split(':') ?: return null
+        if (parts.size < 2) return null
+        val hour = parts[0].trim().toIntOrNull()?.takeIf { it in 0..23 } ?: return null
+        val minute = parts[1].trim().take(2).toIntOrNull()?.takeIf { it in 0..59 } ?: return null
+        return (hour * 60 + minute) / 1_440f
+    }
+
+    /**
+     * 把 `RRGGBB` / `RRGGBBAA` 往白色方向混 35%，作为 {ucolor_b}。
+     *
+     * 解析不出来就原样返回 —— 返回一个**合法颜色**比返回 null 重要：这个标签只会
+     * 出现在 color 属性上。
+     */
+    private fun brightenWatchColorLiteral(literal: String): String {
+        // normalizeWatchColorLiteral 返回的是带 `#` 的 Android 形式，而 {ucolor} 这一族
+        // 在表盘里是**不带** `#` 的 RRGGBB —— 提亮版必须保持同一形状，否则同一个
+        // 属性上两个标签给出两种写法。
+        val normalized = normalizeWatchColorLiteral(literal)?.removePrefix("#") ?: return literal
+        val builder = StringBuilder(normalized.length)
+        for (index in 0..2) {
+            val channel = normalized.substring(index * 2, index * 2 + 2).toIntOrNull(16)
+                ?: return literal
+            val lifted = (channel + (255 - channel) * BRIGHTEN_FRACTION)
+                .roundToInt()
+                .coerceIn(0, 255)
+            builder.append("%02x".format(lifted))
+        }
+        // 尾部的 alpha（如果有）原样带过去。
+        builder.append(normalized.drop(6))
+        return builder.toString()
+    }
+
+    private const val BRIGHTEN_FRACTION = 0.35f
+
+    // ── N5 的格式化助手 ─────────────────────────────────────────────────────
+
+    /** {abssl} 的上限：规范写「capped at 30」。 */
+    private const val ABSSL_CAP_SECONDS = 30f
+
+    /** clox 硬编码的日目标（`wf_tagdefs.lua:353,357`）。距离要保留那个 `.0`。 */
+    private const val DEFAULT_DISTANCE_GOAL_TEXT = "8.0"
+    private const val DEFAULT_CALORIE_GOAL = 350
+
+    /**
+     * 息屏时 {abss} / {abssl} 该给的哨兵值。
+     *
+     * 规范是「-1 if dim」。只有在**确知**处于息屏时才给 -1；连亮屏状态都不知道
+     * （provider 没填）就返回 null 走 Unavailable —— 谎报 -1 会让表盘以为在息屏。
+     */
+    private fun dimSentinel(snapshot: WatchDataSnapshot): String? =
+        if (snapshot.brightMode == false) "-1" else null
+
+    /** 字节 → GB（十进制 1e9），一位小数，整数时不带小数点。 */
+    private fun renderGigabytes(bytes: Long): String =
+        renderCompactNumber(roundToOneDecimal(bytes / 1_000_000_000f))
+
+    /**
+     * 已用字节。显式给了就用，否则由「总量 − 可用」推。
+     *
+     * 「已用 = 总量 − 可用」只在这一处知道 —— provider 只需要报它真正查到的两个量
+     * （`getMemoryInfo` 给的是 total/avail，`StatFs` 给的是 total/available），
+     * 不必自己再算一遍并冒着两处算法漂移的风险。
+     */
+    private fun usedBytes(explicit: Long?, total: Long?, free: Long?): Long? {
+        explicit?.let { return it }
+        if (total == null || free == null) return null
+        return (total - free).coerceAtLeast(0L)
+    }
+
+    private fun renderGigabytesWithUnit(bytes: Long): String = "${renderGigabytes(bytes)} GB"
+
+    /** 一位小数，整数时不带小数点（`renderCompactNumber` 负责去掉 `.0`）。 */
+    private fun renderOneDecimal(value: Double): String =
+        renderCompactNumber(roundToOneDecimal(value.toFloat()))
+
+    private fun renderOneDecimal(value: Float): String =
+        renderCompactNumber(roundToOneDecimal(value))
+
+    private fun roundToOneDecimal(value: Float): Float =
+        if (value.isFinite()) (value * 10f).roundToInt() / 10f else value
+
+    /** 经纬度本体保留完整精度（规范示例 51.5074 / -0.1278）。 */
+    private fun renderCoordinate(value: Double): String = renderCompactNumber(value.toFloat())
+
+    /** 占比，一位小数。分母缺失或为 0 时返回 null 而不是 0 —— 那是「不知道」，不是「0%」。 */
+    private fun percentOf(part: Long?, total: Long?): String? {
+        if (part == null || total == null || total <= 0L) return null
+        return renderOneDecimal(part * 100f / total)
+    }
+
+    /**
+     * 方位角 → 方位名。8 向最多两个字母（N / NE），16 向最多三个（NNE）——
+     * 正好对上规范里 {wwdb}「2 letters」与 {wwdbb}「3 letters」的说法。
+     */
+    private fun compassBearing(degrees: Float, sixteenWay: Boolean): String {
+        val names = if (sixteenWay) BEARINGS_16 else BEARINGS_8
+        val step = 360f / names.size
+        // +0.5 步再取整 = 就近取，且 348.75°..360° 会回绕到 N。
+        val normalized = ((degrees % 360f) + 360f) % 360f
+        val index = ((normalized + step / 2f) / step).toInt() % names.size
+        return names[index]
+    }
+
+    private val BEARINGS_8 = listOf("N", "NE", "E", "SE", "S", "SW", "W", "NW")
+
+    private val BEARINGS_16 = listOf(
+        "N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE",
+        "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW",
+    )
+
+    /**
+     * 秒表读数。
+     *
+     * 快照里没有秒表字段（编辑器预览、测试的裸快照）时**直接读单例** —— 秒表是
+     * 进程级共享的一个，而不是随快照走的采样值；预览里点了开始也该动。
+     */
+    private fun stopwatchRunning(snapshot: WatchDataSnapshot): Boolean =
+        snapshot.stopwatchRunning ?: WatchStopwatch.isRunning
+
+    private fun stopwatchElapsed(snapshot: WatchDataSnapshot): Long =
+        snapshot.stopwatchElapsedMs ?: WatchStopwatch.elapsedMs(SystemClock.elapsedRealtime())
 
     /**
      * strftime `%W`：以**周一**为周首的周序号，首个周一之前的日子为第 0 周。
@@ -2721,7 +3703,8 @@ object WatchmakerExpressionEvaluator {
                     if (quote == null) {
                         output.append(
                             when (resolution) {
-                                else -> resolution.expressionValue()?.toExpressionLiteral() ?: "nil"
+                                else -> resolution.attributeExpressionValue()
+                                    ?.toExpressionLiteral() ?: "nil"
                             },
                         )
                     } else {

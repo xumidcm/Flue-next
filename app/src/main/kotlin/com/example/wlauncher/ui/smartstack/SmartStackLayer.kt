@@ -159,7 +159,7 @@ import com.flue.launcher.ui.common.WatchBatteryPill
 import com.flue.launcher.ui.common.fluePressScale
 import com.flue.launcher.ui.common.rememberFluePressScale
 import com.flue.launcher.ui.common.rememberFlueElasticScrollState
-import com.flue.launcher.ui.common.flueElasticNestedScroll
+import com.flue.launcher.ui.style.flueOverscroll
 import com.flue.launcher.ui.controlcenter.SideScreenControlCenterMusicCard
 import com.flue.launcher.ui.controlcenter.sideScreenContentAllowsVerticalScroll
 import com.flue.launcher.ui.controlcenter.sideScreenContentUsesElasticOverscroll
@@ -800,7 +800,7 @@ fun SmartStackLayer(
                         Modifier
                             .then(
                                 if (usesElasticOverscroll) {
-                                    Modifier.flueElasticNestedScroll(contentScrollState)
+                                    Modifier.flueOverscroll(contentScrollState)
                                 } else {
                                     Modifier
                                 }
@@ -1083,6 +1083,19 @@ fun WidgetPageLayer(
 
     LaunchedEffect(editMode, showPicker) {
         onEditModeChange(editMode && !showPicker)
+    }
+
+    // 编辑模式下按返回先退出编辑，而不是直接回表盘（老师报的）。
+    //
+    // 侧滑返回早就在编辑模式下被 `widgetsBackGestureLocked` 拦住了，但**返回键**
+    // 一直直通到 Activity 的 onBackPressedDispatcher → vm.handleBackPress()，于是
+    // 小组件还在抖、用户想取消编辑，一按返回整页就飞走了，改动状态也跟着丢。
+    //
+    // Compose 的 BackHandler 注册在同一个 dispatcher 上，而组合期注册晚于
+    // Activity 在 onCreate 里加的那条回调，LIFO 下这里先拿到 —— 所以只要 enabled
+    // 为真就能截住。showPicker 打开时让位给选择器自己的返回处理。
+    BackHandler(enabled = editMode && !showPicker) {
+        editMode = false
     }
 
     DisposableEffect(Unit) {
@@ -1384,7 +1397,9 @@ fun WidgetPageLayer(
                 animationSpec = spring(stiffness = 620f, dampingRatio = 0.86f),
                 label = "widget_card_width"
             )
-            val shellShape = RoundedCornerShape(28.dp)
+            // 卡片形状走令牌：写死 28dp 会让同一档里的小组件卡、拖拽预览、空槽位各自
+            // 一个圆角（老师报的 AW 卡片圆角不统一）。
+            val shellShape = launcherStyle.cardShape
             val jiggleActive = editMode && !showPicker
 
             key(cardKey) {
@@ -2088,7 +2103,8 @@ private fun WidgetDragPreviewCard(
     val launcherStyle = LauncherTheme.style
     val width = with(LocalDensity.current) { preview.bounds.width.toDp() }
     val height = with(LocalDensity.current) { preview.bounds.height.toDp() }
-    val shape = RoundedCornerShape(28.dp)
+    // 拖拽预览必须和被拖的卡同形状，写死数字的话抓起来那一瞬圆角会跳一下。
+    val shape = launcherStyle.cardShape
     Box(
         modifier = modifier
             .size(width, height)
@@ -2180,6 +2196,24 @@ private val QUICK_DOCK_PADDING_VERTICAL = 18.dp
     var pressedSlot by remember { mutableStateOf<Int?>(null) }
     var dragOffset by remember { mutableStateOf(Offset.Zero) }
     var dragMoved by remember { mutableStateOf(false) }
+    /**
+     * 拖动过程中当前会落到哪一格。以前这个判定只在**松手那一刻**做一次，所以整段拖动里
+     * 其余图标一动不动，落手前完全看不出会换到哪 —— 老师报的「负一屏快捷启动，拖动的
+     * 时候也要有避让动画」。
+     */
+    var hoverSlot by remember { mutableStateOf<Int?>(null) }
+    // 落点判定抽成一份，拖动过程与松手共用。两处各写一遍的话，预览给出的格子和真正
+    // 提交的格子会在阈值边界上不一致 —— 那比没有预览更糟。
+    val resolveDropTarget: (Int, Offset) -> Int? = { fromSlot, offset ->
+        slotCenters[fromSlot]?.let { origin ->
+            val pointer = origin + offset
+            slotCenters
+                .filterKeys { it != fromSlot && it in visibleSlots }
+                .minByOrNull { (_, center) -> (center - pointer).getDistance() }
+                ?.takeIf { (_, center) -> (center - pointer).getDistance() <= dropThresholdPx }
+                ?.key
+        }
+    }
     val dockShape = LauncherTheme.style.panelShape
     // 宽度由调用方给（= contentWidth），这里只按它反算图标尺寸：图标条
     // 铺满可用宽度，多余空白归零，同时纵向内边距把 dock 撑高。
@@ -2208,10 +2242,46 @@ private val QUICK_DOCK_PADDING_VERTICAL = 18.dp
                 Row(horizontalArrangement = Arrangement.spacedBy(iconSpacing)) {
                     row.forEachIndexed { colIndex, item ->
                         val slot = rowIndex * QUICK_DOCK_COLUMNS + colIndex
-                        Box(Modifier.onGloballyPositioned { c -> val p = c.positionInRoot(); slotCenters[slot] = Offset(p.x + c.size.width / 2f, p.y + c.size.height / 2f) }, contentAlignment = Alignment.Center) {
+                        // 避让位移：正在被拖过来的那一格，朝**被拖图标的原位**挪过去。
+                        //
+                        // 直接演示交换结果，而不是含糊地推一小段 —— 这个 dock 的落手动作
+                        // 就是 onSwap（两格互换），把结果原样画出来才是「所见即所得」；
+                        // 推一小段只能表达「有事要发生」，说不清是插入还是交换。
+                        val dragOrigin = draggingSlot?.takeIf { dragMoved }
+                        val avoidTarget = if (dragOrigin != null && hoverSlot == slot && slot != dragOrigin) {
+                            val here = slotCenters[slot]
+                            val there = slotCenters[dragOrigin]
+                            if (here != null && there != null) there - here else Offset.Zero
+                        } else {
+                            Offset.Zero
+                        }
+                        // 两轴分开 animate：Offset 版的 animateXAsState 在这个 Compose
+                        // 版本下没有对应的 spring 重载，拆成两条等价且更好调。
+                        val avoidSpec = spring<Float>(dampingRatio = 0.78f, stiffness = 620f)
+                        val avoidX by animateFloatAsState(avoidTarget.x, avoidSpec, label = "dock_avoid_x")
+                        val avoidY by animateFloatAsState(avoidTarget.y, avoidSpec, label = "dock_avoid_y")
+                        Box(
+                            Modifier
+                                .onGloballyPositioned { c -> val p = c.positionInRoot(); slotCenters[slot] = Offset(p.x + c.size.width / 2f, p.y + c.size.height / 2f) }
+                                // 位移只走 graphicsLayer：改布局会让 onGloballyPositioned
+                                // 重新上报中心点，而落点判定读的正是它 —— 那是一个帧率级
+                                // 反馈回路（避让把中心挪走 → 判定改目标 → 避让又变）。
+                                .graphicsLayer {
+                                    translationX = avoidX
+                                    translationY = avoidY
+                                },
+                            contentAlignment = Alignment.Center,
+                        ) {
                             when (item) {
                                 null -> {
-                                    AddBubble(size = iconSize, shape = QuickDockIconShape) { onAdd(slot) }
+                                    // 空位的加号走圆形，不跟 QuickDockIconShape 的 squircle。
+                                    //
+                                    // dock 里真图标的位图现在是**圆的**（见 AppRepository
+                                    // 那次统一：包里的成品图与模板合成图都过 circularIfLegacy），
+                                    // 外面这层 28% 圆角方只是个不裁到边的外框，视觉上留下的
+                                    // 就是那个圆。空位却把外框本身画了出来 —— 于是同一条 dock
+                                    // 上「已添加是圆、空位是圆角方」（老师报的那条）。
+                                    AddBubble(size = iconSize, shape = CircleShape) { onAdd(slot) }
                                 }
                                 else -> {
                                     val dragModifier = Modifier.pointerInput(item.componentKey, slot, slotCenters) {
@@ -2255,22 +2325,20 @@ private val QUICK_DOCK_PADDING_VERTICAL = 18.dp
                                                                 draggingSlot = slot
                                                                 onCloseActions()
                                                             }
+                                                            // 每一帧更新落点，让目标格实时让位。
+                                                            if (dragMoved) {
+                                                                hoverSlot = resolveDropTarget(slot, dragOffset)
+                                                            }
                                                             change.consume()
                                                         }
                                                     }
 
-                                                    val release = slotCenters[slot]?.let { it + dragOffset }
-                                                    val target = release?.let { pointer ->
-                                                        slotCenters
-                                                            .filterKeys { it != slot && it in visibleSlots }
-                                                            .minByOrNull { (_, center) -> (center - pointer).getDistance() }
-                                                            ?.takeIf { (_, center) -> (center - pointer).getDistance() <= dropThresholdPx }
-                                                            ?.key
-                                                    }
+                                                    val target = resolveDropTarget(slot, dragOffset)
                                                     if (dragMoved && target != null) {
                                                         onSwap(slot, target)
                                                     }
                                                     draggingSlot = null
+                                                    hoverSlot = null
                                                     dragOffset = Offset.Zero
                                                     dragMoved = false
                                                 }
@@ -2342,7 +2410,7 @@ private fun WidgetCard(
         .coerceIn(WIDGET_CARD_MIN_HEIGHT_DP, WIDGET_CARD_MAX_HEIGHT_DP)
         .dp
         .coerceAtLeast(minWidgetHeight)
-    val cardShape = RoundedCornerShape(24.dp)
+    val cardShape = launcherStyle.cardShape
     val density = LocalDensity.current
     Box(
         modifier = Modifier
@@ -2564,7 +2632,7 @@ private fun EmptyWidgetCard(width: Dp) {
         modifier = Modifier
             .width(width)
             .height(96.dp)
-            .clip(RoundedCornerShape(24.dp))
+            .clip(launcherStyle.cardShape)
             .background(launcherStyle.cardColor),
         contentAlignment = Alignment.Center
     ) {
@@ -2730,7 +2798,7 @@ private fun ShortcutPickerOverlay(
     val listState = rememberLazyListState()
     val (pickerOverscroll, pickerNestedScroll) = rememberPickerOverscrollConnection(listState)
     ModalShell(onDismiss) { dismiss ->
-        Column(Modifier.fillMaxWidth(0.82f).heightIn(max = 420.dp).clip(RoundedCornerShape(24.dp)).background(Color(0xFF1E1E1E)).padding(vertical = 12.dp)) {
+        Column(Modifier.fillMaxWidth(0.82f).heightIn(max = 420.dp).clip(LauncherTheme.style.panelShape).background(Color(0xFF1E1E1E)).padding(vertical = 12.dp)) {
             Text(
                 stringResource(R.string.side_add_shortcut),
                 color = Color.White,
@@ -2788,7 +2856,7 @@ private fun WidgetPickerOverlay(
                 WidgetPickerApp(
                     packageName = packageName,
                     label = launcherApp?.label ?: representativeWidget.appLabel,
-                    icon = launcherApp?.iconForDisplay(useTwoTone = false, blurred = false),
+                    icon = launcherApp?.iconForDisplay(blurred = false),
                     widgets = widgets.sortedBy { it.label.lowercase(Locale.getDefault()) }
                 )
             }
@@ -2813,7 +2881,7 @@ private fun WidgetPickerOverlay(
         selectedPackage = null
     }
     ModalShell(onDismiss, backHandlerEnabled = selectedPackage == null) { dismiss ->
-        Column(Modifier.fillMaxWidth(0.82f).heightIn(max = 420.dp).clip(RoundedCornerShape(24.dp)).background(Color(0xFF1E1E1E)).padding(vertical = 12.dp)) {
+        Column(Modifier.fillMaxWidth(0.82f).heightIn(max = 420.dp).clip(LauncherTheme.style.panelShape).background(Color(0xFF1E1E1E)).padding(vertical = 12.dp)) {
             Text(
                 selectedApp?.label ?: stringResource(R.string.widget_add_widget),
                 color = Color.White,
@@ -2956,7 +3024,7 @@ private fun WidgetPickerAppRow(
                 scaleX = scale
                 scaleY = scale
             }
-            .clip(RoundedCornerShape(18.dp))
+            .clip(LauncherTheme.style.rowShape)
             .background(if (isPressed) Color(0xFF303030) else Color.Transparent)
             .instantPressGesture(pressed, onClick = onClick)
             .padding(horizontal = 16.dp),
@@ -3025,7 +3093,7 @@ private fun WidgetPickerRow(
                 scaleX = scale
                 scaleY = scale
             }
-            .clip(RoundedCornerShape(18.dp))
+            .clip(LauncherTheme.style.rowShape)
             .background(if (isPressed) Color(0xFF303030) else Color.Transparent)
             .instantPressGesture(pressed, onClick = onClick)
             .padding(horizontal = 16.dp),
@@ -3103,7 +3171,7 @@ private fun ShortcutPickerRow(
                 scaleX = scale
                 scaleY = scale
             }
-            .clip(RoundedCornerShape(18.dp))
+            .clip(LauncherTheme.style.rowShape)
             .background(if (isPressed) Color(0xFF303030) else Color.Transparent)
             .instantPressGesture(pressed, onClick = onClick)
             .padding(horizontal = 16.dp),
@@ -3133,10 +3201,10 @@ private fun ShortcutPickerRow(
             horizontalAlignment = Alignment.CenterHorizontally,
             modifier = Modifier
                 .fillMaxWidth(0.74f)
-                .flueElasticNestedScroll(scrollState)
+                .flueOverscroll(scrollState)
                 .verticalScroll(scrollState),
         ) {
-            Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(Color(0xFF2C2C2E))) {
+            Column(Modifier.fillMaxWidth().clip(LauncherTheme.style.cardShape).background(Color(0xFF2C2C2E))) {
                 Box(Modifier.fillMaxWidth().clickable { onRemove(); dismiss() }.padding(horizontal = 16.dp, vertical = 14.dp)) {
                     Text(
                         stringResource(R.string.action_remove),

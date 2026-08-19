@@ -1,6 +1,7 @@
 package com.flue.launcher.watchface.standard
 
 import android.Manifest
+import android.app.ActivityManager
 import android.bluetooth.BluetoothAdapter
 import android.bluetooth.BluetoothManager
 import android.content.BroadcastReceiver
@@ -8,12 +9,19 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.PackageManager
+import android.content.res.Configuration
 import android.hardware.Sensor
 import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
 import android.hardware.SensorManager
+import android.media.AudioManager
 import android.os.BatteryManager
 import android.os.Build
+import android.os.Environment
+import android.os.PowerManager
+import android.os.StatFs
+import android.os.SystemClock
+import android.provider.Settings
 import android.net.wifi.WifiManager
 import android.text.format.DateFormat
 import androidx.compose.runtime.Composable
@@ -22,6 +30,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.platform.LocalContext
 import androidx.core.content.ContextCompat
 import java.util.Calendar
+import java.util.Locale
 import kotlin.math.roundToInt
 
 internal fun watchChargingState(status: Int, plugged: Int, previous: Boolean?): Boolean? = when {
@@ -60,6 +69,11 @@ internal class AndroidWatchDataProvider(
     private val hasGyroscopeSensor = sensorManager?.getDefaultSensor(Sensor.TYPE_GYROSCOPE) != null
     private val wifiManager = appContext.getSystemService(WifiManager::class.java)
     private val bluetoothManager = appContext.getSystemService(BluetoothManager::class.java)
+    private val powerManager = appContext.getSystemService(PowerManager::class.java)
+    private val audioManager = appContext.getSystemService(AudioManager::class.java)
+    private val activityManager = appContext.getSystemService(ActivityManager::class.java)
+    private val hasRotationVectorSensor =
+        sensorManager?.getDefaultSensor(Sensor.TYPE_ROTATION_VECTOR) != null
     private val stepPreferences = appContext.getSharedPreferences(STEP_PREFERENCES, Context.MODE_PRIVATE)
     private val stepLock = Any()
     private var started = false
@@ -93,6 +107,36 @@ internal class AndroidWatchDataProvider(
 
     @Volatile
     private var bluetoothEnabled: Boolean? = null
+
+    /** 电池温度（摄氏）。与电量同一条广播里来。 */
+    @Volatile
+    private var batteryTemperatureCelsius: Float? = null
+
+    /** 罗盘方位角 0–360。优先用 ROTATION_VECTOR，没有就用磁力计 + 加速度计融合。 */
+    @Volatile
+    private var compassHeading: Float? = null
+
+    @Volatile
+    private var magneticField: FloatArray? = null
+
+    /**
+     * 亮屏时刻（`SystemClock.elapsedRealtime()` 基准）。供 {abss} / {abssl} 用。
+     *
+     * 用开机以来的单调时钟而不是墙上时钟：改系统时间不该让「亮屏多久了」跳。
+     */
+    @Volatile
+    private var brightSinceElapsedMs: Long? = null
+
+    private val screenReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            when (intent?.action) {
+                Intent.ACTION_SCREEN_ON -> brightSinceElapsedMs = SystemClock.elapsedRealtime()
+                Intent.ACTION_SCREEN_OFF -> brightSinceElapsedMs = null
+            }
+        }
+    }
+
+    private var screenReceiverRegistered = false
 
     private val batteryReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
@@ -144,6 +188,24 @@ internal class AndroidWatchDataProvider(
         }.onSuccess {
             connectivityReceiverRegistered = true
         }
+        // {abright} / {abss} / {abssl}：亮屏起点靠这两条广播维护。注册时如果屏幕
+        // 已经亮着，就把起点当作现在 —— 少算一段总比谎报一个大数好。
+        runCatching {
+            ContextCompat.registerReceiver(
+                appContext,
+                screenReceiver,
+                IntentFilter().apply {
+                    addAction(Intent.ACTION_SCREEN_ON)
+                    addAction(Intent.ACTION_SCREEN_OFF)
+                },
+                ContextCompat.RECEIVER_NOT_EXPORTED,
+            )
+        }.onSuccess {
+            screenReceiverRegistered = true
+            if (powerManager?.isInteractive != false) {
+                brightSinceElapsedMs = SystemClock.elapsedRealtime()
+            }
+        }
 
         if (
             Build.VERSION.SDK_INT < Build.VERSION_CODES.Q ||
@@ -158,6 +220,13 @@ internal class AndroidWatchDataProvider(
             registerSensor(Sensor.TYPE_HEART_RATE)
         }
         watchMotionSensorTypes(hasGyroscopeSensor).forEach(::registerSensor)
+        // 罗盘：ROTATION_VECTOR 单个传感器就够且更稳；没有它才退回磁力计，
+        // 与加速度计一起做姿态融合（加速度计上面已经在监听了）。
+        if (hasRotationVectorSensor) {
+            registerSensor(Sensor.TYPE_ROTATION_VECTOR)
+        } else {
+            registerSensor(Sensor.TYPE_MAGNETIC_FIELD)
+        }
     }
 
     fun stop() {
@@ -172,6 +241,10 @@ internal class AndroidWatchDataProvider(
             runCatching { appContext.unregisterReceiver(connectivityReceiver) }
             connectivityReceiverRegistered = false
         }
+        if (screenReceiverRegistered) {
+            runCatching { appContext.unregisterReceiver(screenReceiver) }
+            screenReceiverRegistered = false
+        }
     }
 
     override fun snapshot(nowEpochMs: Long): WatchDataSnapshot {
@@ -184,6 +257,7 @@ internal class AndroidWatchDataProvider(
             hasPermission = hasHeartRatePermission(appContext),
             value = heartRate,
         )
+        val slow = slowDeviceState()
         return WatchDataSnapshot(
             batteryPercent = batteryPercent,
             isCharging = charging,
@@ -224,8 +298,190 @@ internal class AndroidWatchDataProvider(
             weatherTemperatureUnit = weather?.displayUnit?.symbol,
             weatherHumidity = weather?.humidity,
             weatherLocation = weather?.location,
+
+            // ── N5：给原本只能渲染 `--` 的那批变量供数据 ─────────────────────
+            // 全部走 [slowDeviceState]：这些量要么几乎不变（型号、屏幕形状），要么
+            // 变得很慢（内存、存储、音量、亮度、定位），而 snapshot() 是**每帧**调用的。
+            // 不节流的话每帧都会跑一次 StatFs、一次 getMemoryInfo、一次
+            // Settings.System 的 ContentResolver 查询和两次 SharedPreferences 读 ——
+            // 那是实打实的掉帧。
+            batteryTemperatureCelsius = batteryTemperatureCelsius,
+            // 只报真正查到的两个量；「已用」由解析器按「总量 − 可用」推，免得两处各算一遍。
+            ramFreeBytes = slow.ramFreeBytes,
+            ramTotalBytes = slow.ramTotalBytes,
+            storageFreeBytes = slow.storageFreeBytes,
+            storageTotalBytes = slow.storageTotalBytes,
+            deviceManufacturer = Build.MANUFACTURER.takeIf(String::isNotBlank),
+            deviceModel = Build.MODEL.takeIf(String::isNotBlank),
+            deviceName = Build.DEVICE.takeIf(String::isNotBlank),
+            osVersion = Build.VERSION.RELEASE.takeIf(String::isNotBlank),
+            watchName = slow.watchName,
+            screenRound = slow.screenRound,
+            screenFlatTyre = slow.screenFlatTyre,
+            volumePercent = slow.volumePercent,
+            screenBrightness = slow.screenBrightness,
+            lowPowerMode = slow.lowPowerMode,
+            darkMode = slow.darkMode,
+            lastRebootText = lastRebootText(nowEpochMs),
+            brightMode = powerManager?.isInteractive,
+            // 启动器托管的表盘没有真正的息屏低位模式，所以恒为 false 而不是「不知道」。
+            dimLowBitOnly = false,
+            millisSinceBright = brightSinceElapsedMs?.let { SystemClock.elapsedRealtime() - it },
+            compassHeadingDegrees = compassHeading,
+            latitude = slow.latitude,
+            longitude = slow.longitude,
+            stopwatchRunning = WatchStopwatch.isRunning,
+            stopwatchElapsedMs = WatchStopwatch.elapsedMs(SystemClock.elapsedRealtime()),
+            calendarEvents = calendarEvents(nowEpochMs),
         )
     }
+
+    /**
+     * 日程。单独一层节流，TTL 比其他慢变量长得多。
+     *
+     * `CalendarContract.Instances` 的查询要跨进程走 ContentProvider、还要展开重复日程，
+     * 比一次 `StatFs` 贵一个量级；而「下一个会议几点」这种信息一分钟级的滞后完全无感。
+     *
+     * 返回 null 表示读不到（没授权）—— 与「读到了但没有日程」（空列表）不是一回事，
+     * 前者渲染 `--`，后者让 {cex} 答 "false"。
+     */
+    private fun calendarEvents(nowEpochMs: Long): List<WatchCalendarEvent>? {
+        val now = SystemClock.elapsedRealtime()
+        if (calendarReadAtMs != 0L && now - calendarReadAtMs < CALENDAR_TTL_MS) {
+            return calendarCache
+        }
+        calendarCache = readWatchCalendarEvents(appContext, nowEpochMs)
+        calendarReadAtMs = now
+        return calendarCache
+    }
+
+    /**
+     * 变化很慢、但读起来很贵的那批设备状态。
+     *
+     * 每 [SLOW_STATE_TTL_MS] 才真正重读一次；表盘上这些字段的语义都容忍几秒的滞后
+     * （内存占用、剩余空间、音量、亮度、坐标），而每帧重读它们会直接掉帧。
+     */
+    private class SlowDeviceState(
+        val ramTotalBytes: Long?,
+        val ramFreeBytes: Long?,
+        val storageTotalBytes: Long?,
+        val storageFreeBytes: Long?,
+        val watchName: String?,
+        val screenRound: Boolean?,
+        val screenFlatTyre: Boolean?,
+        val volumePercent: Int?,
+        val screenBrightness: Int?,
+        val lowPowerMode: Boolean?,
+        val darkMode: Boolean?,
+        val latitude: Double?,
+        val longitude: Double?,
+    )
+
+    @Volatile
+    private var slowState: SlowDeviceState? = null
+
+    @Volatile
+    private var slowStateReadAtMs: Long = 0L
+
+    @Volatile
+    private var calendarCache: List<WatchCalendarEvent>? = null
+
+    @Volatile
+    private var calendarReadAtMs: Long = 0L
+
+    private fun slowDeviceState(): SlowDeviceState {
+        val now = SystemClock.elapsedRealtime()
+        val cached = slowState
+        if (cached != null && now - slowStateReadAtMs < SLOW_STATE_TTL_MS) return cached
+        val ram = ramInfo()
+        val storage = storageInfo()
+        val configuration = appContext.resources.configuration
+        val location = activeLocation()
+        val fresh = SlowDeviceState(
+            ramTotalBytes = ram?.first,
+            ramFreeBytes = ram?.second,
+            storageTotalBytes = storage?.first,
+            storageFreeBytes = storage?.second,
+            watchName = watchName(),
+            screenRound = configuration.isScreenRound,
+            // 「扁轮胎」= 圆屏但底部被截平，于是高度小于宽度。Wear 上没有专门的
+            // 查询接口，这个比值判断是通行做法。
+            screenFlatTyre = configuration.isScreenRound &&
+                configuration.screenHeightDp < configuration.screenWidthDp,
+            volumePercent = mediaVolumePercent(),
+            screenBrightness = runCatching {
+                Settings.System.getInt(appContext.contentResolver, Settings.System.SCREEN_BRIGHTNESS)
+            }.getOrNull(),
+            lowPowerMode = powerManager?.isPowerSaveMode,
+            darkMode = configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK ==
+                Configuration.UI_MODE_NIGHT_YES,
+            latitude = location?.latitude,
+            longitude = location?.longitude,
+        )
+        slowState = fresh
+        slowStateReadAtMs = now
+        return fresh
+    }
+
+    /** 总内存 / 可用内存，字节。 */
+    private fun ramInfo(): Pair<Long, Long>? {
+        val manager = activityManager ?: return null
+        return runCatching {
+            val info = ActivityManager.MemoryInfo()
+            manager.getMemoryInfo(info)
+            info.totalMem.takeIf { it > 0L }?.let { it to info.availMem.coerceIn(0L, it) }
+        }.getOrNull()
+    }
+
+    /** 数据分区的总容量 / 可用容量，字节。 */
+    private fun storageInfo(): Pair<Long, Long>? = runCatching {
+        val stats = StatFs(Environment.getDataDirectory().absolutePath)
+        val total = stats.blockCountLong * stats.blockSizeLong
+        val available = stats.availableBlocksLong * stats.blockSizeLong
+        total.takeIf { it > 0L }?.let { it to available.coerceIn(0L, it) }
+    }.getOrNull()
+
+    /** {avol}：媒体音量的百分比。 */
+    private fun mediaVolumePercent(): Int? {
+        val manager = audioManager ?: return null
+        return runCatching {
+            val max = manager.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
+            if (max <= 0) return@runCatching null
+            manager.getStreamVolume(AudioManager.STREAM_MUSIC) * 100 / max
+        }.getOrNull()
+    }
+
+    /**
+     * {awname}：用户给设备起的名字，取不到就退回「厂商 + 型号」。
+     *
+     * `Settings.Global.DEVICE_NAME` 在部分 ROM 上是空的，而这个标签在表盘上通常
+     * 直接当标题显示，空着比退化的名字更难看。
+     */
+    private fun watchName(): String? {
+        val configured = runCatching {
+            Settings.Global.getString(appContext.contentResolver, Settings.Global.DEVICE_NAME)
+        }.getOrNull()?.takeIf(String::isNotBlank)
+        return configured
+            ?: listOf(Build.MANUFACTURER, Build.MODEL)
+                .filter(String::isNotBlank)
+                .joinToString(" ")
+                .takeIf(String::isNotBlank)
+    }
+
+    /**
+     * {areboot}：上次重启时刻 `yyyy-MM-dd HH:mm`。
+     *
+     * 用「当前时间 − 开机以来的时长」推出来。跟着传入的 [nowEpochMs] 算而不是自己取
+     * 当前时间，快照才是自洽的一帧。
+     */
+    private fun lastRebootText(nowEpochMs: Long): String? = runCatching {
+        val bootedAt = nowEpochMs - SystemClock.elapsedRealtime()
+        java.text.SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.US).format(java.util.Date(bootedAt))
+    }.getOrNull()
+
+    /** {alat} / {alon}：只读天气已经落盘的那份定位，不为此另外申请位置权限。 */
+    private fun activeLocation(): WatchWeatherLocation? =
+        (weatherSource as? WatchWeatherRepository)?.activeLocation()
 
     override fun requestRefresh() {
         if (!started) return
@@ -250,6 +506,18 @@ internal class AndroidWatchDataProvider(
 
     override fun onSensorChanged(event: SensorEvent?) {
         val sensorEvent = event ?: return
+        if (sensorEvent.sensor.type == Sensor.TYPE_ROTATION_VECTOR) {
+            compassHeading = headingFromRotationVector(sensorEvent.values)
+            return
+        }
+        if (sensorEvent.sensor.type == Sensor.TYPE_MAGNETIC_FIELD) {
+            val x = sensorEvent.values.getOrNull(0)?.takeIf(Float::isFinite) ?: return
+            val y = sensorEvent.values.getOrNull(1)?.takeIf(Float::isFinite) ?: return
+            val z = sensorEvent.values.getOrNull(2)?.takeIf(Float::isFinite) ?: return
+            magneticField = floatArrayOf(x, y, z)
+            compassHeading = headingFromMagnetometer()
+            return
+        }
         if (sensorEvent.sensor.type == Sensor.TYPE_GYROSCOPE) {
             val x = sensorEvent.values.getOrNull(0)?.takeIf(Float::isFinite) ?: return
             val y = sensorEvent.values.getOrNull(1)?.takeIf(Float::isFinite) ?: return
@@ -288,6 +556,46 @@ internal class AndroidWatchDataProvider(
     }
 
     override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) = Unit
+
+    /**
+     * ROTATION_VECTOR → 方位角 0–360（0 = 北）。
+     *
+     * `getOrientation` 给的方位角是 −π..π 弧度，转成度之后要归一化到 0..360 ——
+     * 表盘拿 {sct} 直接当角度用，负数会让指针指反。
+     */
+    private fun headingFromRotationVector(values: FloatArray): Float? = runCatching {
+        val rotation = FloatArray(9)
+        SensorManager.getRotationMatrixFromVector(rotation, values)
+        val orientation = FloatArray(3)
+        SensorManager.getOrientation(rotation, orientation)
+        normalizeHeading(Math.toDegrees(orientation[0].toDouble()).toFloat())
+    }.getOrNull()
+
+    /**
+     * 磁力计 + 加速度计融合。没有 ROTATION_VECTOR 的机型才走这条。
+     *
+     * 加速度计的值是给陀螺仪兜底时已经在存的那份，这里直接复用，不再多注册一次。
+     */
+    private fun headingFromMagnetometer(): Float? {
+        val magnetic = magneticField ?: return null
+        val gravity = accelerometer ?: return null
+        return runCatching {
+            val rotation = FloatArray(9)
+            val inclination = FloatArray(9)
+            val gravityArray = floatArrayOf(gravity.first, gravity.second, gravity.third)
+            if (!SensorManager.getRotationMatrix(rotation, inclination, gravityArray, magnetic)) {
+                return null
+            }
+            val orientation = FloatArray(3)
+            SensorManager.getOrientation(rotation, orientation)
+            normalizeHeading(Math.toDegrees(orientation[0].toDouble()).toFloat())
+        }.getOrNull()
+    }
+
+    private fun normalizeHeading(degrees: Float): Float? {
+        if (!degrees.isFinite()) return null
+        return ((degrees % 360f) + 360f) % 360f
+    }
 
     @Suppress("DEPRECATION")
     private fun refreshWifiSignal() {
@@ -380,6 +688,13 @@ internal class AndroidWatchDataProvider(
             plugged = intent.getIntExtra(BatteryManager.EXTRA_PLUGGED, 0),
             previous = charging,
         )
+        // {btc} / {btf} / {btcd} / {btfd}：EXTRA_TEMPERATURE 的单位是**十分之一摄氏度**。
+        // 拿不到时是 -1（不是 0），所以要单独判掉，否则会把「读不到」显示成 -0.1°C。
+        batteryTemperatureCelsius = intent
+            .getIntExtra(BatteryManager.EXTRA_TEMPERATURE, Int.MIN_VALUE)
+            .takeIf { it != Int.MIN_VALUE && it > -1_000 && it < 1_000 }
+            ?.let { it / 10f }
+            ?: batteryTemperatureCelsius
     }
 
     private fun hasPermission(permission: String): Boolean =
@@ -395,6 +710,22 @@ internal class AndroidWatchDataProvider(
         const val KEY_STEP_DAY = "day"
         const val KEY_STEP_RAW = "raw_counter"
         const val KEY_STEP_TOTAL = "daily_total"
+
+        /**
+         * 慢变量的重读间隔。
+         *
+         * 2 秒是「表盘上看不出滞后」与「不每帧跑 StatFs / ContentResolver」之间的折中：
+         * 内存占用、剩余空间、音量、亮度、坐标这些字段没有一个需要逐帧精度。
+         */
+        const val SLOW_STATE_TTL_MS = 2_000L
+
+        /**
+         * 日程的重读间隔。
+         *
+         * 比慢变量的 TTL 长一个量级：`CalendarContract.Instances` 要跨进程查询并展开
+         * 重复日程，而「下一个会议几点」容忍分钟级滞后。
+         */
+        const val CALENDAR_TTL_MS = 60_000L
     }
 }
 

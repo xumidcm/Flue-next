@@ -1,0 +1,77 @@
+package com.flue.launcher.applist.nativeview
+
+/**
+ * 指示器的淡入淡出时序，与 [NativeScrollIndicatorGeometry][nativeScrollIndicatorState]
+ * 那套纯几何分开放:几何回答「画在哪」,这里回答「现在该有多不透明」。
+ *
+ * ## 为什么要淡出
+ *
+ * 老师要的是「和 Apple Watch 一样」的滑动进度指示器,而 watchOS 那条指示器是滚动时出现、
+ * 停下后淡出的 —— 常显的一条杠会一直压在内容右边,在 230dp 的圆屏上很占地方。
+ *
+ * ## 为什么淡入比淡出快得多
+ *
+ * 淡入慢会被读成「卡了一下才反应」:手指已经推动内容了,指示器还在半透明里爬。
+ * 淡出快会被读成「闪了一下没了」,像画面故障。所以是快进慢出,不是对称的。
+ */
+
+/** 淡入时长。要短到手指刚推出几像素时它就已经在了。 */
+internal const val NATIVE_SCROLL_INDICATOR_FADE_IN_MS = 110L
+
+/**
+ * 停止滚动后保持全不透明的窗口。
+ *
+ * 留这一段是因为惯性滑动收尾时 `dy` 会先归零、状态才转 IDLE,没有保持窗口的话
+ * 指示器会在滑动真正停住之前就开始淡出,末尾那一下看着像掉帧。
+ */
+internal const val NATIVE_SCROLL_INDICATOR_HOLD_MS = 700L
+
+/** 淡出时长。比淡入长,退场要柔和。 */
+internal const val NATIVE_SCROLL_INDICATOR_FADE_OUT_MS = 320L
+
+/**
+ * 目标不透明度:滚动中、或停下后还在保持窗口内 = 1,否则 0。
+ *
+ * @param scrolling RecyclerView 的滚动状态是否非 IDLE。按住不动拖着列表时它仍为 true,
+ *   所以「按住列表不放但内容没动」不会让指示器反复闪 —— 这是分开取 `scrolling` 和
+ *   `millisSinceScrollActivity` 两个入参的原因,单看后者会在按住的那几百毫秒里判成该淡出。
+ */
+internal fun nativeScrollIndicatorTargetAlpha(
+    scrolling: Boolean,
+    millisSinceScrollActivity: Long,
+): Float = if (scrolling || millisSinceScrollActivity < NATIVE_SCROLL_INDICATOR_HOLD_MS) {
+    1f
+} else {
+    0f
+}
+
+/**
+ * 把当前不透明度朝 [targetAlpha] 推进 [elapsedMillis] 毫秒。
+ *
+ * 用「按时长线性推进」而不是弹簧或指数逼近:指数逼近永远到不了 0,会留一条几乎看不见
+ * 但仍在每帧重绘的杠,自我调度的失效帧就一直不停。线性推进有确定的终点,到点即停。
+ *
+ * 中途反向(淡出没完又开始滚)从**当前值**继续推,不重头来 —— 重头来会看到一次跳变。
+ */
+internal fun nativeScrollIndicatorAdvanceAlpha(
+    currentAlpha: Float,
+    targetAlpha: Float,
+    elapsedMillis: Long,
+): Float {
+    val from = currentAlpha.takeIf(Float::isFinite)?.coerceIn(0f, 1f) ?: 0f
+    val to = targetAlpha.takeIf(Float::isFinite)?.coerceIn(0f, 1f) ?: 0f
+    if (from == to) return to
+    val durationMs = if (to > from) {
+        NATIVE_SCROLL_INDICATOR_FADE_IN_MS
+    } else {
+        NATIVE_SCROLL_INDICATOR_FADE_OUT_MS
+    }
+    // 时长常量若被改成 0,退化成立刻到位而不是除零。
+    if (durationMs <= 0L) return to
+    val step = elapsedMillis.coerceAtLeast(0L).toFloat() / durationMs.toFloat()
+    return if (to > from) {
+        (from + step).coerceAtMost(to)
+    } else {
+        (from - step).coerceAtLeast(to)
+    }
+}

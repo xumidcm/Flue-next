@@ -152,7 +152,13 @@ internal class NativeAppListRowView(
      * ROUNDED_RECT 是给线性 / 密网格用的，蜂窝不跟。
      */
     private fun effectiveIconShape(): NativeAppListIconShape =
-        if (config.presentation == NativeAppListPresentation.HONEYCOMB) {
+        if (
+            config.presentation == NativeAppListPresentation.HONEYCOMB ||
+            config.presentation == NativeAppListPresentation.FLOW ||
+            // 星环的格子只比圆图标略宽（RING_ICON_CELL_FRACTION 那圈空隙就是全部余量），
+            // 与蜂窝同理：塞方角图标会顶到邻格。
+            config.presentation == NativeAppListPresentation.RING
+        ) {
             NativeAppListIconShape.CIRCLE
         } else {
             config.iconShape
@@ -557,6 +563,34 @@ internal class NativeAppListRowView(
             moveTranslationX + dragTranslationX
     }
 
+    /**
+     * 命中测试用的图标中心：**含月牙位移，不含重排预览位移**。
+     *
+     * ## 为什么必须含月牙
+     *
+     * 心流布局把每行按弧线横向推开（峰值可达内容宽度的一半以上）。命中测试若读不含月牙的
+     * 坐标，算出来的「最近图标」是**没有弯之前**那一排的排序结果 —— 用户手指明明压在某个
+     * 图标上，判定却落到另一个上。这就是老师报的「心流样式没法拖动创建文件夹」：悬停目标
+     * 与看到的图标对不上，文件夹候选永远凑不齐。
+     *
+     * ## 为什么仍然不含预览
+     *
+     * 重排预览位移是**上一帧判定的结果**。把它喂回下一帧的判定会形成帧率反馈环（提交记录里
+     * 「整个列表抽搐」那次）。月牙不同：它只是行 y 的函数，与拖动判定无关，喂回来是稳定的。
+     */
+    fun iconCenterXInParentForHitTest(): Float {
+        ensureGeometry()
+        return left + iconBounds.centerX() +
+            moveTranslationX + dragTranslationX + flowTranslationX
+    }
+
+    /** [iconCenterXInParentForHitTest] 的纵向对应量（月牙也有纵向分量时一并计入）。 */
+    fun iconCenterYInParentForHitTest(): Float {
+        ensureGeometry()
+        return top + iconBounds.centerY() +
+            moveTranslationY + dragTranslationY + contentTranslationY + flowTranslationY
+    }
+
     fun iconCenterYInParentWithoutPreviewOrFlow(): Float {
         ensureGeometry()
         return top + iconBounds.centerY() +
@@ -597,6 +631,10 @@ internal class NativeAppListRowView(
         val desiredWidth = when (config.presentation) {
             NativeAppListPresentation.HONEYCOMB ->
                 config.honeycombCellSizePx.toInt().coerceAtLeast(config.iconSizePx)
+            NativeAppListPresentation.FLOW ->
+                config.flowCellSizePx.toInt().coerceAtLeast(config.iconSizePx)
+            NativeAppListPresentation.RING ->
+                config.ringCellSizePx.toInt().coerceAtLeast(config.iconSizePx)
             NativeAppListPresentation.DENSE_GRID ->
                 config.denseGridMinimumItemWidthPx.roundToInt().coerceAtLeast(1)
             NativeAppListPresentation.LINEAR -> (
@@ -610,6 +648,10 @@ internal class NativeAppListRowView(
         val desiredHeight = when (config.presentation) {
             NativeAppListPresentation.HONEYCOMB ->
                 config.honeycombCellSizePx.toInt().coerceAtLeast(config.iconSizePx)
+            NativeAppListPresentation.FLOW ->
+                config.flowCellSizePx.toInt().coerceAtLeast(config.iconSizePx)
+            NativeAppListPresentation.RING ->
+                config.ringCellSizePx.toInt().coerceAtLeast(config.iconSizePx)
             NativeAppListPresentation.DENSE_GRID ->
                 config.denseGridMinimumItemHeightPx.roundToInt().coerceAtLeast(1)
             NativeAppListPresentation.LINEAR -> config.rowHeightPx
@@ -821,7 +863,12 @@ internal class NativeAppListRowView(
         val iconTop: Float
         val iconLeft: Float
         when (config.presentation) {
-            NativeAppListPresentation.HONEYCOMB -> {
+            NativeAppListPresentation.HONEYCOMB,
+            // 心流的格子也是「方格居中放一个图标」，与蜂窝逐位相同。
+            NativeAppListPresentation.FLOW,
+            // 星环也是方格居中放一个图标；图标比格子小的那圈空隙由 config.iconSizePx
+            // 决定（nativeRingIconSizePx 已经按格边长算好），这里不再二次内缩。
+            NativeAppListPresentation.RING -> {
                 iconSize = config.iconSizePx.toFloat()
                 iconTop = (height - iconSize) / 2f
                 iconLeft = (width - iconSize) / 2f
@@ -867,30 +914,25 @@ internal class NativeAppListRowView(
             }
         }
 
-        // 按压 / folder hover 高亮的形状跟 presentation 走，而不是 iconShape：
-        // UI 风格与布局形态是两个独立设置，MD3/MIUIX 皮配蜂窝时 iconShape 是
-        // 圆角矩形，但蜂窝格子只比圆图标略宽——方形高亮会糊满整格。只有
-        // 密网格应读作圆角矩形整格；线性布局维持 iconShape 判定（Apple Watch
-        // 风格高亮图标圆盘、其余高亮整行）。
+        // 高亮描什么形状的判定挪到 NativePressOverlayPolicy —— 它是纯函数，能直接
+        // 单元测试；留在 View 里只能靠肉眼看。这里只负责按判定结果把路径搭出来。
+        //
+        // 三种紧凑布局（蜂窝 / 心流 / 星环）走 iconClipPath 而不是再自己 addCircle：
+        // effectiveIconShape() 已经为这三种强制了 CIRCLE，所以 iconClipPath 本来就是
+        // 那个圆，重画一遍只是把同一条规则写在两个地方。
         pressOverlayPath.reset()
-        pressOverlayUsesPath = when (config.presentation) {
-            NativeAppListPresentation.HONEYCOMB -> {
-                pressOverlayPath.addCircle(
-                    iconBounds.centerX(),
-                    iconBounds.centerY(),
-                    min(iconBounds.width(), iconBounds.height()) / 2f,
-                    Path.Direction.CW,
-                )
+        pressOverlayUsesPath = when (
+            nativePressOverlayShape(
+                presentation = config.presentation,
+                iconShape = config.iconShape,
+                rowBackgroundVisible = config.palette.rowBackgroundColorArgb ushr 24 != 0L,
+            )
+        ) {
+            NativePressOverlayShape.ICON_SHAPE -> {
+                pressOverlayPath.addPath(iconClipPath)
                 true
             }
-            NativeAppListPresentation.DENSE_GRID -> false
-            NativeAppListPresentation.LINEAR ->
-                if (config.iconShape == NativeAppListIconShape.CIRCLE) {
-                    pressOverlayPath.addPath(iconClipPath)
-                    true
-                } else {
-                    false
-                }
+            NativePressOverlayShape.ROW_ROUNDED_RECT -> false
         }
 
         val tileSize = iconBounds.width() * 0.16f

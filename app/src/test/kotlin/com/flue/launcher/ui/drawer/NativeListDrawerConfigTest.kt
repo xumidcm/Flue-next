@@ -152,6 +152,31 @@ class NativeListDrawerConfigTest {
         assertEquals(0.35f, config.entryProgress)
     }
 
+    /**
+     * 滑动进度指示器默认开（老师指定），并且对**每一种**列表样式都下发。
+     *
+     * 指示器读的是 RecyclerView 的滚动量，跟布局怎么排无关，所以配置映射里不该出现
+     * 任何按 presentation 分支的写法 —— 这条枚举遍历就是把这件事钉住：以后新增布局
+     * 样式时，如果有人在这条链路上加了 `when (presentation)` 分支并漏掉新样式，
+     * 这个测试会直接失败。
+     */
+    @Test
+    fun scrollIndicatorDefaultsOnForEveryPresentation() {
+        for (presentation in NativeAppListPresentation.entries) {
+            assertTrue(
+                "指示器在 $presentation 下必须默认开",
+                nativeListDrawerConfig(request(presentation = presentation))
+                    .scrollIndicatorEnabled,
+            )
+            assertFalse(
+                "指示器在 $presentation 下必须能被关掉",
+                nativeListDrawerConfig(
+                    request(presentation = presentation, scrollIndicatorEnabled = false),
+                ).scrollIndicatorEnabled,
+            )
+        }
+    }
+
     @Test
     fun mapsAppleHoneycombColumnsAndCellGeometryWithoutLinearPaddingRules() {
         val config = nativeListDrawerConfig(
@@ -197,6 +222,25 @@ class NativeListDrawerConfigTest {
         assertEquals(84, config.iconSizePx)
     }
 
+    /**
+     * 「网格列数」调到 1 就必须真的是 1 列。
+     *
+     * 这条盯的是老师报的「蜂窝列数调成一列网格，实际上还有两列」：网格曾经沿用
+     * 蜂窝的 narrow+1 并把下限钳在 2，设置值 1 于是变成 2 列。均匀网格没有
+     * 窄行/宽行的区分，列数就该等于设置值。
+     */
+    @Test
+    fun denseGridHonoursASingleColumnSetting() {
+        val config = nativeListDrawerConfig(
+            request(
+                presentation = NativeAppListPresentation.DENSE_GRID,
+                honeycombNarrowColumns = 1,
+            ),
+        )
+
+        assertEquals(1, config.denseGridColumns)
+    }
+
     @Test
     fun mapsLegacyMaterialDenseGridGeometry() {
         val config = nativeListDrawerConfig(
@@ -211,8 +255,14 @@ class NativeListDrawerConfigTest {
             ),
         )
 
-        // Legacy Material: ((narrow + 1) / scale).roundToInt().coerceIn(1, 10).
-        assertEquals(3, config.denseGridColumns)
+        // 网格列数**就是设置值本身**，不做任何换算。
+        //
+        // 这里原来断言的是 `(narrow / scale)` 的结果（narrow=4、scale=2.0 → 2）。除以
+        // scale 的本意是「图标缩小了就多塞几列」，但那让一个显式的数字设置被另一个设置
+        // 悄悄改掉：缩放调到 50% 时「网格列数 1」会渲染成 2 列 —— 和更早那条 narrow+1
+        // 是同一症状的第二个来源（老师报的「网格列数调成 1 列实际还有两列」）。列数由
+        // 用户直接指定，缩放只该改图标大小。所以 narrow=4 就是 4，与 scale 无关。
+        assertEquals(4, config.denseGridColumns)
         assertEquals(16f, config.denseGridHorizontalPaddingPx, 0f)
         assertEquals(8f, config.denseGridItemSpacingPx, 0f)
         assertEquals(0.92f, config.denseGridItemAspectRatio, 0f)
@@ -220,6 +270,71 @@ class NativeListDrawerConfigTest {
         assertEquals(96f, config.denseGridMinimumItemHeightPx, 0f)
         assertEquals(16f, config.denseGridMinimumVerticalPaddingPx, 0f)
         assertEquals(12f, config.denseGridIconInnerPaddingPx, 0f)
+    }
+
+    /**
+     * 网格布局圆图标底下那块底板，是 `palette.rowBackgroundColorArgb` 铺满整个格子画出来的
+     * （`NativeAppListRowView.onDraw` 只看这个颜色的 alpha 决定画不画）。
+     *
+     * 这条盯的是老师报的「网格布局图标是圆形但是底下有个矩形遮罩」：以前网格是**无条件**
+     * 吃 `rowBackgroundArgb` 的，行边框开关只管线性布局，网格没有任何入口能关掉它。
+     */
+    @Test
+    fun denseGridIconPlateFollowsItsOwnSwitch() {
+        val withPlate = nativeListDrawerConfig(
+            request(
+                presentation = NativeAppListPresentation.DENSE_GRID,
+                gridIconPlateEnabled = true,
+            ),
+        )
+        val withoutPlate = nativeListDrawerConfig(
+            request(
+                presentation = NativeAppListPresentation.DENSE_GRID,
+                gridIconPlateEnabled = false,
+            ),
+        )
+
+        assertEquals(0xff112233L, withPlate.palette.rowBackgroundColorArgb)
+        assertEquals(0L, withoutPlate.palette.rowBackgroundColorArgb)
+    }
+
+    /**
+     * 关掉底板不能顺手把「行底色」这条老路一起关掉：线性布局的底色由
+     * `rowBorderEnabled` 管，两个开关各管一种布局。
+     */
+    @Test
+    fun linearRowBackgroundIgnoresTheGridIconPlateSwitch() {
+        val config = nativeListDrawerConfig(
+            request(rowBorderEnabled = true, gridIconPlateEnabled = false),
+        )
+
+        assertEquals(0xff112233L, config.palette.rowBackgroundColorArgb)
+    }
+
+    /** 其余布局（蜂窝 / 心流 / 线性无边框）本来就没有底板，开关开着也不该凭空长出来。 */
+    @Test
+    fun honeycombNeverGetsAnIconPlate() {
+        val config = nativeListDrawerConfig(
+            request(
+                presentation = NativeAppListPresentation.HONEYCOMB,
+                gridIconPlateEnabled = true,
+            ),
+        )
+
+        assertEquals(0L, config.palette.rowBackgroundColorArgb)
+    }
+
+    /** 占位图标的底色跟底板开关无关：它画在图标裁形里面，不是格子背景。 */
+    @Test
+    fun fallbackIconBackgroundSurvivesADisabledIconPlate() {
+        val config = nativeListDrawerConfig(
+            request(
+                presentation = NativeAppListPresentation.DENSE_GRID,
+                gridIconPlateEnabled = false,
+            ),
+        )
+
+        assertEquals(0xff112233L, config.palette.fallbackIconBackgroundColorArgb)
     }
 
     private fun request(
@@ -236,7 +351,9 @@ class NativeListDrawerConfigTest {
         overlayOpen: Boolean = false,
         overlayProgress: Float = if (overlayOpen) 1f else 0f,
         rowBorderEnabled: Boolean = false,
+        gridIconPlateEnabled: Boolean = true,
         allowFolderCreation: Boolean = true,
+        scrollIndicatorEnabled: Boolean = true,
         iconShadowEnabled: Boolean = true,
         edgeSpacingCompressionEnabled: Boolean = true,
         entryProgress: Float = 1f,
@@ -273,7 +390,9 @@ class NativeListDrawerConfigTest {
         rotaryHapticsEnabled = true,
         darkMode = true,
         rowBorderEnabled = rowBorderEnabled,
+        gridIconPlateEnabled = gridIconPlateEnabled,
         allowFolderCreation = allowFolderCreation,
+        scrollIndicatorEnabled = scrollIndicatorEnabled,
         iconShadowEnabled = iconShadowEnabled,
         entryProgress = entryProgress,
         rowBackgroundArgb = 0xff112233L,

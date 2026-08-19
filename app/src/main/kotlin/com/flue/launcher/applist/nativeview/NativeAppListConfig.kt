@@ -2,6 +2,8 @@ package com.flue.launcher.applist.nativeview
 
 import com.flue.launcher.motion.FlueMotionProfile
 import com.flue.launcher.motion.FlueMotionProfiles
+import com.flue.launcher.util.FlowCrescentDirection
+import com.flue.launcher.util.flowCrescentOffsetPx
 import kotlin.math.abs
 import kotlin.math.hypot
 
@@ -19,6 +21,29 @@ enum class NativeAppListPresentation {
     LINEAR,
     HONEYCOMB,
     DENSE_GRID,
+
+    /**
+     * 心流：等列网格 + 月牙错位。
+     *
+     * 几何与蜂窝共用一套「绝对定位 + 视口中心鱼眼」的骨架（[NativeAppGridGeometry]），
+     * 唯一多出来的是整行按离屏幕中线的距离往一侧平移的那条弧。
+     */
+    FLOW,
+
+    /**
+     * 星环：铺满屏幕的正交方格 + 圆屏上四边一起往屏心收拢。
+     *
+     * 与 [DENSE_GRID] 同为规则网格，两处差别：
+     *
+     * 1. 格子是**正方形且吃满可用宽度**（`availableWidth / columns`，见
+     *    [nativeRingCellSizePx]），横纵都不留内边距 —— 参考图里图标是铺满整屏的；
+     * 2. 圆屏上再叠一道**径向收拢**（[nativeRingConvergenceOffset]）：每个格子按
+     *    自己离屏心的距离往屏心压。压的是径向量，所以一整行的外侧列被压得比内侧
+     *    多，直排自然弯成弧 —— 上下左右四条边同时有弧度，这就是「星环」。
+     *
+     * 方屏不加那道位移，退化成规规矩矩的平铺网格（老师指定）。鱼眼缩放两种屏都吃。
+     */
+    RING,
 }
 
 /** The two supported production fish-eye profiles. */
@@ -69,6 +94,32 @@ data class NativeAppListConfig(
     val honeycombFisheyeRangeRows: Int = 4,
     /** MD3 密集蜂窝顶部鱼眼开关；默认关闭，底部鱼眼仍由 [fisheyeEnabled] 控制。 */
     val honeycombTopFisheyeEnabled: Boolean = false,
+    /** 心流每行列数。等列，不做蜂窝那样的宽窄交替。 */
+    val flowColumns: Int = 4,
+    /** 心流格心间距；0 时按 `iconSizePx * 1.02f` 兜（与蜂窝同一惯例）。 */
+    val flowCellSizePx: Float = 0f,
+    /**
+     * 月牙峰值鼓出量，按**「峰值正好贴边」余量的倍数**给。0 = 关掉月牙，心流退化成规则网格；
+     * 1.0 = 谁都不越界的那一档；最多到 [NativeFlowGeometry.MAX_CRESCENT_BULGE_FRACTION]。
+     *
+     * 方向单列在 [flowCrescentDirection]，所以这里恒为非负 —— 一个量一个含义，
+     * 免得「负的鼓出量」和「朝左」两种表达同时存在。
+     *
+     * 收倍数而不是像素：像素得由调用方按内容宽度估一遍，而真正的可用余量要等布局时
+     * 知道行宽才算得出来，两个上限对不上就会出现「拉杆过半之后毫无变化」。
+     */
+    val flowCrescentBulgeFraction: Float = 0f,
+    /** 月牙朝哪一侧鼓出。 */
+    val flowCrescentDirection: FlowCrescentDirection = FlowCrescentDirection.Right,
+    /**
+     * 星环格心间距（= 正方格边长）。0 时按 [nativeRingCellSizePx] 现算。
+     *
+     * 与蜂窝 / 心流那两项不同，星环这一项**不是** `iconSizePx * 1.02`：星环要吃满可用宽度
+     * （`availableWidth / columns`），图标只占格子的一部分（[nativeRingIconSizePx]），
+     * 格子之间的空隙由那个比例决定。两个数各自独立，所以必须单列一个字段 ——
+     * 让格子跟着图标走的话，列数一多就再也铺不满屏。
+     */
+    val ringCellSizePx: Float = 0f,
     val denseGridColumns: Int = 5,
     val denseGridHorizontalPaddingPx: Float = 8f,
     val denseGridItemSpacingPx: Float = 4f,
@@ -86,6 +137,14 @@ data class NativeAppListConfig(
      */
     val dragEnabled: Boolean = true,
     val iconShadowEnabled: Boolean = true,
+    /**
+     * 屏幕右侧的滑动进度指示器。
+     *
+     * 放在 config 而不是 View 的独立 setter 里，是因为它必须和 `deviceShape`、`palette`
+     * 一起构成同一份快照：颜色取自 [palette]、弧还是直线取自 [deviceShape]，分两条通道
+     * 下发就会出现「主题已经切了、指示器还是上一套颜色」这种一帧不一致。
+     */
+    val scrollIndicatorEnabled: Boolean = true,
     val edgeSpacingCompressionEnabled: Boolean = true,
     /** Classic (Beta 1.2) keeps content stable; Next animates entry progress. */
     val entryMotionEnabled: Boolean = true,
@@ -172,6 +231,9 @@ internal fun hasDifferentNativeRowRendering(
         current.iconCornerRadiusPx != next.iconCornerRadiusPx ||
         current.iconShadowEnabled != next.iconShadowEnabled ||
         current.honeycombCellSizePx != next.honeycombCellSizePx ||
+        // 星环的格边长决定 onMeasure 出来的格子大小与图标内嵌比例，
+        // 改了必须重新走行内测量，否则新列数下图标还按旧格心画。
+        current.ringCellSizePx != next.ringCellSizePx ||
         current.denseGridIconInnerPaddingPx != next.denseGridIconInnerPaddingPx ||
         current.palette != next.palette ||
         current.rowBorder != next.rowBorder
@@ -192,6 +254,21 @@ internal fun hasDifferentNativeContentOverlayEffect(
     current.blurTier != next.blurTier ||
         current.contentOverlayBlurRadiusPx != next.contentOverlayBlurRadiusPx ||
         current.contentOverlayBlurEligible != next.contentOverlayBlurEligible
+
+/**
+ * 指示器重绘 / 换笔触的判据。
+ *
+ * 单列一条而不是塞进 [hasDifferentNativeRowRendering]：那条会连带 `applyConfigToAttachedRows`
+ * 把每个可见行的配置重新灌一遍，而指示器只画在宿主自己的 `dispatchDraw` 上，
+ * 换个颜色不该让所有行重新测量。
+ */
+internal fun hasDifferentNativeScrollIndicator(
+    current: NativeAppListConfig,
+    next: NativeAppListConfig,
+): Boolean =
+    current.scrollIndicatorEnabled != next.scrollIndicatorEnabled ||
+        current.deviceShape != next.deviceShape ||
+        current.palette.labelColorArgb != next.palette.labelColorArgb
 
 internal fun NativeAppListConfig.legalized(): NativeAppListConfig {
     val safeIconSize = iconSizePx.positiveMetricOr(DEFAULT_ICON_SIZE_PX)
@@ -223,6 +300,12 @@ internal fun NativeAppListConfig.legalized(): NativeAppListConfig {
         honeycombCellSizePx = honeycombCellSizePx.nonNegativeFiniteMetric(),
         honeycombNarrowColumns = honeycombNarrowColumns.coerceIn(1, 10),
         honeycombFisheyeRangeRows = honeycombFisheyeRangeRows.coerceIn(1, 8),
+        flowColumns = flowColumns.coerceIn(1, 10),
+        flowCellSizePx = flowCellSizePx.nonNegativeFiniteMetric(),
+        flowCrescentBulgeFraction = flowCrescentBulgeFraction
+            .nonNegativeFiniteMetric()
+            .coerceAtMost(NativeFlowGeometry.MAX_CRESCENT_BULGE_FRACTION),
+        ringCellSizePx = ringCellSizePx.nonNegativeFiniteMetric(),
         denseGridColumns = denseGridColumns.coerceIn(1, 10),
         denseGridHorizontalPaddingPx = denseGridHorizontalPaddingPx.nonNegativeFiniteMetric(),
         denseGridItemSpacingPx = denseGridItemSpacingPx.nonNegativeFiniteMetric(),
@@ -358,8 +441,10 @@ internal fun nativeLinearChildVisual(
         childCenterY = childCenterY,
         viewportHeight = viewportHeight.toFloat(),
     )
-    val entryOffset = (1f - entryProgress) * 0.08f * viewportHeight
-    val entryScale = 0.90f + 0.10f * entryProgress
+    // 位移与缩放吃回弹（可以过冲），透明度只吃原始进度（>1 无意义）。
+    val entryEased = nativeEntryOvershoot(entryProgress)
+    val entryOffset = (1f - entryEased) * 0.08f * viewportHeight
+    val entryScale = nativeEntryScale(entryEased)
     val edgeScaleCoefficient = when (config.fisheyePreset) {
         NativeFisheyePreset.CLASSIC -> 0.42f
         NativeFisheyePreset.NEXT -> 0.55f
@@ -411,6 +496,49 @@ private fun nativeLinearFisheyeProgress(
 }
 
 /**
+ * 入场进度的回弹映射。
+ *
+ * ## 为什么要它
+ *
+ * 入场以前是**线性**地把偏移和缩放推到位，观感上是「滑进来然后停住」，没有落定感。
+ * 老师的原话是「给加上个回弹和大小缩放就差不多」。
+ *
+ * ## 为什么不是现成的 back-out / OvershootInterpolator
+ *
+ * 那类曲线是给**时间轴**用的，而动画器（`startEntryAnimation`）已经把
+ * `motionProfile.appListEnter.easing` 施加在时间上了。再套一条 ease-out 就是双重缓动：
+ * 实测 t=0.5 时值已经到 0.987 —— 动画前半程就基本结束，甩尾（[nativeStaggeredEntryProgress]
+ * 的逐行延迟）跟着一起被压没了，等于白做。
+ *
+ * 所以这里做的是**值域**上的回弹：前 [OVERSHOOT_RAMP] 段保持线性（甩尾的行间差异因此
+ * 完整保留），到位之后用一个半周正弦的衰减包把值顶过 1 再落回。返回值**可以大于 1**，
+ * 那正是过冲的那一段；调用方按用途决定要不要夹（位移和缩放保留过冲，透明度不能超 1）。
+ */
+internal fun nativeEntryOvershoot(progress: Float): Float {
+    val t = progress.takeIf(Float::isFinite)?.coerceIn(0f, 1f) ?: 1f
+    if (t <= 0f) return 0f
+    if (t >= 1f) return 1f
+    if (t <= OVERSHOOT_RAMP) return t / OVERSHOOT_RAMP
+    // 回弹段：单个衰减到 0 的正弦鼓包，端点严格回到 1。
+    val settle = (t - OVERSHOOT_RAMP) / (1f - OVERSHOOT_RAMP)
+    val envelope = 1f - settle
+    return 1f + OVERSHOOT_AMPLITUDE * kotlin.math.sin(Math.PI.toFloat() * settle) * envelope
+}
+
+/** 入场缩放：从 [ENTRY_MIN_SCALE] 弹到 1，过冲夹在 [ENTRY_MAX_SCALE] 以内。 */
+internal fun nativeEntryScale(easedProgress: Float): Float =
+    (ENTRY_MIN_SCALE + (1f - ENTRY_MIN_SCALE) * easedProgress)
+        .coerceIn(ENTRY_MIN_SCALE, ENTRY_MAX_SCALE)
+
+/** 线性推进段占整段时长的比例，其余留给回弹。 */
+private const val OVERSHOOT_RAMP = 0.82f
+
+/** 过冲幅度。手表屏幕小、图标密，超过 8% 会被看成抖动。 */
+private const val OVERSHOOT_AMPLITUDE = 0.06f
+private const val ENTRY_MIN_SCALE = 0.90f
+private const val ENTRY_MAX_SCALE = 1.05f
+
+/**
  * 甩尾入场：按子项的纵向位置给全局入场进度加延迟 —— 第一行先入屏，
  * 越往下越慢，最后一行也保证在全局进度 1.0 时到位。位置是连续量，
  * 三种布局（线性 / 蜂窝 / 密集网格）不需要各算行号。
@@ -459,7 +587,11 @@ internal fun nativeInteractionScale(
     // Compose 版的按压分档：蜂窝图标 0.90、密集网格 0.96、列表行 0.97。
     // 原生化时被压成了一刀切的 0.97，蜂窝图标的按压反馈基本不可见。
     pressed -> when (presentation) {
-        NativeAppListPresentation.HONEYCOMB -> 0.90f
+        NativeAppListPresentation.HONEYCOMB,
+        // 心流也是纯图标格，按压反馈与蜂窝同档。
+        NativeAppListPresentation.FLOW,
+        // 星环同理：格子里就是一个圆图标，按压要看得见就得缩到 0.90。
+        NativeAppListPresentation.RING -> 0.90f
         NativeAppListPresentation.DENSE_GRID -> 0.96f
         NativeAppListPresentation.LINEAR -> 0.97f
     }
@@ -515,6 +647,21 @@ internal fun nativeHoneycombChildVisual(
     viewportHeight: Float,
     config: NativeAppListConfig,
     output: NativeSpatialChildVisual = NativeSpatialChildVisual(),
+    /**
+     * 只按**垂直**距离算鱼眼半径，忽略横向偏移。心流布局要传 true。
+     *
+     * 蜂窝的图标网格是绕着屏幕中心铺开的，二维半径就是它想要的「离中心越远越小」。
+     * 心流不是：它是一列（或几列）竖着排、再整体按月牙横向推开，而基准列的 x 被
+     * [NativeFlowGeometry] 故意放在「月牙峰值正好贴边」的位置 —— 也就是**恒定地**
+     * 偏离屏幕中线。二维半径于是给整列加了一份常量惩罚，并且把亮度和月牙的横向
+     * 位移绑在了一起：月牙峰（视觉最右）恰好落在垂直中心 → 最亮；月牙两端（视觉
+     * 最左）落在垂直边缘 → 最暗。老师报的「心流越靠左越暗淡越透明，一列时右边
+     * 更亮」就是这个耦合，不是真的在按横坐标调亮度。
+     *
+     * 去掉横向分量之后，心流的鱼眼变成纯粹的「离垂直中心越远越小」，左右对称，
+     * 月牙只管位移不再影响明暗。缩放本身保留 —— 那是老师要的效果。
+     */
+    verticalOnlyFisheye: Boolean = false,
 ): NativeSpatialChildVisual {
     if (
         viewportWidth <= 0f || viewportHeight <= 0f ||
@@ -533,7 +680,11 @@ internal fun nativeHoneycombChildVisual(
     ) / 2f
     val maximumDistance = screenRadius *
         (config.honeycombFisheyeRangeRows.coerceIn(1, 8) * 0.42f).coerceAtLeast(0.42f)
-    val distance = hypot(centerX - screenCenterX, centerY - screenCenterY)
+    val distance = if (verticalOnlyFisheye) {
+        abs(centerY - screenCenterY)
+    } else {
+        hypot(centerX - screenCenterX, centerY - screenCenterY)
+    }
     val scale = if (config.fisheyeEnabled && maximumDistance > 0f) {
         val progress = (distance / maximumDistance).coerceIn(0f, 1f)
         1f - (1f - minimumScale) * progress
@@ -555,7 +706,9 @@ internal fun nativeHoneycombChildVisual(
         childCenterY = centerY,
         viewportHeight = viewportHeight.toFloat(),
     )
-    val translationY = (1f - entryProgress) * 0.08f * viewportHeight
+    // 位移与缩放吃回弹（见 nativeEntryOvershoot），透明度只吃原始进度。
+    val entryEased = nativeEntryOvershoot(entryProgress)
+    val translationY = (1f - entryEased) * 0.08f * viewportHeight
     val topProgress = edgeProgress(centerY + translationY, config.topFadeRangePx)
     val bottomProgress = edgeProgress(
         viewportHeight - centerY - translationY,
@@ -575,8 +728,10 @@ internal fun nativeHoneycombChildVisual(
     } else {
         1f
     }
+    // 图标格也要跟着入场缩放：以前这两条路只做位移，图标是「平移进来」而不是
+    // 「弹出来」（老师要的大小缩放）。
     return output.set(
-        scale = scale,
+        scale = scale * nativeEntryScale(entryEased),
         alpha = (if (config.fisheyeEnabled) scale.coerceIn(0.24f, 1f) else 1f) *
             entryProgress * compatibilityFade,
         translationX = translationX,
@@ -585,6 +740,35 @@ internal fun nativeHoneycombChildVisual(
         saturation = nativeLiteEdgeSaturation(fadeProgress, config.blurTier),
     )
 }
+
+/**
+ * 心流的月牙偏移：整行按离屏幕中线的距离往一侧平移多少像素。
+ *
+ * 偏移恒为 `0..bulge`（不是 ±bulge）：基准 x 已经由 [NativeFlowGeometry] 放在
+ * 「峰值正好贴边」的位置，这里只负责从那条边往回收。于是任何一行都不会越过屏幕边界。
+ *
+ * 单独一个函数、不并进子项视觉里，是因为圆屏那条路会用 [NativeDrawerGeometryAdapter]
+ * **整体替换** translationX/Y（把图标收进圆内的安全轮廓）。弧要是先加进视觉里，圆屏上
+ * 就会被那次替换直接吃掉 —— 而圆屏正是目标机型。所以调用方在**选定基准 translationX
+ * 之后**再叠这一项。
+ *
+ * 鱼眼刻意仍按**布局位置**算，不看月牙推完之后的 x：若让鱼眼看见月牙，鼓出最多的中间行
+ * 离屏心最远、于是被缩得最小，正好跟月牙对着干 —— 弧会被自己的缩放吃掉。
+ *
+ * @param bulgePx 必须是 [NativeFlowGeometry.crescentBulgePx] 那份**夹过**的值。
+ */
+internal fun nativeFlowCrescentTranslationX(
+    bulgePx: Float,
+    toRight: Boolean,
+    childCenterY: Float,
+    viewportHeight: Float,
+): Float = flowCrescentOffsetPx(
+    rowCenterY = childCenterY,
+    viewportCenterY = viewportHeight / 2f,
+    viewportHeight = viewportHeight,
+    bulgePx = bulgePx,
+    direction = if (toRight) FlowCrescentDirection.Right else FlowCrescentDirection.Left,
+)
 
 internal fun nativeDenseGridChildVisual(
     centerX: Float,
@@ -646,7 +830,9 @@ internal fun nativeDenseGridChildVisual(
         childCenterY = centerY,
         viewportHeight = viewportHeight,
     )
-    val translationY = (1f - entryProgress) * 0.08f * viewportHeight
+    // 位移与缩放吃回弹（见 nativeEntryOvershoot），透明度只吃原始进度。
+    val entryEased = nativeEntryOvershoot(entryProgress)
+    val translationY = (1f - entryEased) * 0.08f * viewportHeight
     val visualCenterY = centerY + translationY
     val topProgress = edgeProgress(visualCenterY, config.topFadeRangePx)
     val bottomProgress = edgeProgress(
@@ -668,8 +854,11 @@ internal fun nativeDenseGridChildVisual(
         1f
     }
     val fisheyeAlpha = if (config.fisheyeEnabled) scale.coerceIn(0.24f, 1f) else 1f
+    // 图标格也要跟着入场缩放：以前这两条路只做位移，图标是「平移进来」而不是
+    // 「弹出来」（老师要的大小缩放）。
+    // 图标格也跟着入场缩放：以前这两条路只做位移，图标是「平移进来」而不是「弹出来」。
     return output.set(
-        scale = scale,
+        scale = scale * nativeEntryScale(entryEased),
         alpha = fisheyeAlpha * entryProgress * compatibilityFade,
         translationX = translationX,
         translationY = translationY,
@@ -677,6 +866,238 @@ internal fun nativeDenseGridChildVisual(
         saturation = nativeLiteEdgeSaturation(fadeProgress, config.blurTier),
     )
 }
+
+/**
+ * 星环的径向进度：格心离屏心多远，按内切圆半径归一化。
+ *
+ * ## 为什么按内切圆而不是「几行」
+ *
+ * 鱼眼那条「生效行数」在线性 / 蜂窝里是纵向行数，星环是二维的，硬换算成半径会让
+ * 同一个数字在不同列数下含义完全不同（列数一多格子就小，四行的半径连屏心那块都盖不住，
+ * 弧直接消失）。所以半径固定取屏幕内切圆 —— 屏幕形状是这套布局唯一的几何基准 ——
+ * 而「生效行数」改去控制**中心那块不收拢的稳定核**有多大（见 [nativeRingStableCoreFraction]）。
+ * 行数越多 = 参与的圈越多 = 稳定核越小 = 弧越深，与滑杆方向一致。
+ *
+ * 返回值**可以大于 1**：圆屏四个角上的格子本来就在内切圆之外，那一段正是要被收得最狠的。
+ * 缩放侧自己夹到 1（否则角上图标会缩到看不见），位移侧刻意不夹（见
+ * [nativeRingConvergenceFraction]）。
+ */
+internal fun nativeRingRadialProgress(
+    centerX: Float,
+    centerY: Float,
+    viewportWidth: Float,
+    viewportHeight: Float,
+    config: NativeAppListConfig,
+): Float {
+    if (
+        viewportWidth <= 0f || viewportHeight <= 0f ||
+        !centerX.isFinite() || !centerY.isFinite()
+    ) {
+        return 0f
+    }
+    val safeLeft = config.leftSafeInsetPx.coerceAtLeast(0).toFloat().coerceAtMost(viewportWidth)
+    val screenCenterX = safeLeft + (viewportWidth - safeLeft) / 2f
+    val screenCenterY = viewportHeight / 2f
+    val screenRadius = minOf(viewportWidth - safeLeft, viewportHeight) / 2f
+    if (screenRadius <= 0f) return 0f
+    val normalized = hypot(centerX - screenCenterX, centerY - screenCenterY) / screenRadius
+    val core = nativeRingStableCoreFraction(config)
+    return ((normalized - core) / (1f - core)).coerceAtLeast(0f)
+}
+
+/**
+ * 中心那块「完全不收拢」的稳定核，占内切圆半径的比例。
+ *
+ * 由鱼眼的「生效行数」换算：8 行 = 整屏都参与（核为 0），1 行 = 只有最外一圈卷边（核 0.75）。
+ * 上限刻意留在 0.75 而不是更高 —— 再大就只剩贴边那一圈动，看起来是「图标被边缘吸住」
+ * 而不是一张收拢的网。
+ */
+private fun nativeRingStableCoreFraction(config: NativeAppListConfig): Float =
+    (1f - config.honeycombFisheyeRangeRows.coerceIn(1, 8) / 8f).coerceIn(0f, 0.75f)
+
+/**
+ * 星环的收拢比例：格子往屏心方向移动自身径向距离的百分之几。
+ *
+ * 形状是 `k·t² / (1 + k·t²)`（桶形畸变那一族），选它有三个原因：
+ *
+ * 1. **恒小于 1**，所以任何设置下格子都只会靠近屏心，绝不会穿过屏心翻到对面 ——
+ *    线性的 `k·t²` 一旦 k 调大就会翻面，那是纯粹的乱码画面；
+ * 2. **t 不必夹**：角上的格子（t > 1）继续被收得更狠，正好把圆外那圈拉回可视区。
+ *    夹到 1 的话角上格子会永远停在圆外，圆屏那条安全轮廓只能把它们堆在弧边上；
+ * 3. 中心附近 ≈ `k·t²`，二次起步，屏心那几个格子几乎不动 —— 弧才有「从中间鼓出去」
+ *    的观感，而不是整张网平移。
+ *
+ * 强度取鱼眼强度的一半（0..200% → 0..1）：100% 是出厂档，还留一倍的余量给老师往上调。
+ *
+ * **方屏恒为 0**（老师指定「上面下面左边右边都平铺」）。形状判定放在这条纯函数里而不是
+ * 布局管理器里，是为了让「方屏平铺」这件事本身可单测 —— 摆在 View 层就只能靠肉眼验。
+ */
+internal fun nativeRingConvergenceFraction(
+    radialProgress: Float,
+    config: NativeAppListConfig,
+): Float {
+    if (!config.fisheyeEnabled || config.deviceShape != NativeDeviceShape.ROUND) return 0f
+    val progress = radialProgress.takeIf(Float::isFinite)?.coerceAtLeast(0f) ?: return 0f
+    val strength = config.fisheyeStrength.takeIf(Float::isFinite)?.coerceIn(0f, 2f) ?: return 0f
+    val curvature = RING_MAX_CURVATURE * (strength / 2f)
+    if (curvature <= 0f) return 0f
+    val weighted = curvature * progress * progress
+    return weighted / (1f + weighted)
+}
+
+/** 星环收拢位移的两个分量。复用同一个对象，热路径不分配。 */
+internal class NativeRingOffset(
+    var x: Float = 0f,
+    var y: Float = 0f,
+) {
+    fun set(x: Float, y: Float): NativeRingOffset {
+        this.x = x
+        this.y = y
+        return this
+    }
+}
+
+/**
+ * 星环的径向收拢位移：把格心往屏心拉 [nativeRingConvergenceFraction] 那么多。
+ *
+ * ## 为什么它是四条边一起弯
+ *
+ * 收的是**径向**分量，而径向距离里含着另一个轴的偏移。于是同一行里越靠外的列
+ * `t` 越大、被拉得越多 —— 纵向分量把那一行拽成一道弧，横向分量把它收窄。列同理。
+ * 一个公式同时给出上、下、左、右四条弧，不需要按边分四段（分段必然在四个角上接不平）。
+ *
+ * ## 为什么单独一个函数、不并进 [nativeRingChildVisual]
+ *
+ * 与心流的月牙同一个原因：圆屏那条路会用 [NativeDrawerGeometryAdapter] **整体替换**
+ * translationX/Y（把图标收进内切圆的安全轮廓）。位移先加进视觉里就会被那次替换吃掉，
+ * 而圆屏正是这套布局的目标机型。调用方的做法是把「收拢后的位置」当作期望格心喂给
+ * 那个适配器，再把这一份位移加回它给出的 translation 上（见 [NativeRingLayoutManager]）。
+ *
+ * ## 为什么方屏不调它
+ *
+ * 老师指定方屏「上面下面左边右边都平铺」。方屏没有弧线边界，收拢只会让四角空出一片
+ * 无用的留白。形状判定留给调用方，这个函数保持纯粹的几何。
+ */
+internal fun nativeRingConvergenceOffset(
+    centerX: Float,
+    centerY: Float,
+    viewportWidth: Float,
+    viewportHeight: Float,
+    config: NativeAppListConfig,
+    output: NativeRingOffset = NativeRingOffset(),
+): NativeRingOffset {
+    if (
+        viewportWidth <= 0f || viewportHeight <= 0f ||
+        !centerX.isFinite() || !centerY.isFinite()
+    ) {
+        return output.set(0f, 0f)
+    }
+    val fraction = nativeRingConvergenceFraction(
+        radialProgress = nativeRingRadialProgress(
+            centerX = centerX,
+            centerY = centerY,
+            viewportWidth = viewportWidth,
+            viewportHeight = viewportHeight,
+            config = config,
+        ),
+        config = config,
+    )
+    if (fraction <= 0f) return output.set(0f, 0f)
+    val safeLeft = config.leftSafeInsetPx.coerceAtLeast(0).toFloat().coerceAtMost(viewportWidth)
+    val screenCenterX = safeLeft + (viewportWidth - safeLeft) / 2f
+    val screenCenterY = viewportHeight / 2f
+    return output.set(
+        x = -(centerX - screenCenterX) * fraction,
+        y = -(centerY - screenCenterY) * fraction,
+    )
+}
+
+/**
+ * 星环的子项视觉：径向鱼眼缩放 / 透明度 + 入场动效 + 边缘模糊。
+ *
+ * 缩放曲线与蜂窝同档（`1 - 0.42·强度` 的最小缩放），只是半径改成二维径向且按内切圆归一化，
+ * 于是「离屏心越远越小」在四个方向上一致 —— 蜂窝那份是给绕中心铺开的六边形网用的，
+ * 直接复用会连带它那条**只作用于横向**的间距压缩，与星环的径向收拢重复计一次横向。
+ *
+ * 缩放这里的径向进度**必须夹到 1**：圆屏角上的格子 t 可以到 1.8，不夹的话它们会被缩到
+ * 最小缩放以下（实测缩成一个点），而位移侧刚好相反 —— 那边靠 t > 1 把它们拉回可视区。
+ */
+internal fun nativeRingChildVisual(
+    centerX: Float,
+    centerY: Float,
+    viewportWidth: Float,
+    viewportHeight: Float,
+    config: NativeAppListConfig,
+    output: NativeSpatialChildVisual = NativeSpatialChildVisual(),
+): NativeSpatialChildVisual {
+    if (
+        viewportWidth <= 0f || viewportHeight <= 0f ||
+        !centerX.isFinite() || !centerY.isFinite()
+    ) {
+        return output.set(1f, 1f, 0f, 0f, 0f, 1f)
+    }
+    val strength = config.fisheyeStrength.takeIf(Float::isFinite)?.coerceIn(0f, 2f) ?: 0f
+    val minimumScale = (1f - 0.42f * strength).coerceIn(0.16f, 1f)
+    val radialProgress = nativeRingRadialProgress(
+        centerX = centerX,
+        centerY = centerY,
+        viewportWidth = viewportWidth,
+        viewportHeight = viewportHeight,
+        config = config,
+    ).coerceIn(0f, 1f)
+    val eased = radialProgress * radialProgress * (3f - 2f * radialProgress)
+    val scale = if (config.fisheyeEnabled) {
+        1f - (1f - minimumScale) * eased
+    } else {
+        1f
+    }
+    val entryProgress = nativeStaggeredEntryProgress(
+        config = config,
+        childCenterY = centerY,
+        viewportHeight = viewportHeight,
+    )
+    // 位移与缩放吃回弹（见 nativeEntryOvershoot），透明度只吃原始进度。
+    val entryEased = nativeEntryOvershoot(entryProgress)
+    val translationY = (1f - entryEased) * 0.08f * viewportHeight
+    val visualCenterY = centerY + translationY
+    val topProgress = edgeProgress(visualCenterY, config.topFadeRangePx)
+    val bottomProgress = edgeProgress(
+        viewportHeight - visualCenterY,
+        config.bottomFadeRangePx,
+    )
+    val blur = if (config.blurTier == NativeBlurTier.SYSTEM) {
+        maxOf(
+            config.topBlurRadiusPx * topProgress,
+            config.bottomBlurRadiusPx * bottomProgress,
+        )
+    } else {
+        0f
+    }
+    val fadeProgress = maxOf(topProgress, bottomProgress)
+    val compatibilityFade = if (config.blurTier == NativeBlurTier.LITE) {
+        nativeLiteEdgeAlpha(fadeProgress)
+    } else {
+        1f
+    }
+    return output.set(
+        scale = scale * nativeEntryScale(entryEased),
+        alpha = (if (config.fisheyeEnabled) scale.coerceIn(0.24f, 1f) else 1f) *
+            entryProgress * compatibilityFade,
+        // 收拢位移不在这里：它必须叠在圆屏安全轮廓之后（见 nativeRingConvergenceOffset）。
+        translationX = 0f,
+        translationY = translationY,
+        blurRadiusPx = blur,
+        saturation = nativeLiteEdgeSaturation(fadeProgress, config.blurTier),
+    )
+}
+
+/**
+ * 星环收拢的曲率上限（鱼眼强度 200% 那一档）。
+ *
+ * 0.45 对应「最外圈约收进 31%、角上约收进 59%」。再大下去内切圆里的格子会互相重叠 ——
+ * 收拢只压位置不压格距，重叠了就是图标叠图标。
+ */
+private const val RING_MAX_CURVATURE = 0.45f
 
 internal fun nativeLiteEdgeAlpha(progress: Float): Float =
     1f - 0.38f * progress.takeIf(Float::isFinite)?.coerceIn(0f, 1f).orZero()

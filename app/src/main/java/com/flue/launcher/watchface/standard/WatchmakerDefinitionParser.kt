@@ -203,6 +203,12 @@ private val SUPPORTED_LAYER_TYPES = setOf(
     "text_ring",
     "markers",
     "markers_hm",
+    // Studio 2.0 structured primitives handled by WatchmakerWatchFaceView.
+    "ring_image",
+    "progress_image",
+    "sunarc",
+    "daylight",
+    "horizon",
     // WM_FORMAT_1.0/2.0 common data and vector layers.  `map` intentionally
     // stays out of this set: it requires a live map bridge and is reported as
     // unsupported instead of being claimed as fully rendered.

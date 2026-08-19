@@ -341,6 +341,14 @@ internal class FlueSpringEdgeEffectFactory(
     density: Float = owner.resources.displayMetrics.density,
     motionProfile: FlueMotionProfile = FlueMotionProfiles.Gentle,
     private val onOffsetChanged: (Float) -> Unit,
+    /**
+     * 触边反馈（老师要的「触顶触底震动」）。
+     *
+     * 挂在这里而不是滚动监听上，因为这个工厂**已经是**「列表到边了」的唯一权威 ——
+     * RecyclerView 只在真的走到边界还想继续时才会调 pull / absorb。用滚动偏移量自己判边
+     * 会在 fling 尾巴、布局变化、越界回弹里各错一次。
+     */
+    private val onEdgeReached: (FlueEdgePhysics.Edge) -> Unit = {},
 ) : RecyclerView.EdgeEffectFactory() {
     private val physics = FlueEdgePhysics(density = density).apply {
         updateMotionProfile(motionProfile)
@@ -350,6 +358,34 @@ internal class FlueSpringEdgeEffectFactory(
     private var released = false
     private var topReleaseCandidate = false
     private var lastDiagnosticState = ""
+
+    /**
+     * 每次触边只震一次的门闩，离开边缘后复位。
+     *
+     * 不设门闩的话：手指按在顶部继续下拉，`pull` 每帧都来一次，就是持续震动。
+     */
+    private var topHapticFired = false
+    private var bottomHapticFired = false
+
+    private fun fireEdgeHaptic(edge: FlueEdgePhysics.Edge) {
+        val already = when (edge) {
+            FlueEdgePhysics.Edge.TOP -> topHapticFired
+            FlueEdgePhysics.Edge.BOTTOM -> bottomHapticFired
+        }
+        if (already) return
+        when (edge) {
+            FlueEdgePhysics.Edge.TOP -> topHapticFired = true
+            FlueEdgePhysics.Edge.BOTTOM -> bottomHapticFired = true
+        }
+        onEdgeReached(edge)
+    }
+
+    private fun resetEdgeHaptic(edge: FlueEdgePhysics.Edge) {
+        when (edge) {
+            FlueEdgePhysics.Edge.TOP -> topHapticFired = false
+            FlueEdgePhysics.Edge.BOTTOM -> bottomHapticFired = false
+        }
+    }
 
     /**
      * 状态跳变诊断（logcat 过滤 `FlueEdge`）。offset 按 8px 桶量化，
@@ -446,6 +482,8 @@ internal class FlueSpringEdgeEffectFactory(
         animator = null
         physics.finish(FlueEdgePhysics.Edge.TOP)
         physics.finish(FlueEdgePhysics.Edge.BOTTOM)
+        resetEdgeHaptic(FlueEdgePhysics.Edge.TOP)
+        resetEdgeHaptic(FlueEdgePhysics.Edge.BOTTOM)
         topReleaseCandidate = false
         // The pointer window is owned exclusively by the dispatch funnel.
         // beginDrag() calls finish() mid-gesture; clearing the window here made
@@ -469,6 +507,9 @@ internal class FlueSpringEdgeEffectFactory(
 
     internal fun pull(edge: FlueEdgePhysics.Edge, distance: Float): Float {
         if (released) return 0f
+        // 只在**手指真的在拉**且位移非零时算触边：RecyclerView 会用零位移的 pull 来探测
+        // 光晕（`stopGlowAnimations`），那不是用户到边，跟着震就是无缘无故震。
+        if (distance != 0f && pointerOwnsGesture) fireEdgeHaptic(edge)
         stopAnimatorForInput()
         val consumed = physics.pull(edge, distance * owner.height.coerceAtLeast(1))
         topReleaseCandidate = pointerOwnsGesture &&
@@ -487,6 +528,9 @@ internal class FlueSpringEdgeEffectFactory(
 
     internal fun absorb(edge: FlueEdgePhysics.Edge, velocity: Int) {
         if (released) return
+        // 惯性滑到边界撞上去 —— 这一下也要震，而且是最需要震的那一下（手指已经离屏，
+        // 只有触觉能告诉用户「到底了」）。
+        if (velocity != 0) fireEdgeHaptic(edge)
         physics.absorb(edge, velocity.toFloat())
         // An absorb at the top *inside* a finger window is the boundary hit of a
         // downward flick — the user scrolled to the top and kept going. Clearing
@@ -504,6 +548,8 @@ internal class FlueSpringEdgeEffectFactory(
 
     internal fun release(edge: FlueEdgePhysics.Edge) {
         if (released) return
+        // 松手 / 列表真的离开边缘 —— 门闩复位，下次再到边还会震。
+        resetEdgeHaptic(edge)
         // Unconditional: RecyclerView's onRelease call sites are all legitimate
         // (terminal samples, and considerReleasingGlowsOnScroll once the list
         // really scrolls away from the edge). The old finger guard rejected
@@ -528,6 +574,7 @@ internal class FlueSpringEdgeEffectFactory(
 
     internal fun finish(edge: FlueEdgePhysics.Edge) {
         physics.finish(edge)
+        resetEdgeHaptic(edge)
         if (edge == FlueEdgePhysics.Edge.TOP) topReleaseCandidate = false
         if (!physics.isAnimating) animator?.cancel()
         publish()

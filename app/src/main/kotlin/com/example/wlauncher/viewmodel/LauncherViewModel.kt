@@ -26,7 +26,9 @@ import com.flue.launcher.applist.model.AppListCommand
 import com.flue.launcher.applist.model.AppListReducer
 import com.flue.launcher.applist.model.AppListSnapshot
 import com.flue.launcher.applist.model.NormalizedPoint
+import com.flue.launcher.R
 import com.flue.launcher.applist.persistence.AppOrderWriteCoordinator
+import com.flue.launcher.backup.FlueBackupExportSummary
 import com.flue.launcher.backup.FlueBackupManager
 import com.flue.launcher.backup.FlueBackupOptions
 import com.flue.launcher.backup.FlueBackupPreview
@@ -45,12 +47,22 @@ import com.flue.launcher.launchsession.retainsLaunchIcon
 import com.flue.launcher.motion.FlueMotionProfile
 import com.flue.launcher.motion.FlueMotionProfileJson
 import com.flue.launcher.motion.FlueMotionProfiles
+import com.flue.launcher.applist.background.AppListBackgroundConfig
+import com.flue.launcher.applist.background.AppListBackgroundJson
+import com.flue.launcher.applist.background.AppListBackgroundMode
+import com.flue.launcher.layout.FlueLayoutProfile
+import com.flue.launcher.layout.FlueLayoutProfileJson
+import com.flue.launcher.layout.FlueLayoutProfiles
+import com.flue.launcher.layout.flueUniqueProfileName
+import com.flue.launcher.layout.migratedLayoutProfiles
+import com.flue.launcher.util.FlowCrescentDirection
 import com.flue.launcher.ui.common.FlueScreenShape
 import com.flue.launcher.ui.common.DEFAULT_OVERLAY_MASK_CORNER_RADIUS_DP
 import com.flue.launcher.ui.common.normalizeOverlayMaskCornerRadiusDp
 import com.flue.launcher.motion.MotionEasing
 import com.flue.launcher.motion.MotionPhaseKey
 import com.flue.launcher.service.FlueAccessibilityService
+import com.flue.launcher.ui.anim.FlueTransitionMotion
 import com.flue.launcher.ui.theme.ThemeMode
 import com.flue.launcher.ui.theme.UiStyle
 import com.flue.launcher.ui.theme.DEFAULT_UI_STYLE
@@ -85,6 +97,7 @@ import com.flue.launcher.watchface.standard.WatchCanvasPreset
 import com.flue.launcher.watchface.standard.WatchCanvasSettings
 import com.flue.launcher.watchface.standard.WatchDateLocale
 import com.flue.launcher.watchface.standard.WatchmakerWatchFaceStorage
+import com.flue.launcher.watchface.standard.watchArchiveDeclaresProtection
 import com.flue.launcher.watchface.store.FlueDownloadTuning
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -126,6 +139,8 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
 
         val KEY_LAYOUT = stringPreferencesKey("layout_mode")
         val KEY_THEME_MODE = stringPreferencesKey("theme_mode")
+        /** 转场动画风格（平移 / 缩放）。与界面风格无关，见 FlueTransitionMotion。 */
+        val KEY_TRANSITION_MOTION = stringPreferencesKey("transition_motion")
         val KEY_UI_STYLE = stringPreferencesKey("ui_style")
         val KEY_SIDE_SCREEN_ENABLED = booleanPreferencesKey("side_screen_enabled")
         val KEY_SIDE_SCREEN_SHORTCUTS = stringPreferencesKey("side_screen_shortcuts")
@@ -155,10 +170,12 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         val KEY_OVERLAY_MASK_CORNER_RADIUS_DP = intPreferencesKey("overlay_mask_corner_radius_dp")
         val KEY_APP_LIST_WATCHFACE_COLORS = booleanPreferencesKey("app_list_watchface_colors")
         val KEY_APP_LIST_ROW_BORDER = booleanPreferencesKey("app_list_row_border_enabled")
+        val KEY_APP_LIST_GRID_ICON_PLATE = booleanPreferencesKey("app_list_grid_icon_plate_enabled")
         val KEY_APP_LIST_FOLDERS_ENABLED = booleanPreferencesKey("app_list_folders_enabled")
+        val KEY_APP_LIST_SCROLL_INDICATOR = booleanPreferencesKey("app_list_scroll_indicator_enabled")
         private val KEY_REMOVED_FAST_FLOW_ANIMATION = booleanPreferencesKey("fast_flow_animation_enabled")
         val KEY_MUSIC_TEXT_SWITCH_ANIMATION = stringPreferencesKey("music_text_switch_animation")
-        val KEY_TWO_TONE_ICONS = booleanPreferencesKey("two_tone_icons_enabled")
+        private val KEY_REMOVED_TWO_TONE_ICONS = booleanPreferencesKey("two_tone_icons_enabled")
         val KEY_ICON_SHADOW = booleanPreferencesKey("app_icon_shadow_enabled")
         val KEY_APP_LIST_RETURN_SHRINK = booleanPreferencesKey("app_list_return_shrink_enabled")
         val KEY_FACE_RETURN_SHRINK = booleanPreferencesKey("face_return_shrink_enabled")
@@ -169,6 +186,23 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         val KEY_APP_LIST_STAGGER = booleanPreferencesKey("app_list_stagger_enabled")
         val KEY_MOTION_PROFILE_ID = stringPreferencesKey("motion_profile_id")
         val KEY_CUSTOM_MOTION_PROFILES = stringPreferencesKey("custom_motion_profiles")
+        /**
+         * 布局档案库（含四种布局的默认档 + 用户副本）。
+         *
+         * 与动效那边只存「自定义档案」不同：布局的默认档是**可编辑**的（鱼眼滑块历来
+         * 拖了就生效），所以整库都要落盘，不能只存自定义那几份。
+         */
+        val KEY_LAYOUT_PROFILES = stringPreferencesKey("layout_profiles")
+        /** 每种布局当前选中的档案 id，JSON 对象：{"honeycomb":"preset:honeycomb", …}。 */
+        val KEY_ACTIVE_LAYOUT_PROFILE_IDS = stringPreferencesKey("active_layout_profile_ids")
+        /**
+         * 应用列表背景配置，单个 JSON（见 [com.flue.launcher.applist.background.AppListBackgroundJson]）。
+         *
+         * 存成一个 JSON 而不是五个扁平 key：这五项（模式 / 自定义色 / 模糊 / 遮罩 / 图片路径）
+         * 只有整体才有意义 —— 单独一个「模糊 70%」在纯色档下毫无含义，分开存必然出现
+         * 「模式已经切走了、旧模糊值还在」的半截状态。
+         */
+        val KEY_APP_LIST_BACKGROUND = stringPreferencesKey("app_list_background")
         val KEY_SHOW_STEP_COUNT = booleanPreferencesKey("show_step_count")
         val KEY_SHOW_NOTIFICATION = booleanPreferencesKey("show_notification")
         val KEY_SHOW_ONGOING_NOTIFICATIONS = booleanPreferencesKey("show_ongoing_notifications")
@@ -180,6 +214,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         val KEY_SHOW_MEDIA_CUSTOM_ACTIONS = booleanPreferencesKey("show_media_custom_actions")
         val KEY_SWAP_MUSIC_NOTIFICATION_COMPONENTS = booleanPreferencesKey("swap_music_notification_components")
         val KEY_DOUBLE_TAP_LOCK_SCREEN = booleanPreferencesKey("double_tap_lock_screen_enabled")
+        val KEY_FACE_IGNORES_BACK_KEY = booleanPreferencesKey("face_ignores_back_key")
         val KEY_POWER_MENU_BUTTON = booleanPreferencesKey("power_menu_button_enabled")
         val KEY_WATCHFACE_CHARGING_POWER_TEXT = booleanPreferencesKey("watchface_charging_power_text")
         val KEY_WATCHFACE_TEXT_ENTRY_ANIMATION = booleanPreferencesKey("watchface_text_entry_animation")
@@ -309,6 +344,8 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     val layoutMode: StateFlow<LayoutMode> = _layoutMode.asStateFlow()
     private val _themeMode = repositories.sharedState.themeMode
     val themeMode: StateFlow<ThemeMode> = _themeMode.asStateFlow()
+    private val _transitionMotion = MutableStateFlow(FlueTransitionMotion.Default)
+    val transitionMotion: StateFlow<FlueTransitionMotion> = _transitionMotion.asStateFlow()
     private val _uiStyle = repositories.sharedState.uiStyle
     val uiStyle: StateFlow<UiStyle> = _uiStyle.asStateFlow()
     private val _sideScreenEnabled = MutableStateFlow(true)
@@ -436,6 +473,37 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         _appListEdgeSpacingCompressionEnabled.asStateFlow()
     private val _appListLeftSafeInsetPercent = MutableStateFlow(0)
     val appListLeftSafeInsetPercent: StateFlow<Int> = _appListLeftSafeInsetPercent.asStateFlow()
+
+    // ---- 布局档案（鱼眼六项 + 心流两项，按布局分开存）------------------------
+    //
+    // 上面那六个 flow **不再是**真值所在，它们现在是「当前生效档案」的投影：
+    // 读取点有一百多处（LauncherActivity / SettingsActivity / 原生列表配置），
+    // 全改成读档案对象要动一大片，而投影让它们一行都不用改。
+    // 写入一律走 updateActiveLayoutProfile()，然后由 applyActiveLayoutProfile()
+    // 把值推回投影 —— 单向流，不存在两份真值互相打架。
+    private val _layoutProfiles = MutableStateFlow(FlueLayoutProfiles.builtIns)
+    val layoutProfiles: StateFlow<List<FlueLayoutProfile>> = _layoutProfiles.asStateFlow()
+    private var activeLayoutProfileIds: Map<LayoutMode, String> =
+        FlueLayoutProfiles.builtIns.associate { it.layoutMode to it.id }
+    private val _activeLayoutProfile = MutableStateFlow(FlueLayoutProfiles.Honeycomb)
+    val activeLayoutProfile: StateFlow<FlueLayoutProfile> = _activeLayoutProfile.asStateFlow()
+    /** 心流月牙弧度（占上限鼓出量的百分比）。投影自当前档案。 */
+    private val _appListFlowCrescentBulgePercent =
+        MutableStateFlow(FlueLayoutProfiles.Flow.crescentBulgePercent)
+    val appListFlowCrescentBulgePercent: StateFlow<Int> =
+        _appListFlowCrescentBulgePercent.asStateFlow()
+    /** 心流月牙是否朝右。投影自当前档案。 */
+    private val _appListFlowCrescentToRight = MutableStateFlow(true)
+    val appListFlowCrescentToRight: StateFlow<Boolean> =
+        _appListFlowCrescentToRight.asStateFlow()
+    /**
+     * 应用列表背景配置。整份一起存、一起读（见 [KEY_APP_LIST_BACKGROUND]）。
+     *
+     * 默认 [AppListBackgroundConfig.Default] 就是「纯色跟随系统」，与这个功能加进来之前
+     * 逐位相同 —— 加选项不改默认观感。
+     */
+    private val _appListBackground = MutableStateFlow(AppListBackgroundConfig.Default)
+    val appListBackground: StateFlow<AppListBackgroundConfig> = _appListBackground.asStateFlow()
     private val _appListScalePercent = MutableStateFlow(100)
     val appListScalePercent: StateFlow<Int> = _appListScalePercent.asStateFlow()
     private val _globalUiScalePercent = MutableStateFlow(100)
@@ -446,12 +514,18 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     val appListWatchFaceColors: StateFlow<Boolean> = _appListWatchFaceColors.asStateFlow()
     private val _appListRowBorderEnabled = MutableStateFlow(false)
     val appListRowBorderEnabled: StateFlow<Boolean> = _appListRowBorderEnabled.asStateFlow()
-    private val _appListFoldersEnabled = MutableStateFlow(false)
+    // 默认 true = 保持网格布局一直以来的样子（圆图标底下那块底板）。
+    // 这个开关是新增的「能关掉」，不是新的默认外观，所以老用户升级后画面不变。
+    private val _appListGridIconPlateEnabled = MutableStateFlow(true)
+    val appListGridIconPlateEnabled: StateFlow<Boolean> = _appListGridIconPlateEnabled.asStateFlow()
+    private val _appListFoldersEnabled = MutableStateFlow(true)
     val appListFoldersEnabled: StateFlow<Boolean> = _appListFoldersEnabled.asStateFlow()
+    /** 屏幕右侧滑动进度指示器。老师指定默认开。 */
+    private val _appListScrollIndicatorEnabled = MutableStateFlow(true)
+    val appListScrollIndicatorEnabled: StateFlow<Boolean> =
+        _appListScrollIndicatorEnabled.asStateFlow()
     private val _musicTextSwitchAnimation = MutableStateFlow(MusicTextSwitchAnimations.DEFAULT_ID)
     val musicTextSwitchAnimation: StateFlow<String> = _musicTextSwitchAnimation.asStateFlow()
-    private val _twoToneIconsEnabled = MutableStateFlow(false)
-    val twoToneIconsEnabled: StateFlow<Boolean> = _twoToneIconsEnabled.asStateFlow()
     private val _iconShadowEnabled = MutableStateFlow(true)
     val iconShadowEnabled: StateFlow<Boolean> = _iconShadowEnabled.asStateFlow()
     private val _appListReturnShrinkEnabled = MutableStateFlow(true)
@@ -470,8 +544,12 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     val reduceDynamicEffects: StateFlow<Boolean> = _reduceDynamicEffects.asStateFlow()
     private val _screenShapeOverride = MutableStateFlow(FlueScreenShape.AUTO)
     val screenShapeOverride: StateFlow<FlueScreenShape> = _screenShapeOverride.asStateFlow()
-    private val _appListStaggerEnabled = MutableStateFlow(false)
+    // 甩尾入场默认**开**：图标从上排到下排依次向上浮出，这是老师点名要的观感。
+    // 以前默认关，机制虽然做好了却没人看得见（老师问「你那个做了吗」）。
+    private val _appListStaggerEnabled = MutableStateFlow(true)
     val appListStaggerEnabled: StateFlow<Boolean> = _appListStaggerEnabled.asStateFlow()
+    // 默认档是「柔和」（Gentle），所有 UI 风格共用同一条曲线 —— 以前这里是「跟随风格」，
+    // 初值要看当前风格，那一档已按老师要求删掉。
     private val _motionProfiles = MutableStateFlow(FlueMotionProfiles.builtIns)
     val motionProfiles: StateFlow<List<FlueMotionProfile>> = _motionProfiles.asStateFlow()
     private val _activeMotionProfile = MutableStateFlow(FlueMotionProfiles.Gentle)
@@ -501,6 +579,18 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     val swapMusicNotificationComponents: StateFlow<Boolean> = _swapMusicNotificationComponents.asStateFlow()
     private val _doubleTapLockScreenEnabled = MutableStateFlow(false)
     val doubleTapLockScreenEnabled: StateFlow<Boolean> = _doubleTapLockScreenEnabled.asStateFlow()
+
+    /**
+     * 表盘不响应返回键（米兔手表适配）。
+     *
+     * 米兔手表把「从左往右滑」这个手势直接映射成系统返回键。而这正是 Flue 拉开负一屏
+     * 的手势，于是每次划开负一屏，刚拉出来就被那一记返回给关掉了 —— 手势和按键是同一
+     * 个物理动作，在应用层分不开。唯一能做的是让表盘侧忽略这记返回。
+     *
+     * 默认关：只有米兔这类会做手势→按键映射的机型需要，其他机型开了反而让返回键失灵。
+     */
+    private val _faceIgnoresBackKey = MutableStateFlow(false)
+    val faceIgnoresBackKey: StateFlow<Boolean> = _faceIgnoresBackKey.asStateFlow()
     private val _powerMenuButtonEnabled = MutableStateFlow(false)
     val powerMenuButtonEnabled: StateFlow<Boolean> = _powerMenuButtonEnabled.asStateFlow()
     private val _watchFaceChargingPowerText = MutableStateFlow(true)
@@ -515,7 +605,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     private val _watchFaceBottomFadeEnabled = MutableStateFlow(false)
     val watchFaceBottomFadeEnabled: StateFlow<Boolean> = _watchFaceBottomFadeEnabled.asStateFlow()
     /** App 级画布默认。没配过每表盘覆盖的表盘都用它。 */
-    private val _watchfaceCanvasDefault = MutableStateFlow(WatchCanvasSettings.DEFAULT)
+    private val _watchfaceCanvasDefault = MutableStateFlow(WatchCanvasSettings.GLOBAL_DEFAULT)
     val watchfaceCanvasDefault: StateFlow<WatchCanvasSettings> = _watchfaceCanvasDefault.asStateFlow()
 
     /** 每表盘覆盖表。**键存在即代表该表盘不跟随全局默认**。 */
@@ -791,14 +881,20 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                 } ?: LayoutMode.Honeycomb
                 if (_layoutMode.value != loadedLayout) _layoutMode.value = loadedLayout
 
+                // 默认深色（老师定）：手表多为 OLED，深色既省电又是三套风格的基准观感
+                // （watchOS 纯黑、HyperOS 深灰、MD3 深色都是各自的"正脸"）。存过值的
+                // 老用户不受影响 —— 只有**没存过**才落到这个默认。
                 val loadedThemeMode = prefs[KEY_THEME_MODE]?.let {
                     try {
                         ThemeMode.valueOf(it)
                     } catch (_: Exception) {
-                        ThemeMode.SYSTEM
+                        ThemeMode.DARK
                     }
-                } ?: ThemeMode.SYSTEM
+                } ?: ThemeMode.DARK
                 if (_themeMode.value != loadedThemeMode) _themeMode.value = loadedThemeMode
+
+                val loadedMotion = FlueTransitionMotion.fromPreference(prefs[KEY_TRANSITION_MOTION]?.toString())
+                if (_transitionMotion.value != loadedMotion) _transitionMotion.value = loadedMotion
 
                 val loadedUiStyle = uiStyleFromPreference(prefs[KEY_UI_STYLE])
                 if (_uiStyle.value != loadedUiStyle) _uiStyle.value = loadedUiStyle
@@ -907,37 +1003,51 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                 val loadedBottomFade = (prefs[KEY_HONEYCOMB_BOTTOM_FADE] ?: 30).coerceIn(0, 160)
                 if (_honeycombBottomFade.value != loadedBottomFade) _honeycombBottomFade.value = loadedBottomFade
 
-                val loadedFisheyeEnabled = prefs[KEY_APP_LIST_FISHEYE] ?: true
-                if (_appListFisheyeEnabled.value != loadedFisheyeEnabled) {
-                    _appListFisheyeEnabled.value = loadedFisheyeEnabled
-                }
-
-                val loadedMaterialTopFisheye = prefs[KEY_MATERIAL_HONEYCOMB_TOP_FISHEYE] ?: false
-                if (_materialHoneycombTopFisheyeEnabled.value != loadedMaterialTopFisheye) {
-                    _materialHoneycombTopFisheyeEnabled.value = loadedMaterialTopFisheye
-                }
-
-                val loadedFisheyeRangeRows = (prefs[KEY_APP_LIST_FISHEYE_RANGE_ROWS] ?: 4).coerceIn(1, 8)
-                if (_appListFisheyeRangeRows.value != loadedFisheyeRangeRows) {
-                    _appListFisheyeRangeRows.value = loadedFisheyeRangeRows
-                }
-
-                val loadedFisheyeStrength = (prefs[KEY_APP_LIST_FISHEYE_STRENGTH_PERCENT] ?: 100).coerceIn(0, 200)
-                if (_appListFisheyeStrengthPercent.value != loadedFisheyeStrength) {
-                    _appListFisheyeStrengthPercent.value = loadedFisheyeStrength
-                }
-
+                // ---- 布局档案 ----------------------------------------------
+                // 先读档案库；读不到（首次升级上来）就从旧的六个扁平偏好迁一次。
+                // 扁平键此后**只读不写**，保留一个版本周期 —— 万一降级回旧版，
+                // 旧版仍能读到最后一次旧值，不至于一片默认。
                 val hasSavedLeftSafeInset = prefs[KEY_APP_LIST_LEFT_SAFE_INSET_PERCENT] != null
-                val loadedLeftSafeInset = (prefs[KEY_APP_LIST_LEFT_SAFE_INSET_PERCENT]
-                    ?: if (shouldApplyDevicePreset && !hasSavedLeftSafeInset && isXiaomi17ProSeriesDevice()) 20 else 0)
-                    .let(::normalizeLeftSafeInsetPercent)
-                if (_appListLeftSafeInsetPercent.value != loadedLeftSafeInset) {
-                    _appListLeftSafeInsetPercent.value = loadedLeftSafeInset
+                val flatLeftSafeInsetPercent = prefs[KEY_APP_LIST_LEFT_SAFE_INSET_PERCENT]
+                    ?: if (
+                        shouldApplyDevicePreset &&
+                        !hasSavedLeftSafeInset &&
+                        isXiaomi17ProSeriesDevice()
+                    ) {
+                        20
+                    } else {
+                        null
+                    }
+                val storedLayoutProfiles = prefs[KEY_LAYOUT_PROFILES]?.let { payload ->
+                    runCatching { FlueLayoutProfileJson.decodeLibrary(payload) }.getOrNull()
+                }
+                val loadedLayoutProfiles = FlueLayoutProfiles.withMissingBuiltIns(
+                    storedLayoutProfiles ?: migratedLayoutProfiles(
+                        fisheyeEnabled = prefs[KEY_APP_LIST_FISHEYE],
+                        topRowExtraFisheyeEnabled = prefs[KEY_MATERIAL_HONEYCOMB_TOP_FISHEYE],
+                        edgeSpacingCompressionEnabled =
+                            prefs[KEY_APP_LIST_EDGE_SPACING_COMPRESSION],
+                        fisheyeRangeRows = prefs[KEY_APP_LIST_FISHEYE_RANGE_ROWS],
+                        fisheyeStrengthPercent = prefs[KEY_APP_LIST_FISHEYE_STRENGTH_PERCENT],
+                        leftSafeInsetPercent =
+                            flatLeftSafeInsetPercent?.let(::normalizeLeftSafeInsetPercent),
+                    ),
+                )
+                if (_layoutProfiles.value != loadedLayoutProfiles) {
+                    _layoutProfiles.value = loadedLayoutProfiles
+                }
+                activeLayoutProfileIds =
+                    decodeActiveLayoutProfileIds(prefs[KEY_ACTIVE_LAYOUT_PROFILE_IDS])
+                applyActiveLayoutProfile()
+                if (storedLayoutProfiles == null) {
+                    // 迁移结果立刻落盘，否则每次冷启动都要重算一遍迁移。
+                    persistLayoutProfiles(loadedLayoutProfiles)
                 }
 
-                val loadedEdgeSpacingCompression = prefs[KEY_APP_LIST_EDGE_SPACING_COMPRESSION] ?: true
-                if (_appListEdgeSpacingCompressionEnabled.value != loadedEdgeSpacingCompression) {
-                    _appListEdgeSpacingCompressionEnabled.value = loadedEdgeSpacingCompression
+                val loadedAppListBackground =
+                    AppListBackgroundJson.decodeOrDefault(prefs[KEY_APP_LIST_BACKGROUND])
+                if (_appListBackground.value != loadedAppListBackground) {
+                    _appListBackground.value = loadedAppListBackground
                 }
 
                 val loadedAppListScale = normalizeAppListScalePercent(prefs[KEY_APP_LIST_SCALE_PERCENT] ?: 100)
@@ -967,11 +1077,22 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                     _appListRowBorderEnabled.value = loadedAppListRowBorder
                 }
 
-                // Existing users keep their explicit preference. Fresh installs
-                // default synthetic folder creation to off.
-                val loadedAppListFoldersEnabled = prefs[KEY_APP_LIST_FOLDERS_ENABLED] ?: false
+                // 缺键按 true 读：这块底板在开关存在之前就一直画着，缺省值必须复现旧行为。
+                val loadedAppListGridIconPlate = prefs[KEY_APP_LIST_GRID_ICON_PLATE] ?: true
+                if (_appListGridIconPlateEnabled.value != loadedAppListGridIconPlate) {
+                    _appListGridIconPlateEnabled.value = loadedAppListGridIconPlate
+                }
+
+                // 合成文件夹默认**开**（老师指定）。老用户库里已经写过这个键的照旧读自己的值，
+                // 只有从没碰过这项的（含全新安装）才吃到新默认。
+                val loadedAppListFoldersEnabled = prefs[KEY_APP_LIST_FOLDERS_ENABLED] ?: true
                 if (_appListFoldersEnabled.value != loadedAppListFoldersEnabled) {
                     _appListFoldersEnabled.value = loadedAppListFoldersEnabled
+                }
+
+                val loadedAppListScrollIndicator = prefs[KEY_APP_LIST_SCROLL_INDICATOR] ?: true
+                if (_appListScrollIndicatorEnabled.value != loadedAppListScrollIndicator) {
+                    _appListScrollIndicatorEnabled.value = loadedAppListScrollIndicator
                 }
 
                 // One-way migration: old builds may have persisted this key,
@@ -987,10 +1108,9 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                     _musicTextSwitchAnimation.value = loadedMusicTextSwitchAnimation
                 }
 
-                val loadedTwoToneIcons = prefs[KEY_TWO_TONE_ICONS] ?: false
-                if (_twoToneIconsEnabled.value != loadedTwoToneIcons) {
-                    _twoToneIconsEnabled.value = loadedTwoToneIcons
-                    appRepository.setTwoToneIconsEnabled(loadedTwoToneIcons)
+                // 同上，双色图标已经整体下架，旧库里残留的开关值一并清掉。
+                if (prefs[KEY_REMOVED_TWO_TONE_ICONS] != null) {
+                    persist { store.edit { it.remove(KEY_REMOVED_TWO_TONE_ICONS) } }
                 }
 
                 val loadedIconShadow = prefs[KEY_ICON_SHADOW] ?: true
@@ -1030,7 +1150,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                     _screenShapeOverride.value = loadedScreenShape
                 }
 
-                val loadedStagger = prefs[KEY_APP_LIST_STAGGER] ?: false
+                val loadedStagger = prefs[KEY_APP_LIST_STAGGER] ?: true
                 if (_appListStaggerEnabled.value != loadedStagger) {
                     _appListStaggerEnabled.value = loadedStagger
                 }
@@ -1042,7 +1162,8 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                     }
                     .orEmpty()
                     .filterNot { FlueMotionProfiles.isBuiltIn(it.id) }
-                val loadedMotionProfiles = FlueMotionProfiles.builtIns + customMotionProfiles
+                val loadedMotionProfiles =
+                    FlueMotionProfiles.builtIns + customMotionProfiles
                 if (_motionProfiles.value != loadedMotionProfiles) {
                     _motionProfiles.value = loadedMotionProfiles
                 }
@@ -1083,12 +1204,15 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                     _watchFaceBottomFadeEnabled.value = loadedWatchFaceBottomFade
                 }
 
-                // 画布默认：新键缺席时从存量的 force_fill 布尔推导，升级用户画面不变。
+                // 画布默认优先级：新键 → 存量 force_fill 开关（用户**显式**动过才算）
+                // → 出厂默认（铺满）。中间那一层保住升级用户自己的选择；
+                // 从没配置过的（含全新安装）才吃出厂值。
                 // 不在这里回写新键 —— 读路径每次都能推导出同一个值，回写只会让
                 // 一次纯读取变成一次写盘。
                 val loadedCanvasDefault = prefs[KEY_WATCHFACE_CANVAS_DEFAULT]
                     ?.let(WatchCanvasSettings::decode)
-                    ?: WatchCanvasSettings.fromForceFill(prefs[KEY_WATCHMAKER_FORCE_FILL] ?: false)
+                    ?: prefs[KEY_WATCHMAKER_FORCE_FILL]?.let(WatchCanvasSettings::fromForceFill)
+                    ?: WatchCanvasSettings.GLOBAL_DEFAULT
                 if (_watchfaceCanvasDefault.value != loadedCanvasDefault) {
                     _watchfaceCanvasDefault.value = loadedCanvasDefault
                 }
@@ -1168,6 +1292,11 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                 val loadedDoubleTapLockScreen = prefs[KEY_DOUBLE_TAP_LOCK_SCREEN] ?: false
                 if (_doubleTapLockScreenEnabled.value != loadedDoubleTapLockScreen) {
                     _doubleTapLockScreenEnabled.value = loadedDoubleTapLockScreen
+                }
+
+                val loadedFaceIgnoresBackKey = prefs[KEY_FACE_IGNORES_BACK_KEY] ?: false
+                if (_faceIgnoresBackKey.value != loadedFaceIgnoresBackKey) {
+                    _faceIgnoresBackKey.value = loadedFaceIgnoresBackKey
                 }
 
                 val loadedPowerMenuButton = prefs[KEY_POWER_MENU_BUTTON] ?: false
@@ -1469,7 +1598,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         _currentApp.value = appInfo
         val useFlueTransition = _animationOverrideEnabled.value
         _currentLaunchIcon.value = if (useFlueTransition) {
-            appInfo.iconForDisplay(useTwoTone = _twoToneIconsEnabled.value)
+            appInfo.iconForDisplay()
         } else {
             null
         }
@@ -1769,6 +1898,9 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
 
     fun setLayoutMode(mode: LayoutMode) {
         _layoutMode.value = mode
+        // 鱼眼参数按布局分开存，所以换布局要立刻把对应档案的值推进投影，
+        // 否则新布局会先用上一种布局的参数渲染一帧。
+        applyActiveLayoutProfile()
         persist { store.edit { it[KEY_LAYOUT] = mode.name } }
     }
 
@@ -1776,6 +1908,12 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         if (_themeMode.value == mode) return
         _themeMode.value = mode
         repositories.applicationScope.launch { store.edit { it[KEY_THEME_MODE] = mode.name } }
+    }
+
+    fun setTransitionMotion(motion: FlueTransitionMotion) {
+        if (_transitionMotion.value == motion) return
+        _transitionMotion.value = motion
+        repositories.applicationScope.launch { store.edit { it[KEY_TRANSITION_MOTION] = motion.name } }
     }
 
     fun setUiStyle(style: UiStyle) {
@@ -1908,7 +2046,9 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     fun renameFolder(folder: AppInfo, name: String) {
         if (!folder.isFolder) return
         if (appRepository.renameFolder(folder.componentKey, name)) {
-            val renamed = folder.copy(label = name.ifBlank { "文件夹" })
+            val renamed = folder.copy(
+                label = name.ifBlank { getApplication<Application>().getString(R.string.app_list_folder_default_name) },
+            )
             _openFolder.value = if (_openFolder.value?.componentKey == folder.componentKey) renamed else _openFolder.value
         }
     }
@@ -2110,41 +2250,46 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     }
 
     fun setAppListFisheyeEnabled(enabled: Boolean) {
-        _appListFisheyeEnabled.value = enabled
-        persist { store.edit { it[KEY_APP_LIST_FISHEYE] = enabled } }
+        updateActiveLayoutProfile { it.copy(fisheyeEnabled = enabled) }
     }
 
     fun setMaterialHoneycombTopFisheyeEnabled(enabled: Boolean) {
-        _materialHoneycombTopFisheyeEnabled.value = enabled
-        persist { store.edit { it[KEY_MATERIAL_HONEYCOMB_TOP_FISHEYE] = enabled } }
+        updateActiveLayoutProfile { it.copy(topRowExtraFisheyeEnabled = enabled) }
     }
 
     fun setAppListFisheyeRangeRows(value: Int) {
-        _appListFisheyeRangeRows.value = value.coerceIn(1, 8)
-        val savedValue = _appListFisheyeRangeRows.value
-        persistDebounced("key_app_list_fisheye_range_rows") {
-            store.edit { it[KEY_APP_LIST_FISHEYE_RANGE_ROWS] = savedValue }
-        }
+        updateActiveLayoutProfile { it.copy(fisheyeRangeRows = value) }
     }
 
     fun setAppListFisheyeStrengthPercent(value: Int) {
-        _appListFisheyeStrengthPercent.value = value.coerceIn(0, 200)
-        val savedValue = _appListFisheyeStrengthPercent.value
-        persistDebounced("key_app_list_fisheye_strength_percent") {
-            store.edit { it[KEY_APP_LIST_FISHEYE_STRENGTH_PERCENT] = savedValue }
-        }
+        updateActiveLayoutProfile { it.copy(fisheyeStrengthPercent = value) }
     }
 
     fun setAppListEdgeSpacingCompressionEnabled(enabled: Boolean) {
-        _appListEdgeSpacingCompressionEnabled.value = enabled
-        persist { store.edit { it[KEY_APP_LIST_EDGE_SPACING_COMPRESSION] = enabled } }
+        updateActiveLayoutProfile { it.copy(edgeSpacingCompressionEnabled = enabled) }
     }
 
     fun setAppListLeftSafeInsetPercent(value: Int) {
-        _appListLeftSafeInsetPercent.value = normalizeLeftSafeInsetPercent(value)
-        val savedValue = _appListLeftSafeInsetPercent.value
-        persistDebounced("key_app_list_left_safe_inset_percent") {
-            store.edit { it[KEY_APP_LIST_LEFT_SAFE_INSET_PERCENT] = savedValue }
+        updateActiveLayoutProfile {
+            it.copy(leftSafeInsetPercent = normalizeLeftSafeInsetPercent(value))
+        }
+    }
+
+    /** 心流月牙弧度：占上限鼓出量的百分比，0 = 不鼓。 */
+    fun setAppListFlowCrescentBulgePercent(value: Int) {
+        updateActiveLayoutProfile { it.copy(crescentBulgePercent = value) }
+    }
+
+    /** 心流月牙朝向。 */
+    fun setAppListFlowCrescentToRight(toRight: Boolean) {
+        updateActiveLayoutProfile {
+            it.copy(
+                crescentDirection = if (toRight) {
+                    FlowCrescentDirection.Right
+                } else {
+                    FlowCrescentDirection.Left
+                },
+            )
         }
     }
 
@@ -2182,22 +2327,25 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         persist { store.edit { it[KEY_APP_LIST_ROW_BORDER] = enabled } }
     }
 
+    fun setAppListGridIconPlateEnabled(enabled: Boolean) {
+        _appListGridIconPlateEnabled.value = enabled
+        persist { store.edit { it[KEY_APP_LIST_GRID_ICON_PLATE] = enabled } }
+    }
+
     fun setAppListFoldersEnabled(enabled: Boolean) {
         _appListFoldersEnabled.value = enabled
         persist { store.edit { it[KEY_APP_LIST_FOLDERS_ENABLED] = enabled } }
+    }
+
+    fun setAppListScrollIndicatorEnabled(enabled: Boolean) {
+        _appListScrollIndicatorEnabled.value = enabled
+        persist { store.edit { it[KEY_APP_LIST_SCROLL_INDICATOR] = enabled } }
     }
 
     fun setMusicTextSwitchAnimation(id: String) {
         val normalized = MusicTextSwitchAnimations.normalizeId(id)
         _musicTextSwitchAnimation.value = normalized
         persist { store.edit { it[KEY_MUSIC_TEXT_SWITCH_ANIMATION] = normalized } }
-    }
-
-    fun setTwoToneIconsEnabled(enabled: Boolean) {
-        if (_twoToneIconsEnabled.value == enabled) return
-        _twoToneIconsEnabled.value = enabled
-        appRepository.setTwoToneIconsEnabled(enabled)
-        persist { store.edit { it[KEY_TWO_TONE_ICONS] = enabled } }
     }
 
     fun setIconShadowEnabled(enabled: Boolean) {
@@ -2249,9 +2397,14 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
 
     fun copyMotionProfile(
         sourceId: String = _activeMotionProfile.value.id,
-        name: String = "${_activeMotionProfile.value.name} 副本",
+        name: String? = null,
     ): FlueMotionProfile? {
         val source = _motionProfiles.value.firstOrNull { it.id == sourceId } ?: return null
+        // 「副本 副本 副本」是老师报的问题：改成 `名字 2` / `名字 3`，并且避开已占用的名字。
+        val name = name ?: flueUniqueProfileName(
+            sourceName = source.name,
+            existingNames = _motionProfiles.value.map { it.name },
+        )
         val copy = runCatching { source.customCopy(customName = name) }.getOrNull() ?: return null
         val next = _motionProfiles.value + copy
         _motionProfiles.value = next
@@ -2365,6 +2518,260 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                 it[KEY_MOTION_PROFILE_ID] = activeId
             }
         }
+    }
+
+    // ---- 布局档案的读写机制 -------------------------------------------------
+
+    /**
+     * 把「当前布局 + 当前选中档案」解析出来，推进所有投影 flow。
+     *
+     * 每次改布局、改档案、切档案之后都要调一次。这是投影的**唯一**写入口 ——
+     * 别的地方直接写 `_appListFisheyeEnabled` 就会出现两份真值。
+     */
+    private fun applyActiveLayoutProfile() {
+        val mode = _layoutMode.value
+        val profile = FlueLayoutProfiles.resolve(
+            id = activeLayoutProfileIds[mode],
+            layoutMode = mode,
+            profiles = _layoutProfiles.value,
+        )
+        if (_activeLayoutProfile.value != profile) _activeLayoutProfile.value = profile
+        if (_appListFisheyeEnabled.value != profile.fisheyeEnabled) {
+            _appListFisheyeEnabled.value = profile.fisheyeEnabled
+        }
+        if (_materialHoneycombTopFisheyeEnabled.value != profile.topRowExtraFisheyeEnabled) {
+            _materialHoneycombTopFisheyeEnabled.value = profile.topRowExtraFisheyeEnabled
+        }
+        if (_appListEdgeSpacingCompressionEnabled.value != profile.edgeSpacingCompressionEnabled) {
+            _appListEdgeSpacingCompressionEnabled.value = profile.edgeSpacingCompressionEnabled
+        }
+        if (_appListFisheyeRangeRows.value != profile.fisheyeRangeRows) {
+            _appListFisheyeRangeRows.value = profile.fisheyeRangeRows
+        }
+        if (_appListFisheyeStrengthPercent.value != profile.fisheyeStrengthPercent) {
+            _appListFisheyeStrengthPercent.value = profile.fisheyeStrengthPercent
+        }
+        if (_appListLeftSafeInsetPercent.value != profile.leftSafeInsetPercent) {
+            _appListLeftSafeInsetPercent.value = profile.leftSafeInsetPercent
+        }
+        if (_appListFlowCrescentBulgePercent.value != profile.crescentBulgePercent) {
+            _appListFlowCrescentBulgePercent.value = profile.crescentBulgePercent
+        }
+        val toRight = profile.crescentDirection == FlowCrescentDirection.Right
+        if (_appListFlowCrescentToRight.value != toRight) {
+            _appListFlowCrescentToRight.value = toRight
+        }
+    }
+
+    /**
+     * 改当前生效档案的一个字段。
+     *
+     * 与动效档案的 `updateActiveMotionProfile` 有意不同：这里**不挡内置档案** ——
+     * 鱼眼滑块历来是拖了就生效，要求先复制一份才能调等于把现有交互推翻。
+     * 越界值走 [FlueLayoutProfile.sanitized] 夹回来而不是整次修改失败。
+     */
+    private fun updateActiveLayoutProfile(
+        transform: (FlueLayoutProfile) -> FlueLayoutProfile,
+    ): Boolean {
+        val current = _activeLayoutProfile.value
+        val updated = runCatching { transform(current).sanitized().requireValid() }.getOrNull()
+            ?: return false
+        if (updated == current) return true
+        val next = _layoutProfiles.value.map { profile ->
+            if (profile.id == current.id) updated else profile
+        }
+        if (next.none { it.id == updated.id }) return false
+        _layoutProfiles.value = next
+        applyActiveLayoutProfile()
+        persistLayoutProfiles(next)
+        return true
+    }
+
+    /**
+     * 落盘整库 + 每种布局的选中 id。
+     *
+     * 走防抖：鱼眼那几个滑块拖动时每帧都会调进来，`persist` 会把 DataStore 写成
+     * 每帧一次。key 与档案 id 无关（整库一起写），所以只用一个防抖槽。
+     */
+    private fun persistLayoutProfiles(profiles: List<FlueLayoutProfile>) {
+        val payload = runCatching { FlueLayoutProfileJson.encodeLibrary(profiles) }.getOrNull()
+            ?: return
+        val activeIdsPayload = encodeActiveLayoutProfileIds()
+        persistDebounced("key_layout_profiles") {
+            store.edit {
+                it[KEY_LAYOUT_PROFILES] = payload
+                it[KEY_ACTIVE_LAYOUT_PROFILE_IDS] = activeIdsPayload
+            }
+        }
+    }
+
+    private fun encodeActiveLayoutProfileIds(): String {
+        val json = org.json.JSONObject()
+        activeLayoutProfileIds.forEach { (mode, id) -> json.put(mode.name, id) }
+        return json.toString()
+    }
+
+    /**
+     * 解析每种布局的选中 id。任何一项坏了 / 缺了就退回该布局的默认档，
+     * 不让一条脏记录把四种布局的选择全带走。
+     */
+    private fun decodeActiveLayoutProfileIds(payload: String?): Map<LayoutMode, String> {
+        val parsed = payload
+            ?.let { runCatching { org.json.JSONObject(it) }.getOrNull() }
+        return LayoutMode.entries.associateWith { mode ->
+            parsed?.optString(mode.name)?.takeIf { it.isNotBlank() }
+                ?: FlueLayoutProfiles.builtInFor(mode).id
+        }
+    }
+
+    // ---- 应用列表背景 -------------------------------------------------------
+
+    /**
+     * 改背景配置的**唯一**入口。
+     *
+     * 所有 setter 都走它：先 `sanitized()` 再落盘，于是「非法值进不了状态」只有一处
+     * 需要保证。落盘走去抖 —— 模糊与遮罩两条滑块拖动时每帧都会调进来。
+     */
+    private fun updateAppListBackground(
+        transform: (AppListBackgroundConfig) -> AppListBackgroundConfig,
+    ) {
+        val next = transform(_appListBackground.value).sanitized()
+        if (next == _appListBackground.value) return
+        _appListBackground.value = next
+        val payload = runCatching { AppListBackgroundJson.encode(next) }.getOrNull() ?: return
+        persistDebounced("key_app_list_background") {
+            store.edit { it[KEY_APP_LIST_BACKGROUND] = payload }
+        }
+    }
+
+    fun setAppListBackgroundMode(mode: AppListBackgroundMode) {
+        updateAppListBackground { it.copy(mode = mode) }
+    }
+
+    fun setAppListBackgroundColor(argb: Int) {
+        updateAppListBackground { it.copy(customColorArgb = argb) }
+    }
+
+    fun setAppListBackgroundBlurPercent(percent: Int) {
+        updateAppListBackground { it.copy(blurPercent = percent) }
+    }
+
+    fun setAppListBackgroundScrimPercent(percent: Int) {
+        updateAppListBackground { it.copy(scrimPercent = percent) }
+    }
+
+    /**
+     * 换 / 清自定义背景图。
+     *
+     * 传 `null` 只清路径、**不动 mode** —— 清了图之后 `effectiveMode` 会自动落回纯色
+     * （见 `AppListBackgroundConfig.effectiveMode`），而 mode 留着，老师重新选一张图就
+     * 立刻回到自定义图片档，不用再点一次模式行。
+     */
+    fun setAppListBackgroundImagePath(path: String?) {
+        updateAppListBackground { it.copy(imagePath = path) }
+    }
+
+    // ---- 布局档案的对外操作 -------------------------------------------------
+
+    /** 给当前布局切一份档案。id 不属于当前布局时不动。 */
+    fun setActiveLayoutProfile(id: String): Boolean {
+        val mode = _layoutMode.value
+        val profile = _layoutProfiles.value
+            .firstOrNull { it.id == id && it.layoutMode == mode }
+            ?: return false
+        activeLayoutProfileIds = activeLayoutProfileIds + (mode to profile.id)
+        applyActiveLayoutProfile()
+        persistLayoutProfiles(_layoutProfiles.value)
+        return true
+    }
+
+    /** 复制当前档案并切过去。新档案跟着当前布局。 */
+    fun copyLayoutProfile(
+        sourceId: String = _activeLayoutProfile.value.id,
+        name: String? = null,
+    ): FlueLayoutProfile? {
+        val source = _layoutProfiles.value.firstOrNull { it.id == sourceId } ?: return null
+        // 同上：同一种布局下的档案之间不重名。
+        val name = name ?: flueUniqueProfileName(
+            sourceName = source.name,
+            existingNames = _layoutProfiles.value
+                .filter { it.layoutMode == source.layoutMode }
+                .map { it.name },
+        )
+        val copy = runCatching { source.customCopy(customName = name) }.getOrNull() ?: return null
+        val next = _layoutProfiles.value + copy
+        _layoutProfiles.value = next
+        activeLayoutProfileIds = activeLayoutProfileIds + (copy.layoutMode to copy.id)
+        applyActiveLayoutProfile()
+        persistLayoutProfiles(next)
+        return copy
+    }
+
+    fun renameActiveLayoutProfile(name: String): Boolean =
+        updateActiveLayoutProfile { it.copy(name = name.trim().take(48)) }
+
+    /** 删档案。每种布局的默认档不能删 —— 删了就没有可回落的档。 */
+    fun deleteLayoutProfile(id: String): Boolean {
+        if (FlueLayoutProfiles.isBuiltIn(id)) return false
+        val current = _layoutProfiles.value
+        val victim = current.firstOrNull { it.id == id } ?: return false
+        val next = current.filterNot { it.id == id }
+        _layoutProfiles.value = next
+        if (activeLayoutProfileIds[victim.layoutMode] == id) {
+            activeLayoutProfileIds = activeLayoutProfileIds +
+                (victim.layoutMode to FlueLayoutProfiles.builtInFor(victim.layoutMode).id)
+        }
+        applyActiveLayoutProfile()
+        persistLayoutProfiles(next)
+        return true
+    }
+
+    /** 把当前档案的参数退回该布局的出厂值（名字与 id 保留）。 */
+    fun resetActiveLayoutProfile(): Boolean {
+        val current = _activeLayoutProfile.value
+        val preset = FlueLayoutProfiles.builtInFor(current.layoutMode)
+        return updateActiveLayoutProfile {
+            preset.copy(id = current.id, name = current.name, layoutMode = current.layoutMode)
+        }
+    }
+
+    fun exportLayoutProfileJson(id: String = _activeLayoutProfile.value.id): Result<String> =
+        runCatching {
+            val profile = _layoutProfiles.value.firstOrNull { it.id == id }
+                ?: error("布局档案不存在")
+            FlueLayoutProfileJson.encodeProfile(profile)
+        }
+
+    fun exportLayoutProfileLibraryJson(): Result<String> = runCatching {
+        FlueLayoutProfileJson.encodeLibrary(_layoutProfiles.value)
+    }
+
+    /**
+     * 导入档案。
+     *
+     * 与动效导入的一处差别：这里的 id 可能撞上已有的默认档（导出的整库就含默认档），
+     * 撞了就**覆盖**同 id 那一份，而不是拒收或者生一个新 id —— 老师的用法是
+     * 「导出 → 清数据 → 导入还原」，那条路必须能把默认档的调参也还原回来。
+     */
+    fun importLayoutProfileJson(payload: String): Result<List<FlueLayoutProfile>> = runCatching {
+        val decoded = runCatching { FlueLayoutProfileJson.decodeLibrary(payload) }
+            .getOrElse { listOf(FlueLayoutProfileJson.decodeProfile(payload)) }
+        require(decoded.isNotEmpty()) { "布局档案为空" }
+        val importedById = decoded.associateBy { it.id }
+        val merged = _layoutProfiles.value.map { existing ->
+            importedById[existing.id] ?: existing
+        }
+        val existingIds = _layoutProfiles.value.mapTo(mutableSetOf()) { it.id }
+        val next = FlueLayoutProfiles.withMissingBuiltIns(
+            merged + decoded.filterNot { it.id in existingIds },
+        )
+        _layoutProfiles.value = next
+        decoded.firstOrNull { it.layoutMode == _layoutMode.value }?.let { sameMode ->
+            activeLayoutProfileIds = activeLayoutProfileIds + (sameMode.layoutMode to sameMode.id)
+        }
+        applyActiveLayoutProfile()
+        persistLayoutProfiles(next)
+        decoded
     }
 
     fun setShowStepCountEnabled(enabled: Boolean) {
@@ -2576,6 +2983,11 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         persist { store.edit { it[KEY_DOUBLE_TAP_LOCK_SCREEN] = enabled } }
     }
 
+    fun setFaceIgnoresBackKey(enabled: Boolean) {
+        _faceIgnoresBackKey.value = enabled
+        persist { store.edit { it[KEY_FACE_IGNORES_BACK_KEY] = enabled } }
+    }
+
     fun setPowerMenuButtonEnabled(enabled: Boolean) {
         _powerMenuButtonEnabled.value = enabled
         persist { store.edit { it[KEY_POWER_MENU_BUTTON] = enabled } }
@@ -2752,7 +3164,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
 
     fun suggestedBackupFileName(): String = FlueBackupManager.suggestedFileName(getApplication())
 
-    suspend fun exportBackup(uri: Uri, options: FlueBackupOptions): Result<Unit> {
+    suspend fun exportBackup(uri: Uri, options: FlueBackupOptions): Result<FlueBackupExportSummary> {
         return runCatching {
             withContext(Dispatchers.IO) {
                 FlueBackupManager.exportBackup(getApplication(), uri, options)
@@ -3322,6 +3734,9 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         val defaultBlurEnabled = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
         _layoutMode.value = LayoutMode.Honeycomb
         _uiStyle.value = DEFAULT_UI_STYLE
+        // 重置回默认档 = 柔和。
+        _activeMotionProfile.value = FlueMotionProfiles.Gentle
+        _motionProfiles.value = FlueMotionProfiles.builtIns
         _sideScreenEnabled.value = true
         _sideScreenShortcutRows.value = 2
         _sideScreenShortcutCols.value = 3
@@ -3341,21 +3756,24 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         _honeycombEdgeBlurRadius.value = 4f
         _honeycombTopFade.value = 30
         _honeycombBottomFade.value = 30
-        _appListFisheyeEnabled.value = true
-        _materialHoneycombTopFisheyeEnabled.value = false
-        _appListFisheyeRangeRows.value = 4
-        _appListFisheyeStrengthPercent.value = 100
-        _appListEdgeSpacingCompressionEnabled.value = true
-        _appListLeftSafeInsetPercent.value = 0
+        // 布局档案整库退回出厂，四种布局各一份；投影由 applyActiveLayoutProfile 推。
+        _layoutProfiles.value = FlueLayoutProfiles.builtIns
+        activeLayoutProfileIds =
+            FlueLayoutProfiles.builtIns.associate { it.layoutMode to it.id }
+        applyActiveLayoutProfile()
+        // 背景整份退回「纯色跟随系统」。落盘的自定义图片故意**不删**：恢复默认是改设置，
+        // 不是清用户文件；重新选到自定义图片档时那张图还在。
+        _appListBackground.value = AppListBackgroundConfig.Default
         _appListScalePercent.value = 100
         _globalUiScalePercent.value = 100
         _overlayMaskCornerRadiusDp.value = DEFAULT_OVERLAY_MASK_CORNER_RADIUS_DP
         _widgetGlassHighlightEnabled.value = true
         _appListWatchFaceColors.value = false
         _appListRowBorderEnabled.value = false
+        _appListGridIconPlateEnabled.value = true
         _appListFoldersEnabled.value = true
+        _appListScrollIndicatorEnabled.value = true
         _musicTextSwitchAnimation.value = MusicTextSwitchAnimations.DEFAULT_ID
-        _twoToneIconsEnabled.value = false
         _iconShadowEnabled.value = true
         _appListReturnShrinkEnabled.value = true
         _faceReturnShrinkEnabled.value = true
@@ -3363,7 +3781,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         _appListReturnIconFloatEnabled.value = false
         _reduceDynamicEffects.value = false
         _screenShapeOverride.value = FlueScreenShape.AUTO
-        _appListStaggerEnabled.value = false
+        _appListStaggerEnabled.value = true
         _motionProfiles.value = FlueMotionProfiles.builtIns
         _activeMotionProfile.value = FlueMotionProfiles.Gentle
         _showStepCount.value = false
@@ -3376,13 +3794,14 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         _showMediaCustomActions.value = true
         _swapMusicNotificationComponents.value = false
         _doubleTapLockScreenEnabled.value = false
+        _faceIgnoresBackKey.value = false
         _powerMenuButtonEnabled.value = false
         _watchFaceChargingPowerText.value = true
         _watchFaceTextEntryAnimation.value = true
         _watchFaceTextExitAnimation.value = true
         _watchFaceStatusIndicators.value = true
         _watchFaceBottomFadeEnabled.value = false
-        _watchfaceCanvasDefault.value = WatchCanvasSettings.DEFAULT
+        _watchfaceCanvasDefault.value = WatchCanvasSettings.GLOBAL_DEFAULT
         _watchfaceCanvasOverrides.value = emptyMap()
         // 这一项的写盘半区在下面的 store.edit 里，StateFlow 半区必须同步复位，
         // 否则 reset 后 UI 还显示旧值、下一次落盘又把旧值写回去。
@@ -3440,7 +3859,6 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         appRepository.setIconRenderingOptions(
             packageName = null,
             legacyCircular = true,
-            twoTone = false,
             iconSize = 128
         )
         persist {
@@ -3469,6 +3887,13 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                 it[KEY_APP_LIST_FISHEYE_STRENGTH_PERCENT] = 100
                 it[KEY_APP_LIST_EDGE_SPACING_COMPRESSION] = true
                 it[KEY_APP_LIST_LEFT_SAFE_INSET_PERCENT] = 0
+                // 扁平键上面那六行只为「降级回旧版还能读到默认值」保留；
+                // 真正生效的是下面这一库。
+                it[KEY_LAYOUT_PROFILES] =
+                    FlueLayoutProfileJson.encodeLibrary(FlueLayoutProfiles.builtIns)
+                it[KEY_ACTIVE_LAYOUT_PROFILE_IDS] = encodeActiveLayoutProfileIds()
+                it[KEY_APP_LIST_BACKGROUND] =
+                    AppListBackgroundJson.encode(AppListBackgroundConfig.Default)
                 it[KEY_APP_LIST_SCALE_PERCENT] = 100
                 it[KEY_GLOBAL_UI_SCALE_PERCENT] = 100
                 it[KEY_OVERLAY_MASK_CORNER_RADIUS_DP] = DEFAULT_OVERLAY_MASK_CORNER_RADIUS_DP
@@ -3476,10 +3901,12 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                 it[KEY_WIDGET_GLASS_HIGHLIGHT] = true
                 it[KEY_APP_LIST_WATCHFACE_COLORS] = false
                 it[KEY_APP_LIST_ROW_BORDER] = false
-                it[KEY_APP_LIST_FOLDERS_ENABLED] = false
+                it[KEY_APP_LIST_GRID_ICON_PLATE] = true
+                it[KEY_APP_LIST_FOLDERS_ENABLED] = true
+                it[KEY_APP_LIST_SCROLL_INDICATOR] = true
                 it.remove(KEY_REMOVED_FAST_FLOW_ANIMATION)
                 it[KEY_MUSIC_TEXT_SWITCH_ANIMATION] = MusicTextSwitchAnimations.DEFAULT_ID
-                it[KEY_TWO_TONE_ICONS] = false
+                it.remove(KEY_REMOVED_TWO_TONE_ICONS)
                 it[KEY_ICON_SHADOW] = true
                 it.remove(booleanPreferencesKey("classic_return_animation_enabled"))
                 it[KEY_APP_LIST_RETURN_SHRINK] = true
@@ -3488,7 +3915,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                 it[KEY_APP_LIST_RETURN_ICON_FLOAT] = false
                 it[KEY_REDUCE_DYNAMIC_EFFECTS] = false
                 it.remove(KEY_SCREEN_SHAPE_OVERRIDE)
-                it[KEY_APP_LIST_STAGGER] = false
+                it[KEY_APP_LIST_STAGGER] = true
                 it[KEY_MOTION_PROFILE_ID] = FlueMotionProfiles.GENTLE_ID
                 it[KEY_CUSTOM_MOTION_PROFILES] = FlueMotionProfileJson.encodeLibrary(emptyList())
                 it[KEY_SHOW_STEP_COUNT] = false
@@ -3502,6 +3929,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                 it[KEY_SHOW_MEDIA_CUSTOM_ACTIONS] = true
                 it[KEY_SWAP_MUSIC_NOTIFICATION_COMPONENTS] = false
                 it[KEY_DOUBLE_TAP_LOCK_SCREEN] = false
+                it[KEY_FACE_IGNORES_BACK_KEY] = false
                 it[KEY_POWER_MENU_BUTTON] = false
                 it[KEY_WATCHFACE_CHARGING_POWER_TEXT] = true
                 it[KEY_WATCHFACE_TEXT_ENTRY_ANIMATION] = true
@@ -3688,7 +4116,21 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                 .map { it.name.replace('\\', '/').substringAfterLast('/').lowercase(Locale.ROOT) }
                 .toSet()
             when {
-                "watch.xml" in names && "watch.pxml" in names -> WatchFaceArchiveKind.JbWatch
+                // watch.xml + watch.pxml 这个组合**两套格式共用**：标准受保护表盘和
+                // jbwatch 的文件结构一模一样，只按文件名分不开。判据落在
+                // watch.xml 根节点的 protection 上，与标准安装器自己的判据同源
+                // （见 watchArchiveDeclaresProtection 的注释）。
+                //
+                // 以前这里无条件判成 JbWatch：Flue 自己导出的受保护表盘（必带
+                // protection="y"）从浏览器下载后手动导入就走错渲染器 —— 名字退化成
+                // 「.watch」、严重卡顿、不能编辑也不能调画布；同一个包走 Flue 商店
+                // 安装却正常，因为商店那条路直接调标准安装器，不经过这里。
+                "watch.xml" in names && "watch.pxml" in names ->
+                    if (watchArchiveDeclaresProtection(archive)) {
+                        WatchFaceArchiveKind.Watchmaker
+                    } else {
+                        WatchFaceArchiveKind.JbWatch
+                    }
                 "watch.xml" in names -> WatchFaceArchiveKind.Watchmaker
                 else -> WatchFaceArchiveKind.Unknown
             }

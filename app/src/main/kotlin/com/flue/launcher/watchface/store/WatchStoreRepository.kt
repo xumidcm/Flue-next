@@ -108,44 +108,97 @@ class WatchStoreRepository(
         require(targetWidth in 1..MAX_PREVIEW_DIMENSION) { "targetWidth is out of range" }
         require(targetHeight in 1..MAX_PREVIEW_DIMENSION) { "targetHeight is out of range" }
         val normalizedId = WatchStoreUrlPolicy.requireId(id)
-        val memoryKey = previewMemoryKey(normalizedId, targetWidth, targetHeight)
-        getMemoryPreview(memoryKey)?.let { return@withContext it }
+        loadCachedImage(
+            cacheKey = normalizedId,
+            fileName = "$normalizedId.img",
+            targetWidth = targetWidth,
+            targetHeight = targetHeight,
+        ) { destination -> api.downloadPreview(normalizedId, destination) }
+    }
+
+    /**
+     * H2 / H3 / H5 — 头像这类站内图片，走**同一套**磁盘 + 内存缓存。
+     *
+     * 不给头像另开一套缓存是刻意的：详情页一屏可能出现十几个头像（作者 + 每条评论），
+     * 另开一套就等于第二份 LRU、第二份过期清理、第二份「缓存清理」入口要记得连带清 ——
+     * 而它们的生命周期与封面图完全一样（服务端拥有、可以随时丢、下次再拉）。
+     *
+     * 磁盘文件名用 **URL 的摘要**而不是 URL 本身：远端字符串直接当文件名会带上 `/`、`?`、
+     * 甚至 `..`，那是路径逃逸；摘要还顺带给出定长名字。
+     */
+    suspend fun loadSiteImage(
+        rawUrl: String,
+        targetSize: Int = AVATAR_TARGET_SIZE,
+    ): Bitmap = withContext(ioDispatcher) {
+        require(targetSize in 1..MAX_PREVIEW_DIMENSION) { "targetSize is out of range" }
+        val digest = siteImageCacheKey(rawUrl)
+        loadCachedImage(
+            cacheKey = digest,
+            fileName = "$SITE_IMAGE_FILE_PREFIX$digest.img",
+            targetWidth = targetSize,
+            targetHeight = targetSize,
+        ) { destination -> api.downloadSiteImage(rawUrl, destination) }
+    }
+
+    /**
+     * 「内存 → 磁盘 → 网络」三级取图，封面与头像共用。
+     *
+     * `fetch` 只负责把字节写进给定的临时文件；缓存、并发锁、解码与失败清理都在这里，
+     * 两个调用点因此不会各写一份对不齐的缓存逻辑。
+     */
+    private fun loadCachedImage(
+        cacheKey: String,
+        fileName: String,
+        targetWidth: Int,
+        targetHeight: Int,
+        fetch: (File) -> Unit,
+    ): Bitmap {
+        val memoryKey = previewMemoryKey(cacheKey, targetWidth, targetHeight)
+        getMemoryPreview(memoryKey)?.let { return it }
         ensureDirectories()
         cleanupIfDue()
-        // Keep one stable lock per remote id for the process lifetime. Removing
+        // Keep one stable lock per cache key for the process lifetime. Removing
         // it after one caller exits lets a queued waiter and a third caller use
         // different locks and concurrently replace the same cache file.
-        val itemLock = previewLocks.computeIfAbsent(normalizedId) { Any() }
+        val itemLock = previewLocks.computeIfAbsent(cacheKey) { Any() }
         synchronized(itemLock) {
-                getMemoryPreview(memoryKey)?.let { return@synchronized it }
-                val cached = File(previewDirectory, "$normalizedId.img")
-                if (isUsablePreviewFile(cached)) {
-                    decodePreview(cached, targetWidth, targetHeight)?.let { bitmap ->
-                        cached.setLastModified(System.currentTimeMillis())
-                        putMemoryPreview(memoryKey, bitmap)
-                        return@synchronized bitmap
-                    }
-                    cached.delete()
-                }
-
-                val partial = File.createTempFile("preview_", ".part", previewDirectory)
-                try {
-                    api.downloadPreview(normalizedId, partial)
-                    if (!isUsablePreviewFile(partial)) {
-                        throw WatchStoreProtocolException("Downloaded preview is empty or too large")
-                    }
-                    moveReplacing(partial, cached)
-                    val bitmap = decodePreview(cached, targetWidth, targetHeight)
-                        ?: throw WatchStoreProtocolException("Downloaded preview cannot be decoded")
+            getMemoryPreview(memoryKey)?.let { return it }
+            val cached = File(previewDirectory, fileName)
+            if (isUsablePreviewFile(cached)) {
+                decodePreview(cached, targetWidth, targetHeight)?.let { bitmap ->
+                    cached.setLastModified(System.currentTimeMillis())
                     putMemoryPreview(memoryKey, bitmap)
-                    bitmap
-                } catch (error: Throwable) {
-                    partial.delete()
-                    cached.delete()
-                    throw error
+                    return bitmap
                 }
+                cached.delete()
+            }
+
+            val partial = File.createTempFile("preview_", ".part", previewDirectory)
+            try {
+                fetch(partial)
+                if (!isUsablePreviewFile(partial)) {
+                    throw WatchStoreProtocolException("Downloaded preview is empty or too large")
+                }
+                moveReplacing(partial, cached)
+                val bitmap = decodePreview(cached, targetWidth, targetHeight)
+                    ?: throw WatchStoreProtocolException("Downloaded preview cannot be decoded")
+                putMemoryPreview(memoryKey, bitmap)
+                return bitmap
+            } catch (error: Throwable) {
+                partial.delete()
+                cached.delete()
+                throw error
+            }
         }
     }
+
+    /** 远端图片地址 → 定长、文件系统安全的缓存键。 */
+    private fun siteImageCacheKey(rawUrl: String): String =
+        MessageDigest.getInstance("SHA-256")
+            .digest(rawUrl.trim().toByteArray(Charsets.UTF_8))
+            .take(12)
+            .joinToString("") { byte -> "%02x".format(byte) }
+
 
     suspend fun downloadWatchFace(
         id: String,
@@ -643,6 +696,15 @@ class WatchStoreRepository(
         private const val INSTALL_JOURNAL_RELATIVE_PATH = "watchface/watch-face-install-journal.json"
         private const val DEFAULT_PREVIEW_SIZE = 512
         private const val MAX_PREVIEW_DIMENSION = 2_048
+
+        /**
+         * 头像解码目标。界面上最大是详情页作者行的一个 40dp 圆，96px 在 3x 屏上也够；
+         * 一屏十几个头像时，这个尺寸决定了内存 LRU 会不会被头像挤掉封面。
+         */
+        const val AVATAR_TARGET_SIZE = 96
+
+        /** 站内图片的磁盘缓存前缀。与封面的 `<uuid>.img` 区分开，清理与失效互不误伤。 */
+        private const val SITE_IMAGE_FILE_PREFIX = "site_"
         // A 256px ARGB card cover is about 256 KiB. Keep enough for roughly two
         // API pages so scrolling back does not replay loading, while the byte cap
         // below still protects devices after a 1024px detail cover is opened.

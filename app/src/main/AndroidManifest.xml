@@ -27,6 +27,10 @@
     <!-- Weather requests coarse location only after the user taps the system-location
          setting. Manual city search remains the no-permission fallback. -->
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+    <!-- Watch faces can show upcoming events through the {cex} / {cNxx} tags. The
+         permission is requested only when the user taps that row in settings; until
+         then those tags render as unavailable and nothing is queried. -->
+    <uses-permission android:name="android.permission.READ_CALENDAR" />
     <uses-permission android:name="android.permission.INTERNET" />
 
     <application
@@ -119,6 +123,26 @@
             </intent-filter>
         </receiver>
 
+        <!--
+            clox External Data API（B5）：任何 App 都能往 10 个槽位里写一段字符串，
+            表盘脚本通过 WF.thirdParty.slots[n] 读。
+
+            必须 exported：上游定义的就是「无权限、任何已安装 App 都能写」，加权限门
+            会让照 clox 写的集成方全部失效。所以槽位数据一律当不可信输入 ——
+            长度上限、只当字符串、绝不进求值路径，见 WatchExternalData 的注释。
+
+            两个动作：com.ailife.clox.WRITE_DATA 是为了兼容现有集成方，
+            com.flue.launcher.WRITE_DATA 给新写的用。
+        -->
+        <receiver
+            android:name=".watchface.standard.WatchExternalDataReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="com.ailife.clox.WRITE_DATA" />
+                <action android:name="com.flue.launcher.WRITE_DATA" />
+            </intent-filter>
+        </receiver>
+
         <activity
             android:name=".InternalWatchFaceConfigActivity"
             android:exported="false"
@@ -134,6 +158,18 @@
 
         <activity
             android:name=".WatchStoreActivity"
+            android:exported="false"
+            android:label="@string/watch_store_title"
+            android:theme="@style/Theme.WatchLauncher"
+            android:screenOrientation="portrait" />
+
+        <!--
+          C1 网页版兜底宿主。exported="false"：只有 Flue 自己能启动它 —— 它加载的是带登录
+          cookie 的站点，绝不能让别的 App 用 EXTRA_URL 指使它去打开任意地址（宿主内部还有
+          一道站内白名单，这里是第一道）。
+        -->
+        <activity
+            android:name="com.flue.launcher.ui.store.WatchStoreWebActivity"
             android:exported="false"
             android:label="@string/watch_store_title"
             android:theme="@style/Theme.WatchLauncher"

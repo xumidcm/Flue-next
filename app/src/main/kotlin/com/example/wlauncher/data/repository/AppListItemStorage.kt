@@ -3,6 +3,7 @@ package com.flue.launcher.data.repository
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import com.flue.launcher.R
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
@@ -40,6 +41,30 @@ data class FolderMutationResult(
 class AppListItemStorage(private val context: Context) {
     private val prefs = context.getSharedPreferences("app_list_items", Context.MODE_PRIVATE)
     private val iconDir = File(context.filesDir, "app_list_shortcut_icons").apply { mkdirs() }
+
+    /**
+     * 新建文件夹的默认名。
+     *
+     * 以前这里散着四处写死的 `"文件夹"` 字面量，英日两档的用户建出来的文件夹也叫中文名。
+     * 现在统一走资源，三语言各自成立。
+     */
+    private val defaultFolderName: String
+        get() = context.getString(R.string.app_list_folder_default_name)
+
+    /**
+     * 取一个没被占用的默认名：`文件夹`、`文件夹1`、`文件夹2`…
+     *
+     * 必须在持有 [folderMutationLock] 的临界区里调用 —— 判重读的是同一份 `folders`
+     * 快照，放到锁外面的话两次快速合成会同时看到「没有文件夹1」而建出两个同名的。
+     */
+    private fun uniqueDefaultFolderName(existing: List<StoredAppListFolder>): String {
+        val base = defaultFolderName
+        val taken = existing.mapTo(HashSet()) { it.name }
+        if (base !in taken) return base
+        var suffix = 1
+        while ("$base$suffix" in taken) suffix += 1
+        return "$base$suffix"
+    }
 
     @Synchronized
     fun loadShortcuts(): List<StoredAppListShortcut> {
@@ -87,7 +112,7 @@ class AppListItemStorage(private val context: Context) {
                     add(
                         StoredAppListFolder(
                             id = id,
-                            name = item.optString("name").takeIf(String::isNotBlank) ?: "文件夹",
+                            name = item.optString("name").takeIf(String::isNotBlank) ?: defaultFolderName,
                             itemKeys = itemKeys
                         )
                     )
@@ -160,7 +185,14 @@ class AppListItemStorage(private val context: Context) {
     fun createFolder(
         sourceKey: String,
         targetKey: String,
-        targetName: String,
+        /**
+         * 显式名字。留空表示「用默认名」—— 新建时会取一个没被占用的
+         * `文件夹` / `文件夹1` / `文件夹2`…（见 [uniqueDefaultFolderName]）。
+         *
+         * 以前调用方传的是**被拖到的那个应用的名字**，于是把 A 拖到「音乐」上建出来的
+         * 文件夹就叫「音乐」，看着像是把应用改了名。老师要的是固定叫「文件夹」。
+         */
+        targetName: String = "",
     ): StoredAppListFolder? = synchronized(folderMutationLock) {
         if (sourceKey == targetKey || sourceKey.isBlank() || targetKey.isBlank()) {
             return@synchronized null
@@ -192,7 +224,7 @@ class AppListItemStorage(private val context: Context) {
 
         val folder = StoredAppListFolder(
             id = UUID.randomUUID().toString(),
-            name = targetName.ifBlank { "文件夹" },
+            name = targetName.ifBlank { uniqueDefaultFolderName(folders) },
             itemKeys = listOf(targetKey, sourceKey).distinct()
         )
         folders += folder
@@ -204,7 +236,7 @@ class AppListItemStorage(private val context: Context) {
         val folders = loadFolders().toMutableList()
         val index = folders.indexOfFirst { it.componentKey == folderKey }
         if (index < 0) return@synchronized false
-        folders[index] = folders[index].copy(name = name.ifBlank { "文件夹" })
+        folders[index] = folders[index].copy(name = name.ifBlank { defaultFolderName })
         saveFolders(folders)
         true
     }

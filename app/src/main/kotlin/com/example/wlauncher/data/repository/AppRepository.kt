@@ -15,13 +15,10 @@ import android.graphics.BitmapFactory
 import android.graphics.BitmapShader
 import android.graphics.Canvas
 import android.graphics.Color
-import android.graphics.ColorMatrix
-import android.graphics.ColorMatrixColorFilter
 import android.graphics.Matrix
 import android.graphics.Paint
 import android.graphics.Path
 import android.graphics.PorterDuff
-import android.graphics.PorterDuffColorFilter
 import android.graphics.PorterDuffXfermode
 import android.graphics.RectF
 import android.graphics.Shader
@@ -38,7 +35,9 @@ import com.flue.launcher.data.model.AppListItemType
 import com.flue.launcher.data.model.BUILTIN_SETTINGS_ENTRY_COMPONENT
 import com.flue.launcher.data.model.BUILTIN_SETTINGS_ENTRY_PACKAGE
 import com.flue.launcher.iconpack.IconPackMapping
+import com.flue.launcher.iconpack.IconPackMaskPolarity
 import com.flue.launcher.iconpack.IconPackScanner
+import com.flue.launcher.iconpack.iconPackMaskPolarity
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -57,15 +56,10 @@ import kotlin.math.roundToInt
 class AppRepository(private val context: Context) {
     private data class CachedIconSet(
         val sharp: ImageBitmap,
-        val softened: ImageBitmap,
-        val twoToneSharp: ImageBitmap?,
-        val twoToneSoftened: ImageBitmap?
+        val softened: ImageBitmap
     )
 
     private companion object {
-        private const val TWO_TONE_BG = 0xFF1D1D1F.toInt()
-        private const val TWO_TONE_FG = 0xFFF5F5F7.toInt()
-        private const val BINARY_LUMINANCE_THRESHOLD = 0.8f
         private const val APP_LIST_CACHE_DIR = "app_list_cache"
         private const val APP_LIST_CACHE_ICON_DIR = "icons"
         private const val APP_LIST_CACHE_FILE = "snapshot.json"
@@ -75,7 +69,14 @@ class AppRepository(private val context: Context) {
         //         不会自己刷新，必须靠版本号顶掉。
         // 版本 6：仅文件夹未打开时的四宫格预览子图标增加 MIUIX 圆角裁切；
         //         已缓存的旧直角预览必须重建，文件夹弹层内的真实图标不受影响。
-        private const val APP_LIST_CACHE_VERSION = 6
+        // 版本 7：iconmask 极性判定上线（反相 mask 不再把图标擦成黑壳）。已经用
+        //         图标包跑过的机器，磁盘快照里存的正是那批黑壳；不顶掉版本号的话
+        //         冷启动会先把它们贴出来，等全量扫描落地才自己纠正 —— 明知是坏图
+        //         还要闪一下没有道理。同版也顺带清掉双色图标留下的缓存条目。
+        // 版本 8：图标包两条路径（包里的成品图 / 模板合成）改为统一裁圆，模板合成
+        //         也不再叠设备遮罩。磁盘快照里存的正是上一版那批圆角方与带白边的图，
+        //         同理必须顶掉。
+        private const val APP_LIST_CACHE_VERSION = 8
 
         /** 自适应图标图层与可见区域的比例（108/72）。 */
         private const val ADAPTIVE_ICON_LAYER_SCALE = 108f / 72f
@@ -110,7 +111,6 @@ class AppRepository(private val context: Context) {
     private var currentIconSize = 128
     private var iconPackPackage: String? = null
     private var useLegacyCircularIcons = true
-    private var useTwoToneIcons = false
     private var refreshGeneration = 0
     @Volatile
     private var freshScanPublished = false
@@ -179,26 +179,19 @@ class AppRepository(private val context: Context) {
         setIconRenderingOptions(legacyCircular = enabled)
     }
 
-    fun setTwoToneIconsEnabled(enabled: Boolean) {
-        setIconRenderingOptions(twoTone = enabled)
-    }
-
     fun setIconRenderingOptions(
         packageName: String? = iconPackPackage,
         legacyCircular: Boolean = useLegacyCircularIcons,
-        twoTone: Boolean = useTwoToneIcons,
         iconSize: Int = currentIconSize
     ) {
         val normalized = packageName?.takeIf { it.isNotBlank() }
         val nextIconSize = iconSize.coerceAtLeast(1)
         val changed = iconPackPackage != normalized ||
             useLegacyCircularIcons != legacyCircular ||
-            useTwoToneIcons != twoTone ||
             currentIconSize != nextIconSize
         if (!changed) return
         iconPackPackage = normalized
         useLegacyCircularIcons = legacyCircular
-        useTwoToneIcons = twoTone
         currentIconSize = nextIconSize
         refreshAsync(nextIconSize)
     }
@@ -221,7 +214,6 @@ class AppRepository(private val context: Context) {
         }
         val iconPackPackageSnapshot = iconPackPackage
         val useLegacyCircularIconsSnapshot = useLegacyCircularIcons
-        val useTwoToneIconsSnapshot = useTwoToneIcons
         val pm = context.packageManager
         val mainIntent = Intent(Intent.ACTION_MAIN).apply {
             addCategory(Intent.CATEGORY_LAUNCHER)
@@ -246,9 +238,9 @@ class AppRepository(private val context: Context) {
             if (!isCurrentRefresh(generation)) return
             val packageName = ri.activityInfo.packageName
             val componentKey = "$packageName/${ri.activityInfo.name}"
-            val plainIconCacheKey = "${iconPackPackageSnapshot ?: "sys"}|plain|$componentKey|$iconSize|${if (useTwoToneIconsSnapshot) "two_tone" else "normal"}"
+            val plainIconCacheKey = "${iconPackPackageSnapshot ?: "sys"}|plain|$componentKey|$iconSize"
             val iconCacheKey = if (useLegacyCircularIconsSnapshot) {
-                "${iconPackPackageSnapshot ?: "sys"}|$componentKey|$iconSize|legacy|${if (useTwoToneIconsSnapshot) "two_tone" else "normal"}"
+                "${iconPackPackageSnapshot ?: "sys"}|$componentKey|$iconSize|legacy"
             } else {
                 plainIconCacheKey
             }
@@ -258,8 +250,7 @@ class AppRepository(private val context: Context) {
                     iconPackMapping = iconPackMapping,
                     sourceDrawable = ri.loadIcon(pm),
                     iconSize = iconSize,
-                    useLegacyCircularIcons = useLegacyCircularIconsSnapshot,
-                    useTwoToneIcons = useTwoToneIconsSnapshot
+                    useLegacyCircularIcons = useLegacyCircularIconsSnapshot
                 )
             }
             val plainIcons = if (!useLegacyCircularIconsSnapshot) {
@@ -271,8 +262,7 @@ class AppRepository(private val context: Context) {
                         iconPackMapping = iconPackMapping,
                         sourceDrawable = ri.loadIcon(pm),
                         iconSize = iconSize,
-                        useLegacyCircularIcons = false,
-                        useTwoToneIcons = useTwoToneIconsSnapshot
+                        useLegacyCircularIcons = false
                     )
                 }
             }
@@ -282,15 +272,11 @@ class AppRepository(private val context: Context) {
                 activityName = ri.activityInfo.name,
                 cachedIcon = cachedIcons.sharp,
                 cachedBlurredIcon = cachedIcons.softened,
-                cachedTwoToneIcon = cachedIcons.twoToneSharp,
-                cachedTwoToneBlurredIcon = cachedIcons.twoToneSoftened,
                 cachedPlainIcon = plainIcons.sharp,
-                cachedPlainBlurredIcon = plainIcons.softened,
-                cachedPlainTwoToneIcon = plainIcons.twoToneSharp,
-                cachedPlainTwoToneBlurredIcon = plainIcons.twoToneSoftened
+                cachedPlainBlurredIcon = plainIcons.softened
             )
         }
-        createBuiltInSettingsEntry(iconSize, useTwoToneIconsSnapshot)?.let(loadedApps::add)
+        createBuiltInSettingsEntry(iconSize)?.let(loadedApps::add)
 
         val catalogItems = ArrayList<AppInfo>(loadedApps.size + 8)
         catalogItems += loadedApps
@@ -300,8 +286,7 @@ class AppRepository(private val context: Context) {
                 shortcut = shortcut,
                 iconPackMapping = iconPackMapping,
                 iconSize = iconSize,
-                useLegacyCircularIcons = useLegacyCircularIconsSnapshot,
-                useTwoToneIcons = useTwoToneIconsSnapshot
+                useLegacyCircularIcons = useLegacyCircularIconsSnapshot
             )?.let(catalogItems::add)
         }
         val catalogMap = catalogItems.associateBy { it.componentKey }
@@ -315,8 +300,7 @@ class AppRepository(private val context: Context) {
                 createFolderEntry(
                     folder = folder.copy(itemKeys = liveKeys),
                     childItems = liveKeys.mapNotNull(catalogMap::get),
-                    iconSize = iconSize,
-                    useTwoToneIcons = useTwoToneIconsSnapshot
+                    iconSize = iconSize
                 )
             }
         }
@@ -372,7 +356,6 @@ class AppRepository(private val context: Context) {
             refreshGeneration += 1
             refreshGeneration
         }
-        val useTwoToneIconsSnapshot = useTwoToneIcons
         // 只取真实条目：itemCatalog 里也混着上一轮合成的文件夹条目，
         // 拿它们当子项会套娃。
         val catalogItems = itemCatalog.values.filterNot { it.isFolder }
@@ -388,7 +371,6 @@ class AppRepository(private val context: Context) {
                     folder = folder.copy(itemKeys = liveKeys),
                     childItems = liveKeys.mapNotNull(catalogMap::get),
                     iconSize = iconSize,
-                    useTwoToneIcons = useTwoToneIconsSnapshot,
                 )
             }
         }
@@ -596,8 +578,10 @@ class AppRepository(private val context: Context) {
     }
 
     fun createFolder(sourceKey: String, targetKey: String): String? {
-        val targetName = itemCatalog[targetKey]?.label ?: "文件夹"
-        val folder = itemStorage.createFolder(sourceKey, targetKey, targetName) ?: return null
+        // 不再拿「被拖到的那个应用的名字」当文件夹名：把 A 拖到「音乐」上建出来的文件夹
+        // 会叫「音乐」，看起来像把应用改了名。名字交给 storage 取默认的
+        // 文件夹 / 文件夹1 / 文件夹2…（判重要在它的锁里做，见那边的注释）。
+        val folder = itemStorage.createFolder(sourceKey, targetKey) ?: return null
         // 只重组文件夹，不重扫 PackageManager（放手后的长时间卡顿根因）。
         refreshFolderCompositionAsync()
         return folder.componentKey
@@ -655,21 +639,19 @@ class AppRepository(private val context: Context) {
             } ?: pm.getApplicationIcon(packageName)
             val iconPackPackageSnapshot = iconPackPackage
             val useLegacyCircularIconsSnapshot = useLegacyCircularIcons && !preferPlainIcon
-            val useTwoToneIconsSnapshot = useTwoToneIcons
             val iconPackMapping = iconPackPackageSnapshot?.let { IconPackScanner.loadMapping(context, it) }
             val normalizedIconSize = iconSize.coerceAtLeast(1)
-            val iconCacheKey = "${iconPackPackageSnapshot ?: "sys"}|media|$componentKey|$normalizedIconSize|${if (useLegacyCircularIconsSnapshot) "legacy" else "plain"}|${if (useTwoToneIconsSnapshot) "two_tone" else "normal"}"
+            val iconCacheKey = "${iconPackPackageSnapshot ?: "sys"}|media|$componentKey|$normalizedIconSize|${if (useLegacyCircularIconsSnapshot) "legacy" else "plain"}"
             val cachedIcons = getOrCreateIconSet(iconCacheKey) {
                 createIconSet(
                     componentKey = componentKey,
                     iconPackMapping = iconPackMapping,
                     sourceDrawable = sourceDrawable,
                     iconSize = normalizedIconSize,
-                    useLegacyCircularIcons = useLegacyCircularIconsSnapshot,
-                    useTwoToneIcons = useTwoToneIconsSnapshot
+                    useLegacyCircularIcons = useLegacyCircularIconsSnapshot
                 )
             }
-            if (useTwoToneIconsSnapshot) cachedIcons.twoToneSharp ?: cachedIcons.sharp else cachedIcons.sharp
+            cachedIcons.sharp
         }.getOrNull()
     }
 
@@ -713,8 +695,7 @@ class AppRepository(private val context: Context) {
                 createFolderEntry(
                     folder = folder.copy(itemKeys = liveKeys),
                     childItems = liveKeys.mapNotNull(catalogMap::get),
-                    iconSize = currentIconSize,
-                    useTwoToneIcons = useTwoToneIcons
+                    iconSize = currentIconSize
                 )
             }
         }
@@ -769,20 +750,6 @@ class AppRepository(private val context: Context) {
                             cacheRoot,
                             iconDir,
                             stem,
-                            "two_tone",
-                            app.cachedTwoToneIcon
-                        )?.let { put("twoTone", it) }
-                        writeCachedSnapshotIcon(
-                            cacheRoot,
-                            iconDir,
-                            stem,
-                            "two_tone_blur",
-                            app.cachedTwoToneBlurredIcon
-                        )?.let { put("twoToneBlur", it) }
-                        writeCachedSnapshotIcon(
-                            cacheRoot,
-                            iconDir,
-                            stem,
                             "plain",
                             app.cachedPlainIcon
                         )?.let { put("plain", it) }
@@ -793,20 +760,6 @@ class AppRepository(private val context: Context) {
                             "plain_blur",
                             app.cachedPlainBlurredIcon
                         )?.let { put("plainBlur", it) }
-                        writeCachedSnapshotIcon(
-                            cacheRoot,
-                            iconDir,
-                            stem,
-                            "plain_two_tone",
-                            app.cachedPlainTwoToneIcon
-                        )?.let { put("plainTwoTone", it) }
-                        writeCachedSnapshotIcon(
-                            cacheRoot,
-                            iconDir,
-                            stem,
-                            "plain_two_tone_blur",
-                            app.cachedPlainTwoToneBlurredIcon
-                        )?.let { put("plainTwoToneBlur", it) }
                         app.shortcutIntentUri?.let { put("shortcutIntentUri", it) }
                         app.pinnedShortcutId?.let { put("pinnedShortcutId", it) }
                     }
@@ -848,12 +801,8 @@ class AppRepository(private val context: Context) {
             activityName = activityName,
             cachedIcon = icon,
             cachedBlurredIcon = blurredIcon,
-            cachedTwoToneIcon = readCachedSnapshotIcon(cacheRoot, item.optString("twoTone")),
-            cachedTwoToneBlurredIcon = readCachedSnapshotIcon(cacheRoot, item.optString("twoToneBlur")),
             cachedPlainIcon = readCachedSnapshotIcon(cacheRoot, item.optString("plain")),
             cachedPlainBlurredIcon = readCachedSnapshotIcon(cacheRoot, item.optString("plainBlur")),
-            cachedPlainTwoToneIcon = readCachedSnapshotIcon(cacheRoot, item.optString("plainTwoTone")),
-            cachedPlainTwoToneBlurredIcon = readCachedSnapshotIcon(cacheRoot, item.optString("plainTwoToneBlur")),
             isBuiltInSettingsEntry = item.optBoolean("builtIn", false),
             itemType = itemType,
             shortcutIntentUri = item.optString("shortcutIntentUri").takeIf(String::isNotBlank),
@@ -925,8 +874,7 @@ class AppRepository(private val context: Context) {
         iconPackMapping: IconPackMapping?,
         sourceDrawable: Drawable,
         iconSize: Int,
-        useLegacyCircularIcons: Boolean,
-        useTwoToneIcons: Boolean
+        useLegacyCircularIcons: Boolean
     ): CachedIconSet {
         val packedIcon = iconPackMapping?.let { IconPackScanner.loadIconDrawable(context, it, componentKey) }
         val fallbackBitmap = if (packedIcon == null && iconPackMapping != null) {
@@ -940,8 +888,24 @@ class AppRepository(private val context: Context) {
             null
         }
         val baseBitmap = when {
-            packedIcon != null -> renderIconBitmap(packedIcon, iconSize)
-            fallbackBitmap != null -> stripEdgeBlackMatte(fallbackBitmap)
+            // 图标包给的成品图与模板合成的结果同样要过圆形遮罩。
+            //
+            // 以前这两条直接原样返回，只有「包里没有、也合成不出来」的第三条才裁圆，
+            // 于是同一屏里两种形状并存：图标包覆盖到的应用是包里的圆角方，没覆盖到的
+            // 是圆 —— 就是老师报的「负一屏快捷启动图标有的变成圆角矩形」。列表侧的
+            // NativeAppListRowView 自己还会按风格再裁一次形状，所以那里看不出来；
+            // 负一屏、文件夹这些直接贴 bitmap 的地方才露出来。
+            //
+            // useLegacyCircularIcons 目前恒为 true（「圆形图标」是这个启动器的既定
+            // 形状语言），所以这里统一裁圆才是一致的做法。
+            packedIcon != null -> renderIconBitmap(packedIcon, iconSize).circularIfLegacy(
+                useLegacyCircularIcons,
+                iconSize,
+            )
+            fallbackBitmap != null -> stripEdgeBlackMatte(fallbackBitmap).circularIfLegacy(
+                useLegacyCircularIcons,
+                iconSize,
+            )
             useLegacyCircularIcons -> if (sourceDrawable is AdaptiveIconDrawable) {
                 // 自适应图标直接用圆形遮罩自绘，避免“框架渲染成方图再裁圆”的二次采样。
                 createAdaptiveIconBitmap(
@@ -958,23 +922,9 @@ class AppRepository(private val context: Context) {
             }
             else -> renderIconBitmap(sourceDrawable, iconSize)
         }
-        val twoToneSource = when {
-            packedIcon != null -> packedIcon
-            fallbackBitmap != null -> BitmapDrawable(context.resources, fallbackBitmap)
-            else -> sourceDrawable
-        }
-        val sharp = baseBitmap.asImageBitmap()
-        val softened = createSoftenedBitmap(baseBitmap).asImageBitmap()
-        val twoToneBitmap = if (useTwoToneIcons) {
-            createTwoToneBitmap(twoToneSource, iconSize)
-        } else {
-            null
-        }
         return CachedIconSet(
-            sharp = sharp,
-            softened = softened,
-            twoToneSharp = twoToneBitmap?.asImageBitmap(),
-            twoToneSoftened = twoToneBitmap?.let(::createSoftenedBitmap)?.asImageBitmap()
+            sharp = baseBitmap.asImageBitmap(),
+            softened = createSoftenedBitmap(baseBitmap).asImageBitmap()
         )
     }
 
@@ -994,8 +944,11 @@ class AppRepository(private val context: Context) {
         val scaledSize = (iconSize * template.scale).roundToInt().coerceIn(1, iconSize * 2)
         val inset = ((iconSize - scaledSize) / 2f).roundToInt()
         if (sourceDrawable is AdaptiveIconDrawable) {
-            // 先自绘出干净的自适应图标，再交给图标包模板遮罩，防止黑边混进模板合成。
-            val adaptiveBitmap = createAdaptiveIconBitmap(sourceDrawable, scaledSize)
+            // 只叠图层、不裁形：形状权威是下面那道图标包 iconmask。以前这里调
+            // createAdaptiveIconBitmap（默认按**设备**遮罩裁一次），于是设备的圆角方
+            // 与图标包的圆角方两层半径不同的抗锯齿边界错开，漏出自适应图标的背景色
+            // 细边 —— 浅色背景的图标就是老师报的「边缘出现白边」。
+            val adaptiveBitmap = composeAdaptiveIconLayers(sourceDrawable, scaledSize)
             val adaptivePaint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
             iconCanvas.drawBitmap(
                 adaptiveBitmap,
@@ -1013,15 +966,75 @@ class AppRepository(private val context: Context) {
         }
         template.iconMask?.let { maskDrawable ->
             val maskBitmap = drawableToBitmap(maskDrawable, iconSize)
-            val maskPaint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG).apply {
-                xfermode = PorterDuffXfermode(PorterDuff.Mode.DST_IN)
+            val polarity = iconPackMaskPolarity(
+                centerAlpha = maskBitmap.alphaAt(iconSize / 2, iconSize / 2),
+                cornerAlpha = maskBitmap.cornerMeanAlpha(),
+            )
+            val blendMode = when (polarity) {
+                // 常规约定：mask 不透明处保留图标。
+                IconPackMaskPolarity.KEEP_INSIDE -> PorterDuff.Mode.DST_IN
+                // 反相约定：mask 不透明处**挖掉**图标。ColorOS 那类包就是这样 ——
+                // 白色圆角方在**不透明黑**底上，中心反而是透明的。按 DST_IN 处理的
+                // 结果是把图标本体整个擦掉、只剩一圈深色边框，也就是老师看到的
+                // 「图标包未包含的应用显示为黑色空壳」。
+                IconPackMaskPolarity.KEEP_OUTSIDE -> PorterDuff.Mode.DST_OUT
+                // 整张不透明或整张透明：这个 mask 给不出任何形状信息，直接不遮。
+                IconPackMaskPolarity.UNUSABLE -> null
             }
-            iconCanvas.drawBitmap(maskBitmap, 0f, 0f, maskPaint)
-            maskPaint.xfermode = null
+            if (blendMode != null) {
+                val maskPaint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG).apply {
+                    xfermode = PorterDuffXfermode(blendMode)
+                }
+                iconCanvas.drawBitmap(maskBitmap, 0f, 0f, maskPaint)
+                maskPaint.xfermode = null
+            }
         }
+        // 合成完还是空的就整条放弃：宁可退回系统原图标，也不能发一个空壳出去。
+        if (iconLayer.isEffectivelyTransparent()) return null
         canvas.drawBitmap(iconLayer, 0f, 0f, null)
         template.iconUpon?.let { drawDrawable(it, canvas, 0, 0, iconSize, iconSize) }
+        if (output.isEffectivelyTransparent()) return null
         return output
+    }
+
+    private fun Bitmap.alphaAt(x: Int, y: Int): Int {
+        val safeX = x.coerceIn(0, width - 1)
+        val safeY = y.coerceIn(0, height - 1)
+        return Color.alpha(getPixel(safeX, safeY))
+    }
+
+    /** 四角 alpha 均值。取角而不是整圈边：圆角方形的边中点常常还在形状内部。 */
+    private fun Bitmap.cornerMeanAlpha(): Int {
+        val inset = (minOf(width, height) * 0.06f).toInt().coerceAtLeast(0)
+        val xs = intArrayOf(inset, width - 1 - inset)
+        val ys = intArrayOf(inset, height - 1 - inset)
+        var sum = 0
+        for (x in xs) for (y in ys) sum += alphaAt(x, y)
+        return sum / 4
+    }
+
+    /**
+     * 判断这张合成结果是不是「实际上什么都没有」。
+     *
+     * 只抽样不逐像素：图标最多 192×192，抽 16×16 的网格足够判断空与不空，
+     * 而这条检查在每个未适配应用的图标上都会跑一次。
+     */
+    private fun Bitmap.isEffectivelyTransparent(): Boolean {
+        val step = (minOf(width, height) / 16).coerceAtLeast(1)
+        var opaqueEnough = 0
+        var sampled = 0
+        var y = 0
+        while (y < height) {
+            var x = 0
+            while (x < width) {
+                sampled++
+                if (Color.alpha(getPixel(x, y)) > 24) opaqueEnough++
+                x += step
+            }
+            y += step
+        }
+        if (sampled == 0) return true
+        return opaqueEnough * 100 / sampled < 2
     }
 
     private fun drawDrawable(
@@ -1084,23 +1097,27 @@ class AppRepository(private val context: Context) {
      * 画在完全透明的画布上，再用 BitmapShader + 抗锯齿 Paint 的 drawPath /
      * drawCircle 自行裁形。
      */
+    /**
+     * 「圆形图标」开着时把已成图的位图裁成圆，否则原样返回。
+     *
+     * 图标包那两条路径（包里的成品图 / 模板合成结果）用它与系统图标那条对齐形状。
+     * 内缩比例沿用 [ICON_MASK_EDGE_INSET_FRACTION]：列表侧还会用不抗锯齿的 clipPath
+     * 复裁一次，轻微内缩能让抗锯齿边完整落在裁剪路径内部，不被再切出锯齿。
+     */
+    private fun Bitmap.circularIfLegacy(useLegacyCircularIcons: Boolean, iconSize: Int): Bitmap =
+        if (useLegacyCircularIcons) {
+            createCircularBitmap(this, edgeInsetPx = iconSize * ICON_MASK_EDGE_INSET_FRACTION)
+        } else {
+            this
+        }
+
     private fun createAdaptiveIconBitmap(
         drawable: AdaptiveIconDrawable,
         size: Int,
         forceCircularMask: Boolean = false,
         edgeInsetPx: Float = 0f
     ): Bitmap {
-        val layerBitmap = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
-        val layerCanvas = Canvas(layerBitmap)
-        val overdrawPx = size * (ADAPTIVE_ICON_LAYER_SCALE - 1f) / 2f
-        val layerStart = (-overdrawPx).roundToInt()
-        val layerEnd = size + overdrawPx.roundToInt()
-        drawable.background?.let { background ->
-            drawDrawable(background, layerCanvas, layerStart, layerStart, layerEnd, layerEnd)
-        }
-        drawable.foreground?.let { foreground ->
-            drawDrawable(foreground, layerCanvas, layerStart, layerStart, layerEnd, layerEnd)
-        }
+        val layerBitmap = composeAdaptiveIconLayers(drawable, size)
 
         val output = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
         val canvas = Canvas(output)
@@ -1116,6 +1133,33 @@ class AppRepository(private val context: Context) {
             canvas.drawPath(adaptiveMaskPath(drawable, size, edgeInsetPx), paint)
         }
         return output
+    }
+
+    /**
+     * 把自适应图标的背景层与前景层叠成一张**不裁形**的方图。
+     *
+     * 单独抽出来是给图标包模板合成用的：那条路径后面还要套图标包自己的
+     * `iconmask`，如果这里先按设备遮罩裁一次，就成了两层圆角方（半径还不一样）
+     * 各裁一刀 —— 两条抗锯齿边界错开的地方会漏出自适应图标背景色的细边，浅色
+     * 背景的图标看起来就是「边缘一圈白边」。形状只能有一个权威，模板合成里那个
+     * 权威是图标包的 mask，所以这里交出未裁形的原图。
+     */
+    private fun composeAdaptiveIconLayers(
+        drawable: AdaptiveIconDrawable,
+        size: Int
+    ): Bitmap {
+        val layerBitmap = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
+        val layerCanvas = Canvas(layerBitmap)
+        val overdrawPx = size * (ADAPTIVE_ICON_LAYER_SCALE - 1f) / 2f
+        val layerStart = (-overdrawPx).roundToInt()
+        val layerEnd = size + overdrawPx.roundToInt()
+        drawable.background?.let { background ->
+            drawDrawable(background, layerCanvas, layerStart, layerStart, layerEnd, layerEnd)
+        }
+        drawable.foreground?.let { foreground ->
+            drawDrawable(foreground, layerCanvas, layerStart, layerStart, layerEnd, layerEnd)
+        }
+        return layerBitmap
     }
 
     /**
@@ -1214,71 +1258,6 @@ class AppRepository(private val context: Context) {
         return output
     }
 
-    private fun createTwoToneBitmap(drawable: Drawable, size: Int): Bitmap {
-        val adaptiveMono = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            (drawable as? AdaptiveIconDrawable)?.monochrome
-        } else {
-            null
-        }
-        if (adaptiveMono != null) {
-            return createAdaptiveMonochromeBitmap(adaptiveMono, size)
-        }
-        return createTintedGrayscaleBitmap(renderIconBitmap(drawable, size))
-    }
-
-    private fun createAdaptiveMonochromeBitmap(monochrome: Drawable, size: Int): Bitmap {
-        val output = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
-        val canvas = Canvas(output)
-        canvas.drawColor(TWO_TONE_BG)
-        val monoDrawable = monochrome.constantState?.newDrawable()?.mutate() ?: monochrome.mutate()
-        monoDrawable.colorFilter = PorterDuffColorFilter(TWO_TONE_FG, PorterDuff.Mode.SRC_IN)
-        val inset = (size * 0.10f).toInt()
-        monoDrawable.setBounds(inset, inset, size - inset, size - inset)
-        monoDrawable.draw(canvas)
-        return output
-    }
-
-    private fun createTintedGrayscaleBitmap(source: Bitmap): Bitmap {
-        val grayscale = Bitmap.createBitmap(source.width, source.height, Bitmap.Config.ARGB_8888)
-        val grayscaleCanvas = Canvas(grayscale)
-        val grayscalePaint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG).apply {
-            colorFilter = ColorMatrixColorFilter(ColorMatrix().apply { setSaturation(0f) })
-        }
-        grayscaleCanvas.drawBitmap(source, 0f, 0f, grayscalePaint)
-
-        val output = Bitmap.createBitmap(source.width, source.height, Bitmap.Config.ARGB_8888)
-
-        val pixels = IntArray(grayscale.width * grayscale.height)
-        grayscale.getPixels(pixels, 0, grayscale.width, 0, 0, grayscale.width, grayscale.height)
-        val threshold = (255 * BINARY_LUMINANCE_THRESHOLD).toInt()
-        var opaqueCount = 0
-        var whiteCount = 0
-        for (index in pixels.indices) {
-            val px = pixels[index]
-            val alpha = Color.alpha(px)
-            if (alpha == 0) continue
-            opaqueCount += 1
-            val luminance = ((Color.red(px) + Color.green(px) + Color.blue(px)) / 3f).toInt()
-            val color = if (luminance < threshold) TWO_TONE_FG else TWO_TONE_BG
-            if (color == TWO_TONE_FG) {
-                whiteCount += 1
-            }
-            pixels[index] = Color.argb(alpha, Color.red(color), Color.green(color), Color.blue(color))
-        }
-        if (opaqueCount > 0 && whiteCount > opaqueCount / 2) {
-            for (index in pixels.indices) {
-                val px = pixels[index]
-                val alpha = Color.alpha(px)
-                if (alpha == 0) continue
-                val isFg = Color.red(px) == Color.red(TWO_TONE_FG)
-                val inverted = if (isFg) TWO_TONE_BG else TWO_TONE_FG
-                pixels[index] = Color.argb(alpha, Color.red(inverted), Color.green(inverted), Color.blue(inverted))
-            }
-        }
-        output.setPixels(pixels, 0, grayscale.width, 0, 0, grayscale.width, grayscale.height)
-        return output
-    }
-
     private fun orderRank(
         app: AppInfo,
         orderSnapshot: CustomOrderSnapshot,
@@ -1338,25 +1317,23 @@ class AppRepository(private val context: Context) {
         shortcut: StoredAppListShortcut,
         iconPackMapping: IconPackMapping?,
         iconSize: Int,
-        useLegacyCircularIcons: Boolean,
-        useTwoToneIcons: Boolean
+        useLegacyCircularIcons: Boolean
     ): AppInfo? {
         val packageName = shortcut.packageName
         val sourceDrawable = itemStorage.loadShortcutIcon(shortcut.iconPath)?.let { bitmap ->
             BitmapDrawable(context.resources, bitmap)
         } ?: loadPackageFallbackIcon(packageName) ?: return null
-        val iconCacheKey = "shortcut|${shortcut.id}|${shortcut.iconPath}|$iconSize|${if (useLegacyCircularIcons) "legacy" else "plain"}|${if (useTwoToneIcons) "two_tone" else "normal"}"
+        val iconCacheKey = "shortcut|${shortcut.id}|${shortcut.iconPath}|$iconSize|${if (useLegacyCircularIcons) "legacy" else "plain"}"
         val cachedIcons = getOrCreateIconSet(iconCacheKey) {
             createIconSet(
                 componentKey = shortcut.componentKey,
                 iconPackMapping = iconPackMapping,
                 sourceDrawable = sourceDrawable,
                 iconSize = iconSize,
-                useLegacyCircularIcons = useLegacyCircularIcons,
-                useTwoToneIcons = useTwoToneIcons
+                useLegacyCircularIcons = useLegacyCircularIcons
             )
         }
-        val plainIconCacheKey = "shortcut|plain|${shortcut.id}|${shortcut.iconPath}|$iconSize|${if (useTwoToneIcons) "two_tone" else "normal"}"
+        val plainIconCacheKey = "shortcut|plain|${shortcut.id}|${shortcut.iconPath}|$iconSize"
         val plainIcons = if (!useLegacyCircularIcons) {
             cachedIcons
         } else {
@@ -1366,8 +1343,7 @@ class AppRepository(private val context: Context) {
                     iconPackMapping = iconPackMapping,
                     sourceDrawable = sourceDrawable,
                     iconSize = iconSize,
-                    useLegacyCircularIcons = false,
-                    useTwoToneIcons = useTwoToneIcons
+                    useLegacyCircularIcons = false
                 )
             }
         }
@@ -1377,12 +1353,8 @@ class AppRepository(private val context: Context) {
             activityName = shortcut.id,
             cachedIcon = cachedIcons.sharp,
             cachedBlurredIcon = cachedIcons.softened,
-            cachedTwoToneIcon = cachedIcons.twoToneSharp,
-            cachedTwoToneBlurredIcon = cachedIcons.twoToneSoftened,
             cachedPlainIcon = plainIcons.sharp,
             cachedPlainBlurredIcon = plainIcons.softened,
-            cachedPlainTwoToneIcon = plainIcons.twoToneSharp,
-            cachedPlainTwoToneBlurredIcon = plainIcons.twoToneSoftened,
             itemType = AppListItemType.SHORTCUT,
             shortcutIntentUri = shortcut.intentUri,
             pinnedShortcutId = shortcut.pinnedShortcutId
@@ -1399,18 +1371,14 @@ class AppRepository(private val context: Context) {
     private fun createFolderEntry(
         folder: StoredAppListFolder,
         childItems: List<AppInfo>,
-        iconSize: Int,
-        useTwoToneIcons: Boolean
+        iconSize: Int
     ): AppInfo {
-        val iconCacheKey = "folder|${folder.id}|${folder.itemKeys.joinToString("|")}|$iconSize|${if (useTwoToneIcons) "two_tone" else "normal"}"
+        val iconCacheKey = "folder|${folder.id}|${folder.itemKeys.joinToString("|")}|$iconSize"
         val cachedIcons = getOrCreateIconSet(iconCacheKey) {
             val baseBitmap = createFolderBitmap(childItems, iconSize)
-            val twoToneBitmap = if (useTwoToneIcons) createTintedGrayscaleBitmap(baseBitmap) else null
             CachedIconSet(
                 sharp = baseBitmap.asImageBitmap(),
-                softened = createSoftenedBitmap(baseBitmap).asImageBitmap(),
-                twoToneSharp = twoToneBitmap?.asImageBitmap(),
-                twoToneSoftened = twoToneBitmap?.let(::createSoftenedBitmap)?.asImageBitmap()
+                softened = createSoftenedBitmap(baseBitmap).asImageBitmap()
             )
         }
         return AppInfo(
@@ -1419,12 +1387,8 @@ class AppRepository(private val context: Context) {
             activityName = folder.id,
             cachedIcon = cachedIcons.sharp,
             cachedBlurredIcon = cachedIcons.softened,
-            cachedTwoToneIcon = cachedIcons.twoToneSharp,
-            cachedTwoToneBlurredIcon = cachedIcons.twoToneSoftened,
             cachedPlainIcon = cachedIcons.sharp,
             cachedPlainBlurredIcon = cachedIcons.softened,
-            cachedPlainTwoToneIcon = cachedIcons.twoToneSharp,
-            cachedPlainTwoToneBlurredIcon = cachedIcons.twoToneSoftened,
             itemType = AppListItemType.FOLDER,
             folderItemKeys = folder.itemKeys
         )
@@ -1498,9 +1462,9 @@ class AppRepository(private val context: Context) {
         }.getOrNull() ?: ContextCompat.getDrawable(context, R.mipmap.ic_launcher)
     }
 
-    private fun createBuiltInSettingsEntry(iconSize: Int, useTwoToneIconsSnapshot: Boolean): AppInfo? {
+    private fun createBuiltInSettingsEntry(iconSize: Int): AppInfo? {
         val iconDrawable = ContextCompat.getDrawable(context, R.mipmap.ic_settings_launcher) ?: return null
-        val iconCacheKey = "builtin_settings|$iconSize|${if (useTwoToneIconsSnapshot) "two_tone" else "normal"}"
+        val iconCacheKey = "builtin_settings|$iconSize"
         val cachedIcons = getOrCreateIconSet(iconCacheKey) {
             // 与普通应用同路：自适应图标强制圆形遮罩。以前这里直接走
             // renderIconBitmap（用设备系统遮罩），全列表只有设置入口被
@@ -1515,14 +1479,9 @@ class AppRepository(private val context: Context) {
             } else {
                 renderIconBitmap(iconDrawable, iconSize)
             }
-            val sharp = baseBitmap.asImageBitmap()
-            val softened = createSoftenedBitmap(baseBitmap).asImageBitmap()
-            val twoToneBitmap = if (useTwoToneIconsSnapshot) createTwoToneBitmap(iconDrawable, iconSize) else null
             CachedIconSet(
-                sharp = sharp,
-                softened = softened,
-                twoToneSharp = twoToneBitmap?.asImageBitmap(),
-                twoToneSoftened = twoToneBitmap?.let(::createSoftenedBitmap)?.asImageBitmap()
+                sharp = baseBitmap.asImageBitmap(),
+                softened = createSoftenedBitmap(baseBitmap).asImageBitmap()
             )
         }
         return AppInfo(
@@ -1531,12 +1490,8 @@ class AppRepository(private val context: Context) {
             activityName = BUILTIN_SETTINGS_ENTRY_COMPONENT.substringAfter('/'),
             cachedIcon = cachedIcons.sharp,
             cachedBlurredIcon = cachedIcons.softened,
-            cachedTwoToneIcon = cachedIcons.twoToneSharp,
-            cachedTwoToneBlurredIcon = cachedIcons.twoToneSoftened,
             cachedPlainIcon = cachedIcons.sharp,
             cachedPlainBlurredIcon = cachedIcons.softened,
-            cachedPlainTwoToneIcon = cachedIcons.twoToneSharp,
-            cachedPlainTwoToneBlurredIcon = cachedIcons.twoToneSoftened,
             isBuiltInSettingsEntry = true
         )
     }
@@ -1557,8 +1512,7 @@ class AppRepository(private val context: Context) {
                 itemKeys = visibleChildren.map { it.componentKey }
             ),
             childItems = visibleChildren,
-            iconSize = currentIconSize,
-            useTwoToneIcons = useTwoToneIcons
+            iconSize = currentIconSize
         )
     }
 

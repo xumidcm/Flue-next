@@ -1,6 +1,7 @@
 package com.flue.launcher.data.repository
 
 import android.content.Context
+import com.flue.launcher.R
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import kotlin.concurrent.thread
@@ -30,6 +31,52 @@ class AppListItemStorageTest {
             .clear()
             .commit()
         storage = AppListItemStorage(context)
+    }
+
+    /**
+     * 不给名字时用默认名，重名依次补 1、2、3…
+     *
+     * 盯的是老师要的「拉起一个文件夹默认就叫文件夹，已有同名的第二个叫文件夹1，以此类推」。
+     * 以前调用方传的是被拖到的那个应用的名字，于是文件夹会顶着某个应用的名字。
+     */
+    @Test
+    fun `folders created without a name take the default name and then increment`() {
+        val base = context.getString(R.string.app_list_folder_default_name)
+
+        val first = storage.createFolder("app.a/A", "app.b/B")!!
+        val second = storage.createFolder("app.c/C", "app.d/D")!!
+        val third = storage.createFolder("app.e/E", "app.f/F")!!
+
+        assertEquals(base, first.name)
+        assertEquals("${base}1", second.name)
+        assertEquals("${base}2", third.name)
+    }
+
+    /** 显式名字仍然优先 —— 重命名与旧调用点靠的就是这条。 */
+    @Test
+    fun `an explicit folder name still wins over the default`() {
+        val created = storage.createFolder("app.a/A", "app.b/B", "我的一组")!!
+
+        assertEquals("我的一组", created.name)
+    }
+
+    /**
+     * 中间那个被解散之后，新建的要**填回**空出来的号，而不是一路往上加。
+     *
+     * 判重读的是「当前还在的名字」，所以这是自然结果 —— 这条把它钉住，
+     * 免得以后有人改成记一个自增计数器。
+     */
+    @Test
+    fun `a freed default name is reused instead of climbing forever`() {
+        val base = context.getString(R.string.app_list_folder_default_name)
+        storage.createFolder("app.a/A", "app.b/B")
+        val second = storage.createFolder("app.c/C", "app.d/D")!!
+        assertEquals("${base}1", second.name)
+
+        storage.dissolveFolder(second.componentKey)
+
+        val replacement = storage.createFolder("app.e/E", "app.f/F")!!
+        assertEquals("${base}1", replacement.name)
     }
 
     @Test

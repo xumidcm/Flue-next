@@ -10,7 +10,11 @@ internal fun nativeOverscrollLimitPx(
     return when (presentation) {
         NativeAppListPresentation.DENSE_GRID -> 140f * safeDensity
         NativeAppListPresentation.LINEAR,
-        NativeAppListPresentation.HONEYCOMB -> safeViewportHeight / 2f
+        NativeAppListPresentation.HONEYCOMB,
+        // 心流与蜂窝同为绝对定位的图标网格，下拉回表盘的行程按同一档给。
+        NativeAppListPresentation.FLOW,
+        // 星环同为绝对定位的图标网格。
+        NativeAppListPresentation.RING -> safeViewportHeight / 2f
     }
 }
 
@@ -21,7 +25,13 @@ internal fun nativeOverscrollDragDelta(
 
 internal fun nativeOverscrollOutwardMultiplier(
     presentation: NativeAppListPresentation,
-): Float = if (presentation == NativeAppListPresentation.HONEYCOMB) 0.28f else 1f
+): Float = when (presentation) {
+    NativeAppListPresentation.HONEYCOMB,
+    NativeAppListPresentation.FLOW,
+    NativeAppListPresentation.RING -> 0.28f
+    NativeAppListPresentation.DENSE_GRID,
+    NativeAppListPresentation.LINEAR -> 1f
+}
 
 internal data class NativePullRelease(
     val triggerFace: Boolean,

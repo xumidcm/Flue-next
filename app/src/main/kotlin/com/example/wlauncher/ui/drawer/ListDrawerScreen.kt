@@ -109,7 +109,6 @@ fun ListDrawerScreen(
     fisheyeRangeRows: Int = 4,
     fisheyeStrengthPercent: Int = 100,
     edgeSpacingCompressionEnabled: Boolean = true,
-    twoToneIconsEnabled: Boolean = false,
     iconShadowEnabled: Boolean = true,
     themeColor: Color = Color(0xFF7BE8FF),
     uiStyle: UiStyle = UiStyle.APPLE_WATCH,
@@ -741,11 +740,8 @@ fun ListDrawerScreen(
                     val displayIcon = remember(
                         app.componentKey,
                         app.cachedIcon,
-                        app.cachedTwoToneIcon,
-                        twoToneIconsEnabled
                     ) {
                         app.iconForDisplay(
-                            useTwoTone = twoToneIconsEnabled,
                             blurred = false
                         )
                     }
@@ -930,7 +926,6 @@ fun ListDrawerScreen(
                     ) {
                         Image(
                             bitmap = draggedApp.iconForDisplay(
-                                useTwoTone = twoToneIconsEnabled,
                                 blurred = false
                             ),
                             contentDescription = draggedApp.label,

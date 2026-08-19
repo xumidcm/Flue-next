@@ -42,12 +42,53 @@ data class WatchEditorVideoInfo(
      * 文件里，交给播放器处理。90/270 的横竖交换风险最大，所以这一档不走直通。
      */
     val rotationDegrees: Int = 0,
+    /**
+     * 源视频轨的编码 MIME（`video/avc` = H.264）。平台没暴露时为 null。
+     *
+     * 只用于直通判定：表盘 video 图层由 MediaPlayer 播，实机只有 H.264 能播，
+     * 而直通是字节拷贝、编码原样进包 —— 见 [isH264] 与 `canPassThroughVideo`。
+     */
+    val codecMime: String? = null,
+    /**
+     * 容器自身的 MIME（`video/mp4` = MP4/ISO-BMFF）。平台没暴露时为 null。
+     *
+     * 直通判定要看它，不能只看视频轨编码：`WM_FORMAT_1.0.md` §1 把 `videos/` 写成
+     * 「video assets (MP4)」。一段 H.264 装在 mkv / webm / avi 里同样能被
+     * MediaPlayer 播（所以在 Flue 里看着没问题），但包一拿出去就是别的渲染器读不懂
+     * 的容器。重编码那条路的输出恒为 mp4，只有直通会把源容器原样带进包。
+     */
+    val containerMimeType: String? = null,
 ) {
     /**
      * 夹到 [WatchEditorVideoImportOptions] 合法区间的帧率，供 UI 初始化用。
      * 源可能是 120/240fps，而 options 只接受 ≤60 —— 直接把 [frameRate] 填进 options 会抛。
      */
     val importableFrameRate: Float? get() = frameRate?.coerceIn(0.5f, 60f)
+
+    /**
+     * 源是否已经是 H.264（AVC）。
+     *
+     * 读不到编码信息时返回 false —— 「不确定」必须当成「不是」：直通判定用它做闸门，
+     * 猜错的代价是一段播不出来的表盘视频，而多走一次重编码只是慢一点。
+     */
+    val isH264: Boolean get() = codecMime?.equals(H264_MIME, ignoreCase = true) == true
+
+    /**
+     * 容器是否是 MP4 家族。
+     *
+     * 与 [isH264] 同样的口径：读不到就当**不是**。直通是字节拷贝，猜错换来的是一个
+     * 别的渲染器打不开的包；多走一次重编码只是慢一点。
+     */
+    val isMp4Container: Boolean
+        get() = containerMimeType?.substringBefore(';')?.trim()?.lowercase(Locale.ROOT) in MP4_MIMES
+
+    companion object {
+        /** H.264 / AVC 的 MediaFormat MIME。 */
+        const val H264_MIME: String = "video/avc"
+
+        /** MP4 家族容器的 MIME 写法。`video/x-m4v` 是 .m4v 在部分设备上的报法。 */
+        private val MP4_MIMES = setOf("video/mp4", "video/x-m4v", "video/mp4v-es")
+    }
 }
 
 /** Normalised crop in the display-oriented video coordinate space. */
@@ -189,6 +230,17 @@ internal fun canPassThroughVideo(
     info: WatchEditorVideoInfo,
     options: WatchEditorVideoImportOptions,
 ): Boolean {
+    // 源必须**已经是 H.264**。直通是字节拷贝，源编码原样进包，而表盘的 video 图层由
+    // MediaPlayer 播 —— 实机只有 H.264 播得出来（老师报的「视频格式必须为 h264」）。
+    // 以前这里不看编码，于是一段 HEVC/VP9 素材只要参数都没改就直通进包、上表黑屏。
+    // 读不到编码信息时 isH264 为 false，走重编码那条更稳的路。
+    if (!info.isH264) return false
+
+    // 容器也必须已经是 MP4。规范里 `videos/` 装的是 MP4（1.0 §1），而直通会把源容器
+    // 原样带进包：一段 H.264 装在 mkv/webm 里在 Flue 上播得出来，拿到别的渲染器就是
+    // 打不开的文件。重编码那条路输出恒为 mp4，所以只要退回去就自动合规。
+    if (!info.isMp4Container) return false
+
     // 旋转 90/270 会让显示朝向与存储朝向不一致。直通保留原始元数据，
     // 播放器若忽略 rotation 就会显示成躺倒的画面 —— 这一档交给 FFmpeg
     // 烘焙掉旋转，比赌播放器行为安全。
@@ -231,6 +283,33 @@ internal fun canPassThroughVideo(
  */
 class WatchEditorFfmpegUnsupportedException :
     WatchEditorException("FFmpeg unavailable on this device ABI")
+
+/**
+ * 重编码用的视频编码器候选。
+ *
+ * 表盘的 `video` 图层由 `MediaPlayer` 播放，实机结论是**只有 H.264 播得出来**
+ * （老师报的「视频格式必须为 h264」）。但项目用的 `ffmpeg-kit-video` 变体不含 GPL 的
+ * `libx264`（写 `-c:v libx264` 会 returnCode=1，libavcodec.so 里查不到该符号），
+ * 所以真 H.264 只能走机器自己的硬件编码器。它在个别机型上不存在、或拒绝当前分辨率，
+ * 那时才允许退回纯软件的 MPEG-4 Part 2 —— 画质与兼容性都差一点，但比整个导入失败好。
+ *
+ * 顺序即优先级，[LADDER] 是唯一的尝试次序真源。
+ */
+internal enum class WatchEditorVideoEncoder(
+    val ffmpegName: String,
+    val pixelFormat: String,
+) {
+    /** 首选：真 H.264（AVC），走 MediaCodec 硬件编码。 */
+    H264_MEDIACODEC("h264_mediacodec", "yuv420p"),
+
+    /** 兜底：纯软件 MPEG-4 Part 2，mp4 原生、不依赖任何硬件能力。 */
+    MPEG4("mpeg4", "yuv420p"),
+    ;
+
+    companion object {
+        val LADDER: List<WatchEditorVideoEncoder> = listOf(H264_MEDIACODEC, MPEG4)
+    }
+}
 
 /** 直通导入的产物：已落在草稿 `videos/` 下的源文件副本。 */
 data class WatchEditorVideoPassThrough(
@@ -294,6 +373,9 @@ object WatchEditorVideoImporter {
                 ?.coerceIn(64L, 100_000L)
                 ?.toInt()
             val frameRate = readFrameRate(context, uri, retriever, durationMs)
+            val codecMime = readVideoCodecMime(context, uri)
+            val containerMime = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_MIMETYPE)
+                ?: context.contentResolver.getType(uri)
             val rotated = rotation == 90 || rotation == 270
             WatchEditorVideoInfo(
                 durationMs = durationMs,
@@ -302,6 +384,8 @@ object WatchEditorVideoImporter {
                 bitrateKbps = bitrateKbps,
                 frameRate = frameRate,
                 rotationDegrees = rotation,
+                codecMime = codecMime,
+                containerMimeType = containerMime,
             )
         } catch (error: Throwable) {
             Log.e(
@@ -376,6 +460,31 @@ object WatchEditorVideoImporter {
         }.getOrNull()
         return valid(counted)
     }
+
+    /**
+     * 源视频轨的编码 MIME（如 `video/avc`）。读不到返回 null。
+     *
+     * 直通导入是**字节拷贝**，源是什么编码，进表盘包就还是什么编码。而表盘的 video
+     * 图层由 MediaPlayer 播，实机结论是只有 H.264 播得出来（老师报的「视频格式必须为
+     * h264」）—— 所以直通判定必须看这一项，否则一段 HEVC/VP9 素材只要参数都没改，
+     * 就会原样躺进包里、上表播不出来。
+     *
+     * 与 [readFrameRate] 一样用 `runCatching` 全隔离：这只是判定材料，读失败不该
+     * 打断导入（读不到就当「不确定」，走重编码那条更稳的路）。
+     */
+    private fun readVideoCodecMime(context: Context, uri: Uri): String? = runCatching {
+        val extractor = MediaExtractor()
+        try {
+            extractor.setDataSource(context, uri, null)
+            (0 until extractor.trackCount)
+                .asSequence()
+                .map(extractor::getTrackFormat)
+                .mapNotNull { it.getString(MediaFormat.KEY_MIME) }
+                .firstOrNull { it.startsWith("video/") }
+        } finally {
+            extractor.release()
+        }
+    }.getOrNull()
 
     suspend fun convertToFrames(
         context: Context,
@@ -531,13 +640,41 @@ object WatchEditorVideoImporter {
             }
             stage = "读取源视频信息"
             val info = inspect(context, uri)
-            val arguments = buildReencodeArguments(inputFile, outputFile, info, options)
             stage = "FFmpeg 解码与重编码"
-            execute(arguments, options.durationMs, onProgress)
-            stage = "校验输出"
-            if (!outputFile.isFile || outputFile.length() <= 0L) {
-                throw WatchEditorException("FFmpeg 没有生成可用的视频文件")
+            // 编码器阶梯：先真 H.264，失败再退纯软件 mpeg4。表盘视频层由 MediaPlayer
+            // 播放，老师实测只有 H.264 播得出来；而这个 ffmpeg-kit 变体没有 libx264，
+            // 唯一的 AVC 出口是机器自己的硬件编码器（h264_mediacodec），它在部分机型上
+            // 不存在或拒绝当前分辨率 —— 那时才允许退回 mpeg4，总比整个导入失败好。
+            var lastFailure: Throwable? = null
+            var encodedWith: WatchEditorVideoEncoder? = null
+            for (encoder in WatchEditorVideoEncoder.LADDER) {
+                val arguments = buildReencodeArguments(inputFile, outputFile, info, options, encoder)
+                try {
+                    execute(arguments, options.durationMs, onProgress)
+                    if (outputFile.isFile && outputFile.length() > 0L) {
+                        encodedWith = encoder
+                        break
+                    }
+                    lastFailure = WatchEditorException(
+                        "FFmpeg 没有生成可用的视频文件（编码器 ${encoder.ffmpegName}）",
+                    )
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (failure: Throwable) {
+                    lastFailure = failure
+                    Log.w(TAG, "编码器 ${encoder.ffmpegName} 不可用，尝试下一档", failure)
+                }
+                // 失败可能留下半个文件，下一档必须从干净的输出开始。
+                withContext(Dispatchers.IO) { outputFile.delete() }
             }
+            stage = "校验输出"
+            if (encodedWith == null) {
+                throw lastFailure?.let { failure ->
+                    if (failure is WatchEditorException) failure
+                    else WatchEditorException(failure.message ?: "视频转换失败", failure)
+                } ?: WatchEditorException("FFmpeg 没有生成可用的视频文件")
+            }
+            Log.i(TAG, "视频重编码完成（编码器=${encodedWith.ffmpegName}）")
             // 源文件已经没用了，早点让出缓存空间：视频动辄几十上百 MB。
             withContext(Dispatchers.IO) { inputFile.delete() }
             return WatchEditorVideoPassThrough(root, outputFile)
@@ -580,13 +717,18 @@ object WatchEditorVideoImporter {
 
     /**
      * 重编码成 mp4 的参数。与 [buildArguments] 共用同一条滤镜链，差异只在编码器：
-     * mjpeg 出的是独立静帧序列，这里出的是单个 H.264 视频轨。
+     * mjpeg 出的是独立静帧序列，这里出的是单个视频轨。
+     *
+     * 编码器由 [encoder] 决定，调用方按 [WatchEditorVideoEncoder.LADDER] 依次尝试 ——
+     * 表盘视频层要的是 **H.264**（老师实测：只有 H.264 能播），但这个 ffmpeg-kit 变体
+     * 不含 GPL 的 libx264，所以先试硬件 AVC 编码器，不行再退回纯软件 mpeg4。
      */
     internal fun buildReencodeArguments(
         inputFile: File,
         outputFile: File,
         info: WatchEditorVideoInfo,
         options: WatchEditorVideoImportOptions,
+        encoder: WatchEditorVideoEncoder = WatchEditorVideoEncoder.LADDER.first(),
     ): List<String> = listOf(
         "-hide_banner",
         "-loglevel", "warning",
@@ -598,14 +740,10 @@ object WatchEditorVideoImporter {
         // 表盘视频不需要音轨，去掉能省体积也省解码开销。
         "-an",
         "-vf", buildVideoFilter(info, options),
-        // 用 mpeg4 而不是 libx264：ffmpeg-kit-video 这个变体**不含 GPL 的
-        // libx264**（实机 returnCode=1 就是它，libavcodec.so 里查不到该符号）。
-        // 备选里 h264_mediacodec 依赖机型硬件编码器、失败率不可控，kvazaar 太慢，
-        // libvpx 要换 webm 容器 —— mpeg4 是纯软件、mp4 原生、MediaPlayer 必然
-        // 能解的那个，代价只是同码率下画质略逊于 H.264。
-        "-c:v", "mpeg4",
-        // mpeg4 编码器只认全范围的 yuv420p，写 yuvj420p 会被拒。
-        "-pix_fmt", "yuv420p",
+        "-c:v", encoder.ffmpegName,
+        // mpeg4 编码器只认全范围的 yuv420p，写 yuvj420p 会被拒；
+        // h264_mediacodec 同样吃 yuv420p。
+        "-pix_fmt", encoder.pixelFormat,
         "-b:v", "${options.bitrateKbps}k",
         // moov 前置，播放器不必先 seek 到文件尾才能起播。
         "-movflags", "+faststart",

@@ -35,11 +35,10 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
-import com.flue.launcher.ui.settings.miuix.MiuixLoadingIndicator
+import com.flue.launcher.ui.style.FlueLoadingIndicator
 import androidx.compose.material3.Text
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
@@ -67,7 +66,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.flue.launcher.ui.input.flueRotaryScrollable
 import com.flue.launcher.ui.input.ROTARY_SCROLL_MULTIPLIER
 import com.flue.launcher.ui.input.requestFocusAfterFirstFrame
-import com.flue.launcher.ui.common.flueElasticNestedScroll
+import com.flue.launcher.ui.style.flueOverscroll
 import com.flue.launcher.ui.theme.LauncherTheme
 import com.flue.launcher.ui.theme.ProvideGlobalUiScale
 import com.flue.launcher.ui.theme.WatchColors
@@ -224,7 +223,7 @@ private fun BuiltInFileManagerScreen(
                 horizontalArrangement = Arrangement.Center,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                MiuixLoadingIndicator(color = WatchColors.ActiveCyan)
+                FlueLoadingIndicator()
             }
         } else if (mediaList!!.isEmpty()) {
             Row(
@@ -248,7 +247,7 @@ private fun BuiltInFileManagerScreen(
                 state = listState,
                 modifier = Modifier
                     .weight(1f)
-                    .flueElasticNestedScroll(listState),
+                    .flueOverscroll(listState),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 items(mediaList!!, key = { it.uri.toString() }) { item ->
@@ -257,7 +256,6 @@ private fun BuiltInFileManagerScreen(
                             ?: unknownTimeLabel
                         "$createdLabel\n${item.path}"
                     }
-                    val scale = itemFisheye(listState, item.uri.toString())
                     val interaction = remember(item.uri) { MutableInteractionSource() }
                     val pressed by interaction.collectIsPressedAsState()
                     val pressScale by animateFloatAsState(
@@ -268,10 +266,13 @@ private fun BuiltInFileManagerScreen(
                     Column(
                         modifier = Modifier
                             .fillMaxWidth()
+                            // 这里**不做鱼眼**（老师定：改成平铺）。原来有一份私有 itemFisheye
+                            // 把中心线以下的项缩到 0.86 并压暗到 0.6 alpha —— 在一个「选文件」
+                            // 列表上那只是让下半屏的缩略图和文件名变小变淡、更难认。
+                            // 按压缩放留着，那是点击反馈不是鱼眼。
                             .graphicsLayer {
-                                scaleX = scale * pressScale
-                                scaleY = scale * pressScale
-                                alpha = scale.coerceIn(0.6f, 1f)
+                                scaleX = pressScale
+                                scaleY = pressScale
                             }
                             .background(WatchColors.SurfaceGlass, RoundedCornerShape(12.dp))
                             .clickable(interactionSource = interaction, indication = null) { onPick(item.uri) }
@@ -371,16 +372,6 @@ private fun decodeSampledBitmap(context: Context, uri: Uri, reqSize: Int): andro
         inPreferredConfig = android.graphics.Bitmap.Config.RGB_565
     }
     return resolver.openInputStream(uri)?.use { android.graphics.BitmapFactory.decodeStream(it, null, opts) }
-}
-
-@Composable
-private fun itemFisheye(state: LazyListState, key: Any): Float {
-    val info = state.layoutInfo.visibleItemsInfo.find { it.key == key } ?: return 0.9f
-    val center = state.layoutInfo.viewportEndOffset / 2f
-    val itemCenter = info.offset + info.size / 2f
-    if (itemCenter <= center) return 1f
-    val normalized = ((itemCenter - center) / center).coerceIn(0f, 1f)
-    return (1f - normalized * 0.14f).coerceIn(0.86f, 1f)
 }
 
 private data class MediaItem(

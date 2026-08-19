@@ -18,6 +18,13 @@ interface WatchStoreApi {
     /** Streams the final image into [destination], enforcing the preview limit. */
     fun downloadPreview(id: String, destination: File): File
 
+    /**
+     * Streams a server-provided site image into [destination]. Implementations
+     * that do not support profile/social images may keep the default failure.
+     */
+    fun downloadSiteImage(rawUrl: String?, destination: File): File =
+        throw UnsupportedOperationException("Site image downloads are not supported")
+
     /** Streams the final `.watch` archive into [destination], enforcing the archive limit. */
     fun downloadWatchFace(id: String, destination: File): File
 

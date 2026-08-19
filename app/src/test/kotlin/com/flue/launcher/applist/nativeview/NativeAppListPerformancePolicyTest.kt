@@ -196,9 +196,77 @@ class NativeAppListPerformancePolicyTest {
         assertEquals(0f, edge.translationY, 0f)
     }
 
+    /**
+     * 心流的鱼眼只按垂直距离算，横向偏移不参与。
+     *
+     * 盯的是老师报的「心流布局越靠左图标越暗淡越透明，调成一列时右边更亮」。根因是
+     * 二维半径：心流基准列的 x 被故意放在「月牙峰值贴边」处，也就是恒定偏离屏幕中线，
+     * 于是 hypot 把明暗和月牙的横向位移绑在一起 —— 月牙峰落在垂直中心最亮、月牙两端
+     * 落在垂直边缘最暗，看起来就是在按横坐标调亮度。
+     *
+     * 这条断言的是「同一垂直位置、不同横坐标 → 完全同一份明暗与缩放」，也就是月牙
+     * 只管位移、不再影响明暗。
+     */
     @Test
-    fun honeycombHotPathReusesTheCallerOwnedVisualResult() {
-        val scratch = NativeSpatialChildVisual()
+    fun flowFisheyeIgnoresHorizontalOffsetSoTheCrescentDoesNotChangeBrightness() {
+        val config = NativeAppListConfig(
+            presentation = NativeAppListPresentation.FLOW,
+            fisheyeEnabled = true,
+            fisheyeStrength = 1f,
+            honeycombFisheyeRangeRows = 2,
+        )
+        // 同一 centerY、横坐标差 120px：垂直单轴下必须给出同一份结果。
+        val left = nativeHoneycombChildVisual(
+            centerX = 40f,
+            centerY = 160f,
+            viewportWidth = 320f,
+            viewportHeight = 320f,
+            config = config,
+            verticalOnlyFisheye = true,
+        )
+        val right = nativeHoneycombChildVisual(
+            centerX = 160f,
+            centerY = 160f,
+            viewportWidth = 320f,
+            viewportHeight = 320f,
+            config = config,
+            verticalOnlyFisheye = true,
+        )
+        assertEquals(right.alpha, left.alpha, 0f)
+        assertEquals(right.scale, left.scale, 0f)
+        // 垂直中心不该被横向偏移拖出任何衰减。
+        assertEquals(1f, left.alpha, 0f)
+        assertEquals(1f, left.scale, 0f)
+
+        // 缩放本身保留：离垂直中心越远仍然越小（老师要的鱼眼效果）。
+        val verticalEdge = nativeHoneycombChildVisual(
+            centerX = 40f,
+            centerY = 20f,
+            viewportWidth = 320f,
+            viewportHeight = 320f,
+            config = config,
+            verticalOnlyFisheye = true,
+        )
+        assertTrue(verticalEdge.scale < left.scale)
+    }
+
+    /** 蜂窝仍然走二维半径 —— 上面那条只改心流，不能顺手改掉蜂窝的鱼眼。 */
+    @Test
+    fun honeycombKeepsTheRadialFisheyeWhenVerticalOnlyIsNotRequested() {
+        val config = NativeAppListConfig(
+            presentation = NativeAppListPresentation.HONEYCOMB,
+            fisheyeEnabled = true,
+            fisheyeStrength = 1f,
+            honeycombFisheyeRangeRows = 2,
+        )
+        val center = nativeHoneycombChildVisual(160f, 160f, 320f, 320f, config)
+        val horizontallyOffset = nativeHoneycombChildVisual(40f, 160f, 320f, 320f, config)
+
+        assertTrue(horizontallyOffset.scale < center.scale)
+    }
+
+    @Test
+    fun honeycombHotPathReusesTheCallerOwnedVisualResult() {        val scratch = NativeSpatialChildVisual()
 
         val result = nativeHoneycombChildVisual(
             centerX = 160f,
@@ -273,7 +341,10 @@ class NativeAppListPerformancePolicyTest {
 
         assertSame(scratch, result)
         assertEquals(0f, result.translationX, 0f)
-        assertEquals(12.8f, result.translationY, 0.001f)
+        // 入场位移吃回弹映射：线性段压到前 82%，所以 t=0.5 的实际进度是
+        // 0.5/0.82 ≈ 0.6098，剩余位移 (1−0.6098)×0.08×320 ≈ 9.99
+        //（见 nativeEntryOvershoot）。透明度仍按原始进度，不吃过冲。
+        assertEquals(9.99f, result.translationY, 0.01f)
         assertEquals(0.5f, result.alpha, 0f)
     }
 
@@ -575,9 +646,10 @@ class NativeAppListPerformancePolicyTest {
             config = config,
         )
 
-        assertEquals(0.95f, visual.scale, 0.0001f)
+        // 缩放与位移吃回弹映射（线性段压到前 82%），透明度仍按原始进度。
+        assertEquals(0.9610f, visual.scale, 0.0001f)
         assertEquals(0.5f, visual.alpha, 0.0001f)
-        assertEquals(9.6f, visual.translationY, 0.0001f)
+        assertEquals(7.4927f, visual.translationY, 0.0001f)
     }
 
     @Test

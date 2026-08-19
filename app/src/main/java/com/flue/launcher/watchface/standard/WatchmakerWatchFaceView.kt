@@ -14,12 +14,16 @@ import android.graphics.Path
 import android.graphics.Rect
 import android.graphics.RectF
 import android.graphics.Typeface
+import android.media.AudioManager
 import android.media.MediaMetadataRetriever
 import android.os.SystemClock
+import android.provider.AlarmClock
+import android.provider.MediaStore
 import android.provider.Settings
 import android.util.AttributeSet
 import android.view.GestureDetector
 import android.view.HapticFeedbackConstants
+import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.View
 import android.widget.Toast
@@ -28,6 +32,7 @@ import androidx.core.graphics.PathParser
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.foundation.layout.fillMaxSize
+import com.flue.launcher.R
 import com.flue.launcher.watchface.WatchFaceDescriptor
 import com.flue.launcher.ui.anim.createLegacyPrebuiltBlur
 import com.flue.launcher.ui.common.isFlueScreenRound
@@ -118,11 +123,19 @@ internal inline fun evaluateWatchFaceTickRedraw(
 internal fun watchFaceNeedsLuaRuntime(
     initialScript: String?,
     layers: List<WatchmakerLayer>,
-): Boolean = !initialScript.isNullOrBlank() || layers.any { layer ->
-    WatchTapActionParser.parse(
-        layer.attributes["tap_action"] ?: layer.attributes["action"],
-    ) is WatchTapAction.Script
+): Boolean {
+    if (!initialScript.isNullOrBlank()) return true
+    return layers.any { layer ->
+        WatchTapActionParser.parse(
+            layer.attributes["tap_action"] ?: layer.attributes["action"],
+        ) is WatchTapAction.Script || layer.attributes.values.any { value ->
+            EXTERNAL_DATA_REFERENCE.containsMatchIn(value)
+        }
+    }
 }
+
+/** Lua-only expressions need the sandbox even when the face has no script file or tap action. */
+private val EXTERNAL_DATA_REFERENCE = Regex("\\bWF\\s*(?:\\.|\\[)", RegexOption.IGNORE_CASE)
 
 /** MediaPlayer 能直接播的容器；序列帧导入产物走 image 路径，不在此列。 */
 internal val PLAYABLE_VIDEO_EXTENSIONS = setOf("mp4", "webm", "mkv", "3gp")
@@ -168,8 +181,20 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
     private var sourceTransitionFrame: Bitmap? = null
     private var sourceTransitionGeneration = -1L
     private var sourceTransitionStartedAtUptimeMs = 0L
-    private var trackTransitionAssetReadiness = false
-    private var transitionFrameHasUnreadyVisualAsset = false
+    /**
+     * 逐帧记录「本帧有图层该画却拿不到素材」。
+     *
+     * 原来只在跨表盘过渡期间打开（`trackTransitionAssetReadiness`），现在每帧都记 ——
+     * 桌面那层的加载页也要靠它判断渲染是否已经静默（见 [watchRenderReadiness]）。
+     * 只是置一个布尔，逐帧开着没有成本。
+     */
+    private var trackVisualAssetReadiness = false
+    private var frameHasUnreadyVisualAsset = false
+    /** 渲染就绪回调与去重键：一个 (表盘, refreshToken) 只报一次。 */
+    private var onRenderReadyCallback: ((Int) -> Unit)? = null
+    private var renderReadyDescriptorKey: String? = null
+    private var renderReadyRefreshToken: Int? = null
+    private var renderReadyDeadlineUptimeMs = 0L
     private var faceVisible = false
     private var textEntryAnimationEnabled = true
     private var textAnimationStartedAtUptimeMs = SystemClock.uptimeMillis()
@@ -204,6 +229,24 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
     private var tickPosted = false
     private var dataProvider: WatchDataProvider = EmptyWatchDataProvider
     private var frameDataSnapshot = WatchDataSnapshot()
+    /**
+     * External-data writes arrive through a process-wide receiver, while this View may be
+     * rendering a static face with only a one-second tick. Subscribe once per render segment
+     * so a slot write schedules an immediate frame instead of waiting for that tick. The Lua
+     * runtime still reads the store lazily; this callback only invalidates the View and never
+     * touches Lua state from the receiver thread.
+     */
+    private val externalDataStore = WatchExternalDataStore.of(context)
+    private val externalDataListener: (Int) -> Unit = {
+        if (!disposed) {
+            post {
+                if (!disposed && faceVisible) {
+                    requestFullRepaint()
+                    frameGeometryListener?.invoke()
+                }
+            }
+        }
+    }
     /**
      * 画布铺法。取代旧的 `forceFill: Boolean` —— 后者只是这里的
      * [WatchCanvasPreset.FIT] / [WatchCanvasPreset.FILL] 两种取值。
@@ -344,18 +387,27 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         }
         for (scratchIndex in ancestorCount - 1 downTo 0) {
             val ancestorIndex = ancestorIndexScratch[scratchIndex]
-            val attributes = prepared.definition.layers[ancestorIndex].attributes
+            val ancestorLayer = prepared.definition.layers[ancestorIndex]
+            val attributes = ancestorLayer.attributes
             alpha *= dynamicNumber(attributes["opacity"], 100f, prepared)
                 .coerceIn(0f, 100f) / 100f
             if (alpha <= 0f || !isDisplayed(attributes["display"], prepared)) return null
             matrix.preConcat(
-                composeLayerMatrix(layerMatrixScratch, attributes, prepared, ancestorIndex),
+                composeLayerMatrix(
+                    layerMatrixScratch,
+                    attributes,
+                    prepared,
+                    ancestorIndex,
+                    ancestorLayer.id,
+                ),
             )
         }
         val attrs = layer.attributes
         alpha *= dynamicNumber(attrs["opacity"], 100f, prepared).coerceIn(0f, 100f) / 100f
         if (alpha <= 0f || !isDisplayed(attrs["display"], prepared)) return null
-        matrix.preConcat(composeLayerMatrix(layerMatrixScratch, attrs, prepared, layerIndex))
+        matrix.preConcat(
+            composeLayerMatrix(layerMatrixScratch, attrs, prepared, layerIndex, layer.id),
+        )
 
         // 视频没有「原生尺寸」可依（解码尺寸要等 prepare 完成，而几何每帧都要），
         // 所以按编辑器侧同一套约定：未声明就占满设计画布。
@@ -408,6 +460,7 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
 
     // 编辑器画布拖拽的实时变换覆盖（按图层文档序号定位）。
     private var liveTransformLayerIndex = -1
+    private var liveTransformLayerId: String? = null
     private var liveTransformX = 0f
     private var liveTransformY = 0f
     private var liveTransformRotation = 0f
@@ -421,6 +474,7 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
      */
     fun setLiveLayerTransform(
         layerIndex: Int,
+        layerId: String? = null,
         x: Float,
         y: Float,
         rotationDegrees: Float,
@@ -428,6 +482,7 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         scaleY: Float,
     ) {
         liveTransformLayerIndex = layerIndex
+        liveTransformLayerId = layerId?.takeIf(String::isNotBlank)
         liveTransformX = x
         liveTransformY = y
         liveTransformRotation = rotationDegrees
@@ -469,6 +524,7 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
     private fun clearLiveLayerTransformInternal(): Boolean {
         if (liveTransformLayerIndex == -1) return false
         liveTransformLayerIndex = -1
+        liveTransformLayerId = null
         return true
     }
 
@@ -736,6 +792,11 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
     private val bitmapShadowPaint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
     private val pathScratch = Path()
     private val rectScratch = RectF()
+    /** 环端帽（[drawRingCap]）专用；与 [pathScratch] 分开，避免和图层裁剪路径争用。 */
+    private val ringCapPath = Path()
+    private val ringCapRect = RectF()
+    /** `addRoundRect` 的八个半径（四角各 x/y）；每次画帽前整块重填。 */
+    private val ringCapRadii = FloatArray(8)
     /** [composeLayerMatrix] 的逐帧复用缓冲；concat 会立即读走内容。 */
     private val layerMatrixScratch = Matrix()
     /** [ringGradient] 的扫描渐变矩阵；setLocalMatrix 会立即拷走，可安全复用。 */
@@ -799,6 +860,10 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         },
     )
 
+    init {
+        externalDataStore.addListener(externalDataListener)
+    }
+
     /**
      * 让补画段跟随首段渲染同一张表盘。
      *
@@ -831,6 +896,22 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         frameStartedAtUptimeMs = primary.frameStartedAtUptimeMs
         editorPreviewPlaying = primary.editorPreviewPlaying
         editorPreviewPausedElapsedMs = primary.editorPreviewPausedElapsedMs
+        // 手势期间的实时变换与冻结状态也要跟过来。刚导入视频那一刻分段会被重建，
+        // 如果此时正在拖一个压在视频上的图层，新建出来的补画段不继承覆盖就会
+        // 瞬间跳回 XML 里的旧位置。
+        editorAnimationInteractionFrozen = primary.editorAnimationInteractionFrozen
+        editorAnimationFrozenElapsedMs = primary.editorAnimationFrozenElapsedMs
+        if (primary.liveTransformLayerIndex >= 0) {
+            setLiveLayerTransform(
+                layerIndex = primary.liveTransformLayerIndex,
+                layerId = primary.liveTransformLayerId,
+                x = primary.liveTransformX,
+                y = primary.liveTransformY,
+                rotationDegrees = primary.liveTransformRotation,
+                scaleX = primary.liveTransformScaleX,
+                scaleY = primary.liveTransformScaleY,
+            )
+        }
     }
 
     fun bind(
@@ -842,11 +923,17 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         onLoadFailure: (WatchFaceDescriptor, Throwable) -> Unit,
         onTapAction: ((WatchTapAction) -> Unit)? = null,
         onSourceReady: ((Int) -> Unit)? = null,
+        /**
+         * 渲染真正静默（本帧画出来的就是完整画面）时回调一次，桌面据此撤加载页。
+         * 与 [onSourceReady] 的区别：后者只表示结构就绪，位图/GIF/字体还没来。
+         */
+        onRenderReady: ((Int) -> Unit)? = null,
         textEntryAnimationEnabled: Boolean = true,
         textExitAnimationEnabled: Boolean = true,
     ) {
         if (disposed) return
         require(descriptor.isWatchmaker) { "Watchmaker view requires a standard .watch descriptor" }
+        onRenderReadyCallback = onRenderReady
         val enteringFace = isFaceVisible && !faceVisible
         val enablingAnimation = isFaceVisible && textEntryAnimationEnabled && !this.textEntryAnimationEnabled
         this.faceVisible = isFaceVisible
@@ -900,6 +987,10 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         )
         descriptorKey = descriptor.stableKey
         this.refreshToken = refreshToken
+        // 新一代开始：就绪保底时限从这里起算，并清掉上一代的「已报」标记。
+        renderReadyDeadlineUptimeMs = SystemClock.uptimeMillis() + WATCH_RENDER_READY_MAX_HOLD_MS
+        renderReadyDescriptorKey = null
+        renderReadyRefreshToken = null
         val generation = ++bindGeneration
         loadJob?.cancel()
         assetGenerationJob.cancel()
@@ -1146,6 +1237,7 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
     fun dispose() {
         if (disposed) return
         disposed = true
+        externalDataStore.removeListener(externalDataListener)
         bindGeneration++
         descriptorKey = null
         loadedDescriptorKey = null
@@ -1184,6 +1276,7 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         tapActionHandler = null
         frameGeometryListener = null
         transitionOverlayListener = null
+        onRenderReadyCallback = null
         boundDescriptor = null
         tapTargets.clear()
         consumeCurrentGesture = false
@@ -1240,9 +1333,8 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
             return
         }
         val transition = sourceTransitionFrame?.takeIf { !it.isRecycled }
-        trackTransitionAssetReadiness =
-            transition != null && sourceTransitionGeneration == bindGeneration
-        transitionFrameHasUnreadyVisualAsset = false
+        trackVisualAssetReadiness = true
+        frameHasUnreadyVisualAsset = false
         val gravityBackdrop = if (
             gravityParallaxEnabled && gravityBackdropBlurEnabled && prepared.hasGyroParallax
         ) {
@@ -1278,7 +1370,7 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
             smoothedGyroscopeX += (rawGyroX - smoothedGyroscopeX) * 0.18f
             smoothedGyroscopeY += (rawGyroY - smoothedGyroscopeY) * 0.18f
         }
-        trackTransitionAssetReadiness = false
+        trackVisualAssetReadiness = false
 
         if (transition != null) {
             canvas.drawBitmap(transition, null, Rect(0, 0, width, height), sourceTransitionPaint)
@@ -1289,7 +1381,7 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
                 SystemClock.uptimeMillis() - sourceTransitionStartedAtUptimeMs >=
                     SOURCE_TRANSITION_MAX_HOLD_MS
             val canRevealReplacement =
-                !transitionStillLoading && !transitionFrameHasUnreadyVisualAsset
+                !transitionStillLoading && !frameHasUnreadyVisualAsset
             if (
                 sourceTransitionGeneration != bindGeneration ||
                 transitionTimedOut ||
@@ -1311,6 +1403,47 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
                 postInvalidateOnAnimation()
             }
         }
+        reportRenderReadinessAfterDraw()
+    }
+
+    /**
+     * 本帧画完之后重估「渲染就绪」，就绪就报给宿主（桌面据此撤加载页）。
+     *
+     * 判定本身在 [watchRenderReadiness] 里，纯函数、可单测。这里只负责取状态、
+     * 去重、以及在没人会来叫醒我们的那种情况下自己推下一帧。
+     */
+    private fun reportRenderReadinessAfterDraw() {
+        val callback = onRenderReadyCallback ?: return
+        val key = descriptorKey ?: return
+        val token = refreshToken
+        // 一个 (表盘, refreshToken) 只报一次 —— bind() 每次重组都会跑，
+        // 照 loadedDescriptorKey / loadedRefreshToken 那套去重写法。
+        if (renderReadyDescriptorKey == key && renderReadyRefreshToken == token) return
+        val pendingAssetLoads = synchronized(cacheLock) {
+            activeAssetLoads.count { claim -> claim.generation == bindGeneration } +
+                bitmapLoading.values.count { it == bindGeneration } +
+                movieLoading.values.count { it == bindGeneration } +
+                typefaceLoading.values.count { it == bindGeneration }
+        }
+        val readiness = watchRenderReadiness(
+            faceVisible = faceVisible,
+            sourceReady = loadedDescriptorKey == key && loadedRefreshToken == token,
+            transitionFrameVisible = sourceTransitionFrame?.isRecycled == false,
+            pendingAssetLoads = pendingAssetLoads,
+            frameHasUnreadyVisualAsset = frameHasUnreadyVisualAsset,
+            holdExpired = SystemClock.uptimeMillis() >= renderReadyDeadlineUptimeMs,
+        )
+        when (readiness) {
+            WatchRenderReadiness.WAITING -> return
+            WatchRenderReadiness.RETRY_NEXT_FRAME -> {
+                postInvalidateOnAnimation()
+                return
+            }
+            WatchRenderReadiness.READY -> Unit
+        }
+        renderReadyDescriptorKey = key
+        renderReadyRefreshToken = token
+        callback(token)
     }
 
     private fun capturePreparedFrame(prepared: PreparedSource): Bitmap? {
@@ -1708,7 +1841,8 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
             }
             for (scratchIndex in ancestorCount - 1 downTo 0) {
                 val ancestorIndex = ancestorIndexScratch[scratchIndex]
-                val attributes = source.definition.layers[ancestorIndex].attributes
+                val ancestorLayer = source.definition.layers[ancestorIndex]
+                val attributes = ancestorLayer.attributes
                 alpha *= dynamicNumber(attributes["opacity"], 100f, source)
                     .coerceIn(0f, 100f) / 100f
                 if (alpha <= 0f || !isDisplayed(attributes["display"], source)) return
@@ -1717,6 +1851,7 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
                     attributes,
                     source,
                     ancestorIndex,
+                    ancestorLayer.id,
                     gyroscopeX,
                     gyroscopeY,
                 )
@@ -1746,6 +1881,7 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
                 attributes,
                 source,
                 item.layerIndex,
+                layer.id,
                 gyroscopeX,
                 gyroscopeY,
             )
@@ -1778,12 +1914,18 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         attrs: Map<String, String>,
         source: PreparedSource,
         layerIndex: Int = -1,
+        layerId: String? = null,
         gyroscopeX: Float = smoothedGyroscopeX,
         gyroscopeY: Float = smoothedGyroscopeY,
     ): Matrix {
         into.reset()
         // 编辑器画布手势期间的实时覆盖：表盘像素立刻跟手，不等落盘。
-        val live = layerIndex >= 0 && layerIndex == liveTransformLayerIndex
+        val live = watchmakerLiveTransformTargetsLayer(
+            targetLayerId = liveTransformLayerId,
+            targetLayerIndex = liveTransformLayerIndex,
+            layerId = layerId,
+            layerIndex = layerIndex,
+        )
         val baseX = if (live) liveTransformX else dynamicNumber(attrs["x"], 0f, source)
         val baseY = if (live) liveTransformY else dynamicNumber(attrs["y"], 0f, source)
         val gyroScale = if (gravityParallaxEnabled) {
@@ -1853,6 +1995,7 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         attrs: Map<String, String>,
         source: PreparedSource,
         layerIndex: Int = -1,
+        layerId: String? = null,
         gyroscopeX: Float = smoothedGyroscopeX,
         gyroscopeY: Float = smoothedGyroscopeY,
     ) {
@@ -1863,6 +2006,7 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
                 attrs = attrs,
                 source = source,
                 layerIndex = layerIndex,
+                layerId = layerId,
                 gyroscopeX = gyroscopeX,
                 gyroscopeY = gyroscopeY,
             ),
@@ -1945,6 +2089,11 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
             "rounded" -> drawRounded(canvas, attrs, alpha, source)
             "markers" -> drawMarkers(canvas, attrs, alpha, source)
             "markers_hm" -> drawHourMinuteMarkers(canvas, attrs, alpha, source)
+            "ring_image" -> drawRingImage(canvas, attrs, alpha, source, layerCacheKey)
+            "progress_image" -> drawProgressImage(canvas, attrs, alpha, source, layerCacheKey)
+            "sunarc" -> drawStructuredAssetLayer(canvas, attrs, alpha, source, layerCacheKey, "sunarc")
+            "daylight" -> drawStructuredAssetLayer(canvas, attrs, alpha, source, layerCacheKey, "daylight")
+            "horizon" -> drawHorizon(canvas, attrs, alpha, source)
             "text_curved" -> drawCurvedText(canvas, attrs, animatedAlpha, source)
             "text_ring" -> drawTextRing(canvas, attrs, animatedAlpha, source)
             "chart" -> drawChart(canvas, attrs, alpha, source)
@@ -2165,12 +2314,12 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
             movie = lastDrawnMovieByLayer[fallbackKey]
         }
         if (
-            trackTransitionAssetReadiness &&
+            trackVisualAssetReadiness &&
             resolved != null &&
             movie == null &&
             bitmap == null
         ) {
-            transitionFrameHasUnreadyVisualAsset = true
+            frameHasUnreadyVisualAsset = true
         }
         val nativeWidth = movie?.width()?.toFloat() ?: bitmap?.width?.toFloat() ?: return
         val nativeHeight = movie?.height()?.toFloat() ?: bitmap?.height?.toFloat() ?: return
@@ -2835,11 +2984,12 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
      * `butt`/`square` 时的平头，默认才是圆头 —— 作者显式写了就按写的来。
      */
     private fun drawRing(canvas: Canvas, attrs: Map<String, String>, alpha: Float, source: PreparedSource) {
-        val rawOuter = dynamicNumber(
-            attrs["radius_outer"],
-            dynamicNumber(attrs["radius"], 100f, source),
-            source,
-        )
+        // 缺省 100 与 clox 的 `r:evalNum("radius_outer", 100)` 一致。
+        //
+        // **这里以前拿 `radius` 当兜底，那是错的**：`ring` 的 `radius` 是**端帽倒角**
+        // （见下面 capRounding），不是外半径。只写了 `radius="4"` 求平帽的环会被画成
+        // 半径 4 的一个小点。clox 的参考实现从来没有这条兜底。
+        val rawOuter = dynamicNumber(attrs["radius_outer"], 100f, source)
         // clox 的 radius_inner 默认是 radius_outer * 0.8（按比例），不是减固定像素。
         val rawInner = dynamicNumber(attrs["radius_inner"], rawOuter * 0.8f, source)
         // 写反了就互换（clox: `if ri > ro then ri, ro = ro, ri end`）。
@@ -2864,11 +3014,23 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
 
         strokePaint.strokeWidth = stroke
         strokePaint.style = Paint.Style.STROKE
-        strokePaint.strokeCap = when {
-            attrs["end_style"].equals("butt", true) -> Paint.Cap.BUTT
-            attrs["end_style"].equals("square", true) -> Paint.Cap.SQUARE
-            else -> Paint.Cap.ROUND
-        }
+        // 端帽倒角（`radius`）。上游文档的语义：帽子**横跨整个环厚**、沿扫掠方向凸出
+        // `radius`，只有凸出去的那两个角按 `radius` 倒圆；夹在 [0, 环厚/2]，
+        // 省略时取上限 —— 上限正好让两个圆角相接，退化成经典半圆帽（也就是改动前的
+        // 无条件行为）。所以**不写 radius 的表盘一帧都不会变**。
+        //
+        // `end_style` 是 Flue 早先自己加的扩展（clox 的 ring 完全不读它）。保留它是
+        // 为了不回退按 Flue 写出来的表盘，但 `radius` 一旦显式出现就以 `radius` 为准 ——
+        // 那是上游规范里的字段。
+        val cap = watchRingCap(
+            radiusValue = attrs["radius"]
+                ?.takeIf(String::isNotBlank)
+                ?.let { dynamicNumber(it, stroke / 2f, source) },
+            endStyle = attrs["end_style"],
+            stroke = stroke,
+        )
+        val capRounding = cap.rounding
+        val squareCap = cap.square
         // Canvas 的 0° 在 3 点钟、顺时针为正；表盘的 0° 在 12 点钟。
         val startDegrees = -90f
 
@@ -2885,7 +3047,22 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
                 // 顺时针：轨道从 sweep 扫到 total；逆时针：从 -total 扫到 -sweep。
                 val trackSweep = total - sweep
                 val trackStart = if (clockwise) sweep else -total
-                canvas.drawArc(rectScratch, startDegrees + trackStart, trackSweep, false, strokePaint)
+                // 轨道两端也要帽子（clox 对 color3 段同样调两次 ringCap）。
+                val trackCapColor = (strokePaint.color and 0x00FFFFFF) or
+                    (strokePaint.alpha shl 24)
+                drawRingArc(
+                    canvas = canvas,
+                    centerX = centerX,
+                    centerY = centerY,
+                    midRadius = radius,
+                    stroke = stroke,
+                    startDegrees = startDegrees + trackStart,
+                    sweepDegrees = trackSweep,
+                    capRounding = capRounding,
+                    squareCap = squareCap,
+                    startCapColor = trackCapColor,
+                    endCapColor = trackCapColor,
+                )
             }
         }
 
@@ -2916,14 +3093,149 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
             // 再乘一遍着色器输出，不置满就是平方衰减（14.90% 的环会淡到看不见）。
             strokePaint.alpha = 255
         }
-        canvas.drawArc(
-            rectScratch,
-            startDegrees,
-            if (clockwise) sweep else -sweep,
-            false,
-            strokePaint,
+        // 帽子用**平色**（clox：`lerpRGB(ca, cb, s/total)` 取该扫掠位置的一个定值），
+        // 不吃渐变着色器 —— 画帽子时要转画布坐标系，而着色器活在用户空间里，跟着转就
+        // 会错位。平色本身也正是参考实现的行为。
+        val fillStartCap = (startColor and 0x00FFFFFF) or (fillAlpha shl 24)
+        val fillEndCap = (lerpRingRgb(startColor, endColor, sweep / total) and 0x00FFFFFF) or
+            (fillAlpha shl 24)
+        drawRingArc(
+            canvas = canvas,
+            centerX = centerX,
+            centerY = centerY,
+            midRadius = radius,
+            stroke = stroke,
+            startDegrees = startDegrees,
+            sweepDegrees = if (clockwise) sweep else -sweep,
+            capRounding = capRounding,
+            squareCap = squareCap,
+            startCapColor = fillStartCap,
+            endCapColor = fillEndCap,
         )
         strokePaint.shader = null
+    }
+
+    /**
+     * 画一段环（弧身 + 两个端帽），[strokePaint] 的颜色 / 着色器 / alpha 由调用方备好。
+     *
+     * 倒角到顶（也就是绝大多数环：没写 `radius`）时**只画一次 arc**，靠
+     * [Paint.Cap.ROUND] 出半圆帽 —— 那与手工画两个圆角矩形的结果逐像素相同，却省下每帧
+     * 两次 `drawPath`。秒针环每秒重画，这条快路不能省。
+     *
+     * @param midRadius 环中线半径（描边画在中线上）。
+     * @param sweepDegrees 带符号扫掠量：正 = 顺时针。
+     * @param capRounding 端帽倒角，已夹在 `[0, stroke/2]`。
+     * @param squareCap Flue 扩展 `end_style="square"`；与 `radius` 互斥，由调用方判好。
+     */
+    private fun drawRingArc(
+        canvas: Canvas,
+        centerX: Float,
+        centerY: Float,
+        midRadius: Float,
+        stroke: Float,
+        startDegrees: Float,
+        sweepDegrees: Float,
+        capRounding: Float,
+        squareCap: Boolean,
+        startCapColor: Int,
+        endCapColor: Int,
+    ) {
+        val capMax = stroke / 2f
+        if (squareCap) {
+            strokePaint.strokeCap = Paint.Cap.SQUARE
+            canvas.drawArc(rectScratch, startDegrees, sweepDegrees, false, strokePaint)
+            return
+        }
+        if (capRounding >= capMax - RING_CAP_EPSILON) {
+            strokePaint.strokeCap = Paint.Cap.ROUND
+            canvas.drawArc(rectScratch, startDegrees, sweepDegrees, false, strokePaint)
+            return
+        }
+        strokePaint.strokeCap = Paint.Cap.BUTT
+        canvas.drawArc(rectScratch, startDegrees, sweepDegrees, false, strokePaint)
+        if (capRounding <= RING_CAP_EPSILON) return
+        val inner = midRadius - capMax
+        val outer = midRadius + capMax
+        val savedShader = strokePaint.shader
+        val savedColor = strokePaint.color
+        val savedAlpha = strokePaint.alpha
+        strokePaint.shader = null
+        strokePaint.style = Paint.Style.FILL
+        // 起点帽朝扫掠的**反**方向凸出，终点帽朝扫掠方向凸出。
+        strokePaint.color = startCapColor
+        drawRingCap(canvas, centerX, centerY, inner, outer, startDegrees, capRounding, sweepDegrees < 0f)
+        strokePaint.color = endCapColor
+        drawRingCap(
+            canvas,
+            centerX,
+            centerY,
+            inner,
+            outer,
+            startDegrees + sweepDegrees,
+            capRounding,
+            sweepDegrees > 0f,
+        )
+        strokePaint.style = Paint.Style.STROKE
+        strokePaint.shader = savedShader
+        strokePaint.color = savedColor
+        strokePaint.alpha = savedAlpha
+    }
+
+    /**
+     * 一个端帽：横跨环厚、沿切向凸出 [rounding]，只有凸出端的两个角倒圆。
+     *
+     * 做法是把画布转到「该角度的径向 = +X」，帽子就退化成一个圆角矩形：`x ∈ [内, 外]`、
+     * `y ∈ [0, rounding]`（或负向）。倒角半径等于凸出深度，所以 `rounding == 环厚/2` 时
+     * 两个圆角刚好相接 —— 正是半圆帽。
+     *
+     * 转画布的前提是 [strokePaint] 此刻**没有着色器**（调用方已置空）：着色器在用户空间里，
+     * 跟着 canvas 一起转就会画错。
+     *
+     * @param protrudeForward true = 朝 canvas 角度增大的一侧凸出（旋转后的 +Y）。
+     */
+    private fun drawRingCap(
+        canvas: Canvas,
+        centerX: Float,
+        centerY: Float,
+        innerRadius: Float,
+        outerRadius: Float,
+        angleDegrees: Float,
+        rounding: Float,
+        protrudeForward: Boolean,
+    ) {
+        canvas.save()
+        canvas.translate(centerX, centerY)
+        canvas.rotate(angleDegrees)
+        // 顺序是 [左上x,左上y, 右上x,右上y, 右下x,右下y, 左下x,左下y]。
+        java.util.Arrays.fill(ringCapRadii, 0f)
+        if (protrudeForward) {
+            ringCapRect.set(innerRadius, 0f, outerRadius, rounding)
+            // 凸出端 = 矩形下边。
+            ringCapRadii[4] = rounding
+            ringCapRadii[5] = rounding
+            ringCapRadii[6] = rounding
+            ringCapRadii[7] = rounding
+        } else {
+            ringCapRect.set(innerRadius, -rounding, outerRadius, 0f)
+            // 凸出端 = 矩形上边。
+            ringCapRadii[0] = rounding
+            ringCapRadii[1] = rounding
+            ringCapRadii[2] = rounding
+            ringCapRadii[3] = rounding
+        }
+        ringCapPath.reset()
+        ringCapPath.addRoundRect(ringCapRect, ringCapRadii, Path.Direction.CW)
+        canvas.drawPath(ringCapPath, strokePaint)
+        canvas.restore()
+    }
+
+    /** 逐通道线性插值（只用 RGB；alpha 由调用方另外合成）。 */
+    private fun lerpRingRgb(startColor: Int, endColor: Int, fraction: Float): Int {
+        val t = fraction.coerceIn(0f, 1f)
+        val r = Color.red(startColor) + ((Color.red(endColor) - Color.red(startColor)) * t)
+        val g = Color.green(startColor) + ((Color.green(endColor) - Color.green(startColor)) * t)
+        val b = Color.blue(startColor) + ((Color.blue(endColor) - Color.blue(startColor)) * t)
+        return Color.rgb(r.toInt().coerceIn(0, 255), g.toInt().coerceIn(0, 255), b.toInt().coerceIn(0, 255))
     }
 
     /**
@@ -3123,44 +3435,331 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         canvas.drawRoundRect(-width / 2f, -height / 2f, width / 2f, height / 2f, radius, radius, shapePaint)
     }
 
+    /**
+     * `markers` —— 一圈刻度。
+     *
+     * 对齐 clox `Builders.markers`（缺省值也照抄：`radius` 200、`m_width` 10、
+     * `m_height` 30；改动前这三个分别写成 220 / 6 / 20，整圈刻度的粗细位置都偏）。
+     *
+     * 三件以前缺的：
+     * - **`shape`**：`Circle` 以前是拿 [Paint.Cap.ROUND] 画一条**长 m_height 的线**，
+     *   而参考实现画的是直径 `m_width` 的**实心圆**；`Triangle` 根本没实现。
+     * - **`squarify`**：把刻度圈从圆形拉向方形（见 [squarifiedRadius]），方屏表盘常用。
+     * - **`radius` 的语义**：它是刻度的**外沿**（clox 把中心半径取成 `radius - m_height/2`），
+     *   以前当成中心半径用，整圈外扩了半个刻度高。
+     *
+     * 2.0 新增的两个属性按文档补上，并标明不确定性：
+     * - **`markers_shape`**（`Circle` / `Rounded`）：clox 的渲染器**完全不读它**，Studio
+     *   的导入器只用它做「字形消歧」。所以这里按最保守的读法用：`shape` 缺席时它顶上当
+     *   字形，`Rounded` 则把方块刻度的四角按 `m_width/2` 倒圆。
+     * - **`radius_inner`**：给了就用 `[radius_inner, radius]` 这段径向跨度，`m_height` 让位。
+     */
     private fun drawMarkers(canvas: Canvas, attrs: Map<String, String>, alpha: Float, source: PreparedSource) {
         val count = watchMarkerCount(dynamicNumber(attrs["m_count"], 12f, source))
-        val radius = dynamicNumber(attrs["radius"], 220f, source)
-        val markWidth = dynamicNumber(attrs["m_width"], 6f, source).coerceAtLeast(1f)
-        val markHeight = dynamicNumber(attrs["m_height"], 20f, source).coerceAtLeast(1f)
-        strokePaint.color = resolveColor(attrs["color"], Color.WHITE, source)
-        strokePaint.alpha = paintAlpha(alpha)
-        strokePaint.strokeWidth = markWidth
-        strokePaint.strokeCap = if (attrs["shape"].equals("Circle", true)) Paint.Cap.ROUND else Paint.Cap.BUTT
+        val radius = dynamicNumber(attrs["radius"], 200f, source)
+        val markWidth = dynamicNumber(attrs["m_width"], 10f, source).coerceAtLeast(1f)
+        val markHeight = dynamicNumber(attrs["m_height"], 30f, source).coerceAtLeast(1f)
+        val squarify = dynamicNumber(attrs["squarify"], 0f, source)
+        val rawInner = attrs["radius_inner"]
+        val innerRadius = if (rawInner.isNullOrBlank()) {
+            null
+        } else {
+            dynamicNumber(rawInner, 0f, source).takeIf { it in 0f..(radius - 0.5f) }
+        }
+        val glyph = watchMarkerGlyph(attrs["shape"], attrs["markers_shape"])
+        val rounded = attrs["markers_shape"].equals("Rounded", ignoreCase = true)
+        shapePaint.shader = null
+        shapePaint.color = resolveColor(attrs["color"], Color.WHITE, source)
+        shapePaint.alpha = paintAlpha(alpha)
+        if (shapePaint.alpha <= 0) return
         repeat(count) { index ->
-            val angle = index * 360f / count - 90f
-            val radians = Math.toRadians(angle.toDouble())
-            val x1 = cos(radians).toFloat() * (radius - markHeight / 2f)
-            val y1 = sin(radians).toFloat() * (radius - markHeight / 2f)
-            val x2 = cos(radians).toFloat() * (radius + markHeight / 2f)
-            val y2 = sin(radians).toFloat() * (radius + markHeight / 2f)
-            canvas.drawLine(x1, y1, x2, y2, strokePaint)
+            // Canvas 的 0° 在 3 点钟、顺时针为正，所以 12 点钟起算要减 90°。
+            val degrees = index * 360f / count - 90f
+            val length = if (innerRadius != null) radius - innerRadius else markHeight
+            // squarify 作用在**中心半径**上（clox：`squarifyRadius(radius - mh/2, th, sq)`）。
+            val center = squarifiedRadius(radius - length / 2f, degrees, squarify)
+            drawMarkerGlyph(
+                canvas = canvas,
+                degrees = degrees,
+                centerRadius = center,
+                length = length,
+                width = markWidth,
+                glyph = glyph,
+                rounded = rounded,
+            )
         }
     }
 
+    /**
+     * `markers_hm` —— 时针 / 分针两套刻度。
+     *
+     * 改动前整层是写死的：3 单位宽、时针 22 / 分针 10 长、只认一个 `color`，
+     * `m_hour`、`m_minute`、`color2`、`squarify` 全部忽略。现在按 clox
+     * `Builders.markers_hm` 的公式来：
+     *
+     * - 档位 → 尺寸：`None`=0、`Tiny`=1、`Small`=2、`Medium`=3、`Large`=4（缺省 Medium）；
+     *   长宽由档位推 —— 分针 `档位×3` 长、`档位×0.9` 宽，时针 `档位×6` 长、`档位×1.8` 宽。
+     * - `color` 是时针刻度色，`color2` 是分针刻度色（没写 `color2` 就两套同色）。
+     * - 分针跳过 `i % 5 == 0`，那几格留给时针刻度。
+     * - `radius` 缺省 240，且它是**外沿**；刻度从外沿往里长。
+     *
+     * 2.0 文档把档位表扩到 `None/Tiny/Small/Medium/Large/XLarge/Circle/Triangle`，而 clox
+     * 只认前五个。多出来的三个按最合理的方式落地并标注：`XLarge` 顺着数列取 5，
+     * `Circle` / `Triangle` 是**字形**而不是尺寸，按 Medium 的尺寸配对应字形画。
+     */
     private fun drawHourMinuteMarkers(canvas: Canvas, attrs: Map<String, String>, alpha: Float, source: PreparedSource) {
-        val radius = dynamicNumber(attrs["radius"], 220f, source)
-        strokePaint.color = resolveColor(attrs["color"], Color.WHITE, source)
-        strokePaint.alpha = paintAlpha(alpha)
-        strokePaint.strokeWidth = 3f
-        repeat(60) { index ->
-            val major = index % 5 == 0
-            val length = if (major) 22f else 10f
-            val angle = index * 6f - 90f
-            val radians = Math.toRadians(angle.toDouble())
-            canvas.drawLine(
-                cos(radians).toFloat() * (radius - length),
-                sin(radians).toFloat() * (radius - length),
-                cos(radians).toFloat() * radius,
-                sin(radians).toFloat() * radius,
-                strokePaint,
+        val radius = dynamicNumber(attrs["radius"], 240f, source)
+        val squarify = dynamicNumber(attrs["squarify"], 0f, source)
+        val hour = watchHourMinuteMarkerPreset(attrs["m_hour"])
+        val minute = watchHourMinuteMarkerPreset(attrs["m_minute"])
+        val hourColor = resolveColor(attrs["color"], Color.WHITE, source)
+        val rawMinuteColor = attrs["color2"]
+        val minuteColor = if (rawMinuteColor.isNullOrBlank()) {
+            hourColor
+        } else {
+            resolveColor(rawMinuteColor, Color.WHITE, source)
+        }
+        val paintedAlpha = paintAlpha(alpha)
+        if (paintedAlpha <= 0) return
+        shapePaint.shader = null
+        if (minute.step > 0) {
+            shapePaint.color = minuteColor
+            shapePaint.alpha = paintedAlpha
+            val length = minute.step * 3f
+            val width = minute.step * 0.9f
+            repeat(60) { index ->
+                // 每 5 格让位给时针刻度。
+                if (index % 5 == 0) return@repeat
+                val degrees = index * 6f - 90f
+                val outer = squarifiedRadius(radius, degrees, squarify)
+                drawMarkerGlyph(
+                    canvas = canvas,
+                    degrees = degrees,
+                    centerRadius = outer - length / 2f,
+                    length = length,
+                    width = width,
+                    glyph = minute.glyph,
+                    rounded = false,
+                )
+            }
+        }
+        if (hour.step > 0) {
+            shapePaint.color = hourColor
+            shapePaint.alpha = paintedAlpha
+            val length = hour.step * 6f
+            val width = hour.step * 1.8f
+            repeat(12) { index ->
+                val degrees = index * 30f - 90f
+                val outer = squarifiedRadius(radius, degrees, squarify)
+                drawMarkerGlyph(
+                    canvas = canvas,
+                    degrees = degrees,
+                    centerRadius = outer - length / 2f,
+                    length = length,
+                    width = width,
+                    glyph = hour.glyph,
+                    rounded = false,
+                )
+            }
+        }
+    }
+
+    /**
+     * 画一个刻度字形。图层原点已经是刻度圈圆心，所以只要把画布转到「该角度的径向 = +X」，
+     * 字形就退化成一个轴对齐的矩形 / 三角 / 圆 —— 不用逐点算三角函数。
+     *
+     * [shapePaint] 的颜色与 alpha 由调用方备好；这里不碰它们（一圈刻度只设一次色）。
+     */
+    private fun drawMarkerGlyph(
+        canvas: Canvas,
+        degrees: Float,
+        centerRadius: Float,
+        length: Float,
+        width: Float,
+        glyph: WatchMarkerGlyph,
+        rounded: Boolean,
+    ) {
+        val half = length / 2f
+        val inner = centerRadius - half
+        val outer = centerRadius + half
+        canvas.save()
+        canvas.rotate(degrees)
+        when (glyph) {
+            // 实心圆：直径取 m_width，圆心落在刻度中心（clox 的 drawSolidCircle）。
+            WatchMarkerGlyph.CIRCLE -> canvas.drawCircle(centerRadius, 0f, width / 2f, shapePaint)
+
+            // 尖端朝外的等腰三角。
+            WatchMarkerGlyph.TRIANGLE -> {
+                pathScratch.reset()
+                pathScratch.moveTo(outer, 0f)
+                pathScratch.lineTo(inner, width / 2f)
+                pathScratch.lineTo(inner, -width / 2f)
+                pathScratch.close()
+                canvas.drawPath(pathScratch, shapePaint)
+            }
+
+            WatchMarkerGlyph.SQUARE -> if (rounded) {
+                canvas.drawRoundRect(
+                    inner,
+                    -width / 2f,
+                    outer,
+                    width / 2f,
+                    width / 2f,
+                    width / 2f,
+                    shapePaint,
+                )
+            } else {
+                canvas.drawRect(inner, -width / 2f, outer, width / 2f, shapePaint)
+            }
+        }
+        canvas.restore()
+    }
+
+    /** Studio 2.0 textured progress ring. A missing texture is intentionally a no-op. */
+    private fun drawRingImage(
+        canvas: Canvas,
+        attrs: Map<String, String>,
+        alpha: Float,
+        source: PreparedSource,
+        layerCacheKey: String,
+    ) {
+        val authoredPath = attrs["path"] ?: attrs["image"]
+        if (!authoredPath.isNullOrBlank()) {
+            drawStaticMediaFallback(canvas, attrs + ("path" to authoredPath), alpha, source, layerCacheKey)
+            return
+        }
+        val radius = dynamicNumber(attrs["radius"], 180f, source).coerceIn(1f, DESIGN_SIZE)
+        val stroke = dynamicNumber(attrs["line_width"], 18f, source).coerceIn(1f, radius)
+        val total = dynamicNumber(attrs["angle_total"], 360f, source).coerceAtLeast(1f)
+        val sweep = watchRingImageSweep(
+            percent = dynamicNumber(attrs["pct_complete"] ?: attrs["percent"], 0f, source),
+            angleTotal = total,
+        )
+        val clockwise = !attrs["is_clockwise"].equals("N", ignoreCase = true)
+        val outer = radius
+        val center = anchoredRect(outer * 2f, outer * 2f, attrs["alignment"])
+        rectScratch.set(center.left + stroke / 2f, center.top + stroke / 2f, center.right - stroke / 2f, center.bottom - stroke / 2f)
+        val color = resolveColor(attrs["color"], Color.WHITE, source)
+        val endColor = resolveColor(attrs["color2"], color, source)
+        val outsideAlpha = dynamicNumber(attrs["outside_opacity"], 100f, source)
+            .coerceIn(0f, 100f) / 100f
+        strokePaint.style = Paint.Style.STROKE
+        strokePaint.strokeWidth = stroke
+        strokePaint.strokeCap = Paint.Cap.ROUND
+        // `outside_opacity` belongs to the incomplete track. Draw it first;
+        // the active arc below keeps the authored color/gradient untouched.
+        if (outsideAlpha > 0f) {
+            strokePaint.shader = null
+            strokePaint.color = endColor
+            strokePaint.alpha = paintAlpha(alpha * outsideAlpha)
+            canvas.drawArc(rectScratch, -90f, if (clockwise) total else -total, false, strokePaint)
+        }
+        if (sweep <= 0f) {
+            strokePaint.alpha = 0
+            return
+        }
+        strokePaint.shader = if (color == endColor) null else {
+            android.graphics.LinearGradient(
+                rectScratch.left,
+                rectScratch.top,
+                rectScratch.right,
+                rectScratch.bottom,
+                color,
+                endColor,
+                android.graphics.Shader.TileMode.CLAMP,
             )
         }
+        strokePaint.color = color
+        strokePaint.alpha = paintAlpha(alpha)
+        canvas.drawArc(rectScratch, -90f, if (clockwise) sweep else -sweep, false, strokePaint)
+        strokePaint.shader = null
+    }
+
+    /** Studio 2.0 repeated-icon progress bar. A missing source asset is a
+     * deliberate no-op: the archive, rather than the launcher, owns that
+     * visual resource. */
+    private fun drawProgressImage(
+        canvas: Canvas,
+        attrs: Map<String, String>,
+        alpha: Float,
+        source: PreparedSource,
+        layerCacheKey: String,
+    ) {
+        val shape = attrs["progress_shape"] ?: attrs["shape"] ?: "arrow1"
+        val authoredPath = attrs["path"] ?: attrs["image"]
+        val candidates = listOfNotNull(authoredPath) +
+            watchStructuredAssetCandidates("progress_image", shape)
+        val path = candidates.firstOrNull {
+            resolveAsset(it, source, conventionalDirectory = "images") != null
+        } ?: return
+        val repeatCount = dynamicNumber(attrs["repeat_count"], 5f, source)
+            .roundToInt()
+            .coerceIn(1, 20)
+        val width = dynamicNumber(attrs["width"], 220f, source).coerceAtLeast(1f)
+        val height = dynamicNumber(attrs["height"], 55f, source).coerceAtLeast(1f)
+        val percent = dynamicNumber(attrs["pct_complete"] ?: attrs["percent"], 0f, source)
+            .coerceIn(0f, 100f) / 100f
+        val activeCount = (repeatCount * percent).roundToInt().coerceIn(0, repeatCount)
+        val iconWidth = width / repeatCount
+        val baseAttrs = attrs + mapOf(
+            "path" to path,
+            "width" to iconWidth.toString(),
+            "height" to height.toString(),
+            "alignment" to "cc",
+        )
+        val outsideAlpha = dynamicNumber(attrs["outside_opacity"], 25f, source)
+            .coerceIn(0f, 100f) / 100f
+        val box = anchoredRect(width, height, attrs["alignment"])
+        repeat(repeatCount) { index ->
+            val isActive = index < activeCount
+            canvas.save()
+            canvas.translate(box.left + iconWidth * index + iconWidth / 2f, box.centerY())
+            // The incomplete portion is still visible, but follows the
+            // authored outside_opacity contract instead of vanishing.
+            drawStaticMediaFallback(
+                canvas = canvas,
+                attrs = baseAttrs,
+                alpha = alpha * if (isActive) 1f else outsideAlpha,
+                source = source,
+                layerCacheKey = "$layerCacheKey:progress:$index",
+            )
+            canvas.restore()
+        }
+    }
+
+    /** Sunarc/daylight assets are bundled by Studio under predictable names. */
+    private fun drawStructuredAssetLayer(
+        canvas: Canvas,
+        attrs: Map<String, String>,
+        alpha: Float,
+        source: PreparedSource,
+        layerCacheKey: String,
+        type: String,
+    ) {
+        val preset = attrs["${type}_sun_preset"] ?: attrs["sun_preset"]
+        val map = attrs["${type}_map"]
+        val candidates = listOfNotNull(
+            attrs["path"],
+            attrs["image"],
+            watchStructuredAssetCandidates(type, map ?: preset).firstOrNull(),
+        )
+        val path = candidates.firstOrNull { resolveAsset(it, source, conventionalDirectory = "images") != null }
+            ?: return
+        drawStaticMediaFallback(canvas, attrs + ("path" to path), alpha, source, layerCacheKey)
+    }
+
+    /** Optional horizon primitive used by sunarc exports without a bitmap. */
+    private fun drawHorizon(canvas: Canvas, attrs: Map<String, String>, alpha: Float, source: PreparedSource) {
+        val width = dynamicNumber(attrs["width"], DESIGN_SIZE, source).coerceIn(1f, DESIGN_SIZE)
+        val y = dynamicNumber(attrs["y"], 0f, source).coerceIn(-DESIGN_SIZE / 2f, DESIGN_SIZE / 2f)
+        val lineWidth = dynamicNumber(attrs["line_width"], 2f, source).coerceIn(1f, 32f)
+        strokePaint.style = Paint.Style.STROKE
+        strokePaint.strokeWidth = lineWidth
+        strokePaint.strokeCap = Paint.Cap.ROUND
+        strokePaint.shader = null
+        strokePaint.color = resolveColor(attrs["color"], Color.WHITE, source)
+        strokePaint.alpha = paintAlpha(alpha)
+        canvas.drawLine(-width / 2f, y, width / 2f, y, strokePaint)
     }
 
     private fun drawCurvedText(canvas: Canvas, attrs: Map<String, String>, alpha: Float, source: PreparedSource) {
@@ -3622,7 +4221,14 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
             watchFaceNeedsLuaRuntime(initialScript, definition.layers)
         ) {
             runCatching {
-                WatchFaceLuaRuntime.create(initialScript, initialScriptResolver)
+                WatchFaceLuaRuntime.create(
+                    initialScript = initialScript,
+                    resolveTag = initialScriptResolver,
+                    // clox External Data API（B5）。惰性读：广播写进来的值下一帧就生效，
+                    // 不需要跨线程往 Lua 状态机里推。
+                    readExternalSlot = externalDataStore::slot,
+                    externalDataVersion = externalDataStore::version,
+                )
             }.getOrNull()
         } else {
             null
@@ -3952,17 +4558,89 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
     }
 
     /**
+     * 视频首帧的位图缓存键。**唯一真源** —— 逐帧绘制路径与离屏预热路径都从这里取，
+     * 两边各写一份必然漂移，漂移的后果是预热白做、预览图仍然缺一层。
+     */
+    private fun videoFirstFrameCacheKey(resolved: ResolvedAsset): String =
+        "video-frame\u0000${resolved.cacheRevision}"
+
+    /**
+     * 离屏出图前把视频图层的首帧**同步**烘进位图缓存。
+     *
+     * 为什么需要它：[requestVideoFirstFrame] 是异步的，首次调用一定返回 null，那一帧
+     * 视频层什么都不画。上屏时无所谓（下一帧补上），但离屏出图**只画一次** —— 视频当
+     * 背景的表盘保存出来的 preview.jpg 于是几乎全黑（老师报的问题）。
+     *
+     * 调用约定：**在主线程调**（解析素材要读 View 持有的 source 与 Lua 运行时），
+     * 耗时的 MediaMetadataRetriever 由内部切到 IO，绝不占主线程。
+     */
+    suspend fun prewarmVideoFirstFrames() {
+        if (disposed) return
+        val targets = videoFirstFrameTargets()
+        if (targets.isEmpty()) return
+        val decodeDimensionPx = bitmapDecodeDimensionPx()
+        for ((key, file) in targets) {
+            if (disposed) return
+            val alreadyCached = synchronized(cacheLock) { bitmapCache[key]?.isRecycled == false }
+            if (alreadyCached) continue
+            val bitmap = withContext(Dispatchers.IO) {
+                extractVideoFirstFrame(file, decodeDimensionPx)
+            } ?: continue
+            var adopted = false
+            synchronized(cacheLock) {
+                if (!disposed && bitmapCache[key]?.isRecycled != false) {
+                    putBitmapLocked(key, bitmap)
+                    // 之前的失败冷却必须一起清掉，否则绘制路径仍会走「冷却中，跳过」。
+                    bitmapFailures.remove(key)
+                    adopted = true
+                }
+            }
+            if (!adopted && !bitmap.isRecycled) bitmap.recycle()
+        }
+    }
+
+    /**
+     * 每个视频图层的（首帧缓存键，文件）对。只解析、不解码。
+     *
+     * 解析顺序必须与 [drawStaticMediaFallback] **完全一致**（先 images/ 再 videos/），
+     * 否则预热出来的键和绘制时查的键不是同一个。
+     */
+    private fun videoFirstFrameTargets(): List<Pair<String, File>> {
+        val prepared = source ?: return emptyList()
+        val seen = HashSet<String>()
+        return prepared.renderPlan.mapNotNull { item ->
+            val layer = prepared.definition.layers.getOrNull(item.layerIndex)
+                ?: return@mapNotNull null
+            if (!layer.type.equals("video", ignoreCase = true)) return@mapNotNull null
+            val attrs = layer.attributes
+            val path = evaluateText(attrs["path"] ?: attrs["source"] ?: "", prepared)
+            val resolved = resolveAsset(path, prepared, conventionalDirectory = "images")
+                ?: resolveAsset(path, prepared, conventionalDirectory = "videos")
+                ?: return@mapNotNull null
+            if (resolved.file.extension.lowercase(Locale.ROOT) !in PLAYABLE_VIDEO_EXTENSIONS) {
+                return@mapNotNull null
+            }
+            val key = videoFirstFrameCacheKey(resolved)
+            // 同一个视频被多个图层引用时只提一次帧。
+            if (!seen.add(key)) return@mapNotNull null
+            key to resolved.file
+        }
+    }
+
+    /**
      * 视频首帧，供离屏出图与降级路径使用。
      *
      * 结构照 [requestMovie]：内容寻址（cacheRevision）+ 失败冷却 + 主线程回填。
      * 首帧提取比图片解码贵得多（要起 MediaMetadataRetriever、seek 到 0），所以
      * 绝不能在 onDraw 里同步做，也绝不能失败后每帧重试。
+     *
+     * 离屏出图前请先调 [prewarmVideoFirstFrames]，理由见那里。
      */
     private fun requestVideoFirstFrame(
         resolved: ResolvedAsset,
         source: PreparedSource,
     ): Bitmap? {
-        val key = "video-frame ${resolved.cacheRevision}"
+        val key = videoFirstFrameCacheKey(resolved)
         synchronized(cacheLock) {
             bitmapCache[key]?.let { return it }
             bitmapFailures[key]?.let { failure ->
@@ -4642,27 +5320,52 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
     }
 
     private fun recordTapTarget(canvas: Canvas, bounds: RectF, attrs: Map<String, String>) {
-        val action = WatchTapActionParser.parse(attrs["tap_action"] ?: attrs["action"])
+        val raw = attrs["tap_action"] ?: attrs["action"]
+        val action = WatchTapActionParser.parse(raw)
         val mapped = RectF(bounds)
         canvas.matrix.mapRect(mapped)
-        if (!mapped.isEmpty) tapTargets += TapTarget(mapped, action)
+        // 原始动作名要一起留住：解析器会把 `widget_weather` 这类**可配置**名字短路成
+        // 强类型动作（WatchTapAction.Weather），名字一丢，运行时就再也不知道该去
+        // 用户映射表里查哪个键了 —— 于是设置里明明指了应用、点上去还报打不开。
+        if (!mapped.isEmpty) tapTargets += TapTarget(mapped, action, raw?.trim().orEmpty())
     }
 
     private fun dispatchTap(x: Float, y: Float) {
         val target = tapTargets.asReversed().firstOrNull { it.bounds.contains(x, y) } ?: return
         if (target.action is WatchTapAction.Script) {
-            routeTapAction(target.action)
+            routeTapAction(target.action, target.rawAction)
             return
         }
+        // 用户映射优先于宿主接管：宿主（桌面）那套只认强类型动作，它不知道原始名字，
+        // 接过去就等于把「用户指定的应用」这一层丢掉。
+        if (launchUserMappedAction(target.rawAction)) return
         val handler = tapActionHandler
         if (handler != null) {
             handler(target.action)
         } else {
-            routeTapAction(target.action)
+            routeTapAction(target.action, target.rawAction)
         }
     }
 
-    private fun routeTapAction(action: WatchTapAction) {
+    /**
+     * 按**原始动作名**查用户在「设置 → 表盘点击动作」里指定的应用并启动。
+     *
+     * 返回 true 表示已经处理掉了。只对 [WatchTapActionParser.CONFIGURABLE_ACTIONS]
+     * 里的名字生效 —— 媒体键 / 音量 / 闹钟那些是上游定义的内建动作，用户配不了，
+     * 也不该被这条路截走（上游的 dispatch 顺序是「built-in first, then configurable」）。
+     */
+    private fun launchUserMappedAction(rawAction: String): Boolean {
+        if (!WatchTapActionParser.isConfigurable(rawAction)) return false
+        val normalized = rawAction.trim().lowercase(Locale.ROOT)
+        val intent = WatchTapActionMappings.of(context).launchIntent(context, normalized)
+            ?: return false
+        performHapticFeedback(HapticFeedbackConstants.CONTEXT_CLICK)
+        return runCatching {
+            context.startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+        }.isSuccess
+    }
+
+    private fun routeTapAction(action: WatchTapAction, rawAction: String = "") {
         if (action is WatchTapAction.Script) {
             val prepared = source
             val runtime = prepared?.luaRuntime
@@ -4690,11 +5393,101 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
             requestFullRepaint()
             return
         }
-        if (action is WatchTapAction.Named) {
-            // Named WatchMaker actions are intentionally delegated to the
-            // caller's mapping. When no mapping is configured, a tap is a
-            // quiet no-op instead of an alarming "unsupported action" toast.
+        // 秒表按上游的归类在渲染层直接处理：改共享状态、立刻重绘，并按需要重排
+        // tick 节奏 —— 跑起来之后 {swss}/{swsss} 需要亚秒刷新（见
+        // WatchmakerTagResolver.requiresFastTicks 里加进去的那几个）。
+        if (action === WatchTapAction.StopwatchStartStop ||
+            action === WatchTapAction.StopwatchReset
+        ) {
             performHapticFeedback(HapticFeedbackConstants.CONTEXT_CLICK)
+            if (action === WatchTapAction.StopwatchStartStop) {
+                WatchStopwatch.toggle(SystemClock.elapsedRealtime())
+            } else {
+                WatchStopwatch.reset()
+            }
+            cancelTicks()
+            scheduleTicks()
+            requestFullRepaint()
+            return
+        }
+        if (action is WatchTapAction.Media) {
+            performHapticFeedback(HapticFeedbackConstants.CONTEXT_CLICK)
+            // **先活跃会话、后媒体键**（见 WatchMediaTransport 的注释）：手表上媒体键这条路
+            // 经常断，而播放器一定实现 MediaSession 的传输控制。老师报「音乐播放没用」就是
+            // 第一版只发媒体键的后果。
+            val delivered = WatchMediaTransport.send(context, action.key)
+            if (!delivered) {
+                // 送不出去只有一个原因：没有任何应用在放。安静失败会被读成「这个动作不支持」，
+                // 所以明确说出来。
+                Toast.makeText(context, R.string.watch_face_action_no_media, Toast.LENGTH_SHORT).show()
+                return
+            }
+            dataProvider.requestRefresh()
+            requestFullRepaint()
+            return
+        }
+        if (action is WatchTapAction.Volume) {
+            performHapticFeedback(HapticFeedbackConstants.CONTEXT_CLICK)
+            val audio = context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
+            runCatching {
+                audio?.adjustStreamVolume(
+                    AudioManager.STREAM_MUSIC,
+                    if (action.raise) AudioManager.ADJUST_RAISE else AudioManager.ADJUST_LOWER,
+                    // 上游写的是「shows the volume UI」：不给 FLAG_SHOW_UI 的话表上完全没有反馈，
+                    // 用户不知道自己调到哪儿了。
+                    AudioManager.FLAG_SHOW_UI,
+                )
+            }
+            return
+        }
+        if (action is WatchTapAction.SetAlarm) {
+            performHapticFeedback(HapticFeedbackConstants.CONTEXT_CLICK)
+            val intent = Intent(AlarmClock.ACTION_SET_ALARM)
+                .putExtra(AlarmClock.EXTRA_HOUR, action.hour)
+                .putExtra(AlarmClock.EXTRA_MINUTES, action.minute)
+                // 刻意**不给** EXTRA_SKIP_UI：表盘上误触一下就静默建一个闹钟太惊悚，
+                // 让时钟应用带着预填时间打开，用户按一下确认。
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            runCatching { context.startActivity(intent) }.onFailure {
+                Toast.makeText(context, "没有可用的时钟应用", Toast.LENGTH_SHORT).show()
+            }
+            return
+        }
+        if (action is WatchTapAction.Named) {
+            // 命名动作在上游要用户在设置里映射到具体应用，Flue 没有那张映射表，所以按名字的
+            // **语义**去开系统默认应用 —— 音乐、拨号、相机这些都有标准 intent 或类目。
+            performHapticFeedback(HapticFeedbackConstants.CONTEXT_CLICK)
+            // **用户映射优先**（设置 → 表盘点击动作）：上游就是让用户自己指的，
+            // 猜系统默认只是没设置时的兜底。
+            WatchTapActionMappings.of(context).launchIntent(context, action.value)?.let { mapped ->
+                runCatching {
+                    context.startActivity(mapped.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                }
+                return
+            }
+            val intent = namedActionIntent(action.value)
+            // **必须先问 PackageManager**：手表上 `CATEGORY_APP_*` 很多根本没人声明，
+            // 直接 startActivity 会抛 ActivityNotFoundException，吞掉就变成「点了没反应」——
+            // 老师报的「大量动作不可用」有一半是这个。查得到才打，查不到就说清楚是哪个动作。
+            val resolvable = intent != null &&
+                context.packageManager.resolveActivity(intent, 0) != null
+            if (!resolvable) {
+                Toast.makeText(
+                    context,
+                    context.getString(R.string.watch_face_action_unmapped_fmt, action.value),
+                    Toast.LENGTH_SHORT,
+                ).show()
+                return
+            }
+            runCatching {
+                context.startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+            }.onFailure {
+                Toast.makeText(
+                    context,
+                    context.getString(R.string.watch_face_action_unmapped_fmt, action.value),
+                    Toast.LENGTH_SHORT,
+                ).show()
+            }
             return
         }
         val intent = when (action) {
@@ -4705,6 +5498,8 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
             is WatchTapAction.DeepLink -> Intent(Intent.ACTION_VIEW, Uri.parse(action.uri))
             is WatchTapAction.Named -> null
             WatchTapAction.HeartRate -> null
+            WatchTapAction.StopwatchStartStop -> null
+            WatchTapAction.StopwatchReset -> null
             is WatchTapAction.Script -> null
             is WatchTapAction.AppLaunch -> {
                 val act = action.activityClass
@@ -4725,10 +5520,60 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
             Toast.makeText(context, "表盘点击动作不可用: $reason", Toast.LENGTH_SHORT).show()
             return
         }
+        // **先问 PackageManager**：`CATEGORY_APP_WEATHER` 这类类目在手表上经常没人声明，
+        // 直接 startActivity 会抛 ActivityNotFoundException，兜到下面那句就只剩一句
+        // 「无法打开目标应用」，用户既不知道是哪个动作、也不知道该去哪儿配
+        // （老师报的天气组件就是这条）。命名动作分支早就这么做了，这里补齐。
+        if (context.packageManager.resolveActivity(intent, 0) == null) {
+            Toast.makeText(
+                context,
+                context.getString(
+                    R.string.watch_face_action_unmapped_fmt,
+                    rawAction.ifBlank { action.javaClass.simpleName },
+                ),
+                Toast.LENGTH_SHORT,
+            ).show()
+            return
+        }
         runCatching {
             context.startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
         }.onFailure {
             Toast.makeText(context, "无法打开目标应用", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    /**
+     * 命名动作 → 系统默认应用的 intent。
+     *
+     * 只覆盖**有标准 intent 可用**的那些：音乐、浏览器、拨号、相机这一类系统都留了
+     * `CATEGORY_APP_*` 或专用 action。`w_compass` / `w_keep` / `w_payment` / `socialmedia`
+     * 之类没有通用入口，返回 null 让它安静收场（上游那边这些也要用户自己映射）。
+     *
+     * `tap_launcher` 也返回 null：表盘正显示在 Flue 自己的桌面里，再「打开启动器」
+     * 没有意义，而这一层拿不到应用列表的导航入口。
+     */
+    private fun namedActionIntent(name: String): Intent? {
+        fun appCategory(category: String) = Intent(Intent.ACTION_MAIN).addCategory(category)
+        return when (name) {
+            // 类目 → 当前持有媒体会话的应用 → 常见音乐包名，三级兜底。
+            "w_music", "m_music" -> WatchMediaTransport.musicIntent(context)
+            "browser" -> appCategory(Intent.CATEGORY_APP_BROWSER)
+            "w_calculator", "m_calculator" -> appCategory(Intent.CATEGORY_APP_CALCULATOR)
+            "w_contacts" -> appCategory(Intent.CATEGORY_APP_CONTACTS)
+            "w_gallery" -> appCategory(Intent.CATEGORY_APP_GALLERY)
+            "w_email", "m_email" -> appCategory(Intent.CATEGORY_APP_EMAIL)
+            "w_messaging", "w_sms" -> appCategory(Intent.CATEGORY_APP_MESSAGING)
+            "w_map", "w_maps" -> appCategory(Intent.CATEGORY_APP_MAPS)
+            "w_calendar", "m_calendar", "w_agenda" -> appCategory(Intent.CATEGORY_APP_CALENDAR)
+            "w_weather", "m_weather" -> appCategory(Intent.CATEGORY_APP_WEATHER)
+            "w_dialer", "w_phone" -> Intent(Intent.ACTION_DIAL)
+            "w_camera", "m_camera" -> Intent(MediaStore.INTENT_ACTION_STILL_IMAGE_CAMERA)
+            "w_recorder" -> Intent(MediaStore.Audio.Media.RECORD_SOUND_ACTION)
+            "w_clock", "m_clock", "w_alarm" -> Intent(AlarmClock.ACTION_SHOW_ALARMS)
+            "w_timer" -> Intent(AlarmClock.ACTION_SHOW_TIMERS)
+            "w_settings" -> Intent(Settings.ACTION_SETTINGS)
+            "voice_search" -> Intent(Intent.ACTION_VOICE_COMMAND)
+            else -> null
         }
     }
 
@@ -5130,7 +5975,17 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         val pageBitmaps: Array<Bitmap?> = arrayOfNulls(pageAssetPaths.size),
     )
 
-    private data class TapTarget(val bounds: RectF, val action: WatchTapAction)
+    private data class TapTarget(
+        val bounds: RectF,
+        val action: WatchTapAction,
+        /**
+         * 图层上写的原始动作名（未经解析），例如 `widget_weather`。
+         *
+         * 解析器会把可配置名字短路成强类型动作，名字丢了就查不了用户映射表 ——
+         * 见 [launchUserMappedAction]。
+         */
+        val rawAction: String = "",
+    )
 
     /** 已求值的描边参数（mode 一定不是 NONE，size/opacity 一定大于 0）。 */
     private data class ResolvedOutline(
@@ -5333,6 +6188,15 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
 
         /** 强制色值不透明用的 alpha 位掩码；见 [tintFilter] 为什么必须补满 alpha。 */
         private const val OPAQUE_ALPHA_MASK = 0xFF000000.toInt()
+
+        /**
+         * 环端帽倒角的比较容差（画布单位）。
+         *
+         * 用来判「倒角已经到顶」与「倒角等于 0」两个端点。不给容差的话，作者写
+         * `radius` 恰好等于环厚一半时会因为浮点误差走进手绘那条慢路，画出的东西和
+         * [android.graphics.Paint.Cap.ROUND] 只差不到一个像素，白付两次 drawPath。
+         */
+        private const val RING_CAP_EPSILON = 0.01f
         private val WATCH_GALLERY_IMAGE_EXTENSIONS = setOf("png", "jpg", "jpeg", "webp", "bmp", "gif")
         private val WINDOWS_ABSOLUTE_PATH = Regex("^[a-zA-Z]:[/\\\\].*")
         private val TEXT_RING_LABELS = (1..12).map(Int::toString)
@@ -5372,6 +6236,8 @@ fun WatchmakerWatchFaceHost(
     /** Null selects [WatchWeatherSources.default]; callers may inject a deterministic source. */
     weatherSource: WatchWeatherSource? = null,
     onTapAction: ((WatchTapAction) -> Unit)? = null,
+    /** 渲染静默（画面完整）时回调一次，桌面据此撤「表盘加载中」。 */
+    onRenderReady: ((Int) -> Unit)? = null,
     canvasSettings: WatchCanvasSettings = WatchCanvasSettings.DEFAULT,
     gravityParallaxEnabled: Boolean = false,
     /** 重力景深底部模糊背景层；关掉后底下只剩根 `bg_color`（对齐 clox）。 */
@@ -5408,6 +6274,7 @@ fun WatchmakerWatchFaceHost(
                 onTapAction = onTapAction,
                 // 素材就绪才知道有几个可播 video、路径各是什么，此时才能分段。
                 onSourceReady = { stage.syncVideoSegments() },
+                onRenderReady = onRenderReady,
                 textEntryAnimationEnabled = textEntryAnimationEnabled,
                 textExitAnimationEnabled = textExitAnimationEnabled,
             )

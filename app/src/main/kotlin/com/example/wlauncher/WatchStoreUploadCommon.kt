@@ -14,13 +14,9 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CheckboxDefaults
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -36,13 +32,21 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.flue.launcher.ui.theme.LauncherTheme
-import com.flue.launcher.ui.settings.miuix.MiuixLoadingIndicator
+import com.flue.launcher.ui.style.FlueButton
+import com.flue.launcher.ui.style.FlueLoadingIndicator
+import com.flue.launcher.ui.style.FlueExpressiveButtonGroup
+import com.flue.launcher.ui.style.useMaterial3ExpressiveComponents
+import com.flue.launcher.ui.style.FlueTextField
 import com.flue.launcher.watchface.store.HttpWatchStoreApi
 import com.flue.launcher.watchface.store.WatchStoreAuthSession
 import com.flue.launcher.watchface.store.WatchStoreAuthStore
 import com.flue.launcher.watchface.store.WatchStoreCredentialStore
+import com.flue.launcher.watchface.store.MyWatchFaceEntry
 import com.flue.launcher.watchface.store.WatchStoreHttpException
+import com.flue.launcher.watchface.store.WatchStoreReviewStatus
+import com.flue.launcher.watchface.store.WatchStoreNonCompliantArchiveException
 import com.flue.launcher.watchface.store.WatchStorePayloadTooLargeException
+import com.flue.launcher.watchface.store.WatchStoreUploadFinding
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
@@ -53,6 +57,13 @@ import kotlinx.coroutines.withContext
 
 /** 把商店写接口的失败翻译成给用户看的人话。 */
 internal fun watchStoreUploadErrorMessage(context: Context, error: Throwable): String = when {
+    // 本地预检不通过：把具体违规项逐条列出来，作者才知道该改哪个图层的哪个属性。
+    // 这条要排在 IllegalArgumentException 之前 —— 顺序错了会被后面那条泛化分支吃掉。
+    error is WatchStoreNonCompliantArchiveException ->
+        context.getString(
+            R.string.watch_store_error_noncompliant_fmt,
+            watchStoreNonCompliantDetail(context, error.findings),
+        )
     error is WatchStoreHttpException && error.statusCode == 401 ->
         context.getString(R.string.watch_store_error_auth_expired)
     error is WatchStoreHttpException && error.statusCode == 400 ->
@@ -74,6 +85,160 @@ internal fun watchStoreUploadErrorMessage(context: Context, error: Throwable): S
         error.message?.takeIf(String::isNotBlank)?.let {
             context.getString(R.string.watch_store_error_network_detail_fmt, it)
         } ?: context.getString(R.string.watch_store_error_network)
+}
+
+/**
+ * 把预检结论排成逐行清单。
+ *
+ * 只列前几条：一块表盘可能有几十个图层同时缺属性（比如整批 ring 都是旧默认属性建的），
+ * 全铺出来会把弹窗撑爆，作者看前几条就够动手了。致命项（禁用文件）排在最前面。
+ */
+private fun watchStoreNonCompliantDetail(
+    context: Context,
+    findings: List<WatchStoreUploadFinding>,
+): String {
+    val ordered = findings.sortedByDescending(WatchStoreUploadFinding::fatal)
+    val shown = ordered.take(MAX_SHOWN_FINDINGS)
+    return buildString {
+        shown.forEach { finding ->
+            append("• ").append(watchStoreNonCompliantLine(context, finding)).append('\n')
+        }
+        val remaining = ordered.size - shown.size
+        if (remaining > 0) {
+            append(context.getString(R.string.watch_store_noncompliant_more_fmt, remaining))
+        }
+    }.trimEnd()
+}
+
+private const val MAX_SHOWN_FINDINGS = 8
+
+private fun watchStoreNonCompliantLine(
+    context: Context,
+    finding: WatchStoreUploadFinding,
+): String = when (finding) {
+    is WatchStoreUploadFinding.MissingFile ->
+        context.getString(R.string.watch_store_noncompliant_missing_file_fmt, finding.name)
+    is WatchStoreUploadFinding.BlockedFile ->
+        context.getString(R.string.watch_store_noncompliant_blocked_file_fmt, finding.name)
+    is WatchStoreUploadFinding.UnknownLayerType ->
+        context.getString(
+            R.string.watch_store_noncompliant_unknown_layer_fmt,
+            finding.layerPosition,
+            finding.type,
+        )
+    is WatchStoreUploadFinding.Format2LayerInFormat1 ->
+        context.getString(
+            R.string.watch_store_noncompliant_format2_layer_fmt,
+            finding.layerPosition,
+            finding.type,
+        )
+    is WatchStoreUploadFinding.MissingAttribute ->
+        context.getString(
+            R.string.watch_store_noncompliant_missing_attribute_fmt,
+            finding.layerPosition,
+            finding.type,
+            finding.attribute,
+        )
+}
+
+/** 搜索框文本拆成上游的两个查询字段。 */
+internal data class WatchStoreSearchFields(
+    val search: String?,
+    val tag: String?,
+)
+
+/**
+ * `#运动` 当标签搜，其余当名称搜。
+ *
+ * 上游把 `search` 与 `tag` 做成两个独立参数（`search` 同时匹配名称和标签、`tag` 只精确
+ * 匹配标签）。手表屏幕上再摆一个「搜索模式」切换开关不值得，所以用 `#` 前缀区分 ——
+ * 这也是详情页点标签跳搜索时会填进去的形式，两条路殊途同归。
+ *
+ * 上游 `tag` 限 1–50 字符，所以超长的 `#…` 退回当普通搜索，免得白吃一个 400。
+ */
+internal fun watchStoreSearchFields(raw: String): WatchStoreSearchFields {
+    val trimmed = raw.trim()
+    if (!trimmed.startsWith("#")) {
+        return WatchStoreSearchFields(search = trimmed.takeIf(String::isNotEmpty), tag = null)
+    }
+    val tag = trimmed.removePrefix("#").trim()
+    return if (tag.isEmpty() || tag.length > MAX_STORE_TAG_LENGTH) {
+        // 只打了一个 `#`、或者标签太长：当普通搜索，别把输入吃掉。
+        WatchStoreSearchFields(search = trimmed, tag = null)
+    } else {
+        WatchStoreSearchFields(search = null, tag = tag)
+    }
+}
+
+private const val MAX_STORE_TAG_LENGTH = 50
+
+/**
+ * 我的上传按审核状态分成「需要处理」与「已上架」两组。
+ *
+ * 这一分组是老师那条反馈的正面回答：上传**永远返回 201**（上游 `my.js` 明写
+ * 「A scanner failure NEVER blocks the upload」），被拦只体现在 `status` 与
+ * `rejection_reason` 上。列表按服务端顺序平铺的话，一块被驳回的表盘会混在几十块已上架的
+ * 中间，用户永远发现不了 —— 所以需要处理的一律置顶。
+ *
+ * 组内**保持服务端顺序**（上游按创建时间倒序），不再自作主张排序。
+ */
+internal fun myUploadStatusGroups(
+    entries: List<MyWatchFaceEntry>,
+): Pair<List<MyWatchFaceEntry>, List<MyWatchFaceEntry>> {
+    val attention = ArrayList<MyWatchFaceEntry>(entries.size)
+    val published = ArrayList<MyWatchFaceEntry>(entries.size)
+    entries.forEach { entry ->
+        // UNKNOWN 也进「需要处理」：上游加了新状态而我们还不认识时，宁可让用户看见
+        // 一块「状态未知」的表盘，也不要把它悄悄混进「已上架」里当作没事。
+        if (entry.status == WatchStoreReviewStatus.PUBLISHED) published += entry else attention += entry
+    }
+    return attention to published
+}
+
+/** 状态徽标文案。`PUBLISHED` 不给徽标 —— 正常态不需要占一行。 */
+internal fun watchStoreReviewStatusLabel(context: Context, status: WatchStoreReviewStatus): String? =
+    when (status) {
+        WatchStoreReviewStatus.PUBLISHED -> null
+        WatchStoreReviewStatus.PENDING -> context.getString(R.string.watch_store_status_pending)
+        WatchStoreReviewStatus.REJECTED -> context.getString(R.string.watch_store_status_rejected)
+        WatchStoreReviewStatus.DELISTED -> context.getString(R.string.watch_store_status_delisted)
+        WatchStoreReviewStatus.UNKNOWN -> context.getString(R.string.watch_store_status_unknown)
+    }
+
+/**
+ * 社交类调用（评论 / 喜欢 / 评分 / 举报 / 合集 / 通知）的错误文案。
+ *
+ * 与上传、登录各自的映射分开写，因为**同一个状态码在这三类里的含义不同**：403 在上传里是
+ * 没权限改别人的表盘，在社交里是**管理员关掉了这个功能**；409 在注册里是用户名被占，在
+ * 举报里是同一块表盘同一原因已经报过了。混成一个映射就一定会给错提示。
+ */
+internal fun watchStoreSocialErrorMessage(context: Context, error: Throwable): String = when {
+    error is WatchStoreHttpException && error.statusCode == 401 ->
+        context.getString(R.string.watch_store_error_auth_expired)
+
+    // 上游对被禁用的功能一律回 403。UI 本该按 /config 提前隐藏入口，这条是兜底 ——
+    // 开关是缓存的，管理员刚关掉的那几分钟里用户还点得到。
+    error is WatchStoreHttpException && error.statusCode == 403 ->
+        context.getString(R.string.watch_store_error_feature_disabled)
+
+    error is WatchStoreHttpException && error.statusCode == 404 ->
+        context.getString(R.string.watch_store_error_gone)
+
+    error is WatchStoreHttpException && error.statusCode == 409 ->
+        context.getString(R.string.watch_store_error_already_reported)
+
+    error is WatchStoreHttpException && error.statusCode == 429 ->
+        context.getString(R.string.watch_store_error_rate_limited)
+
+    error is WatchStoreHttpException ->
+        error.detail?.takeIf(String::isNotBlank)
+            ?: context.getString(R.string.watch_store_error_service_fmt, error.statusCode)
+
+    error is IllegalArgumentException ->
+        error.message?.takeIf(String::isNotBlank)
+            ?: context.getString(R.string.watch_store_error_network)
+
+    else -> context.getString(R.string.watch_store_error_network)
 }
 
 internal fun watchStoreAuthErrorMessage(
@@ -168,6 +333,7 @@ internal fun WatchStoreLoginSection(
     authPage: WatchStoreAuthPage,
     onAuthPageChange: (WatchStoreAuthPage) -> Unit,
     enabled: Boolean,
+    registrationEnabled: Boolean = true,
     loadingAction: WatchStoreAuthAction? = null,
     onLogin: () -> Unit,
     onRegister: () -> Unit,
@@ -188,7 +354,7 @@ internal fun WatchStoreLoginSection(
             modifier = Modifier.fillMaxWidth(),
             label = "watch_store_auth_page",
         ) { page ->
-            val isRegister = page == WatchStoreAuthPage.REGISTER
+            val isRegister = registrationEnabled && page == WatchStoreAuthPage.REGISTER
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Text(
                     text = stringResource(
@@ -209,43 +375,23 @@ internal fun WatchStoreLoginSection(
                     style = MaterialTheme.typography.bodySmall,
                     color = style.secondaryTextColor,
                 )
-                OutlinedTextField(
+                FlueTextField(
                     value = username,
                     onValueChange = { onUsernameChange(it.take(50)) },
-                    label = { Text(stringResource(R.string.watch_store_username)) },
+                    label = stringResource(R.string.watch_store_username),
                     singleLine = true,
                     enabled = enabled,
                     modifier = Modifier.fillMaxWidth(),
-                    shape = style.rowShape,
-                    colors = OutlinedTextFieldDefaults.colors(
-                        focusedBorderColor = style.accentColor,
-                        unfocusedBorderColor = style.outlineColor,
-                        focusedContainerColor = style.screenBackground,
-                        unfocusedContainerColor = style.screenBackground,
-                        cursorColor = style.accentColor,
-                        focusedTextColor = style.bodyColor,
-                        unfocusedTextColor = style.bodyColor,
-                    ),
                 )
-                OutlinedTextField(
+                FlueTextField(
                     value = password,
                     onValueChange = { onPasswordChange(it.take(128)) },
-                    label = { Text(stringResource(R.string.watch_store_password)) },
+                    label = stringResource(R.string.watch_store_password),
                     singleLine = true,
                     enabled = enabled,
                     visualTransformation = PasswordVisualTransformation(),
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
                     modifier = Modifier.fillMaxWidth(),
-                    shape = style.rowShape,
-                    colors = OutlinedTextFieldDefaults.colors(
-                        focusedBorderColor = style.accentColor,
-                        unfocusedBorderColor = style.outlineColor,
-                        focusedContainerColor = style.screenBackground,
-                        unfocusedContainerColor = style.screenBackground,
-                        cursorColor = style.accentColor,
-                        focusedTextColor = style.bodyColor,
-                        unfocusedTextColor = style.bodyColor,
-                    ),
                 )
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Checkbox(
@@ -282,49 +428,82 @@ internal fun WatchStoreLoginSection(
                 } else {
                     WatchStoreAuthAction.LOGIN
                 }
-                Button(
-                    onClick = if (isRegister) onRegister else onLogin,
-                    enabled = enabled,
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = style.rowShape,
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = style.accentColor,
-                        contentColor = accentContentColor,
-                    ),
-                ) {
-                    if (loadingAction == expectedAction) {
-                        MiuixLoadingIndicator(
-                            Modifier.size(17.dp),
-                            strokeWidth = 2.dp,
-                            color = accentContentColor,
-                        )
-                        Spacer(Modifier.width(6.dp))
+                if (useMaterial3ExpressiveComponents(style.uiStyle)) {
+                    FlueExpressiveButtonGroup(modifier = Modifier.fillMaxWidth()) {
+                        FlueButton(
+                            onClick = if (isRegister) onRegister else onLogin,
+                            enabled = enabled,
+                        ) {
+                            if (loadingAction == expectedAction) {
+                                FlueLoadingIndicator(size = 17.dp)
+                                Spacer(Modifier.width(6.dp))
+                            }
+                            Text(
+                                stringResource(
+                                    if (isRegister) R.string.watch_store_register else R.string.watch_store_login,
+                                ),
+                            )
+                        }
+                        if (registrationEnabled) {
+                            TextButton(
+                                onClick = {
+                                    onAuthPageChange(
+                                        if (isRegister) WatchStoreAuthPage.LOGIN else WatchStoreAuthPage.REGISTER,
+                                    )
+                                },
+                                enabled = enabled,
+                            ) {
+                                Text(
+                                    stringResource(
+                                        if (isRegister) {
+                                            R.string.watch_store_back_to_login
+                                        } else {
+                                            R.string.watch_store_go_to_register
+                                        },
+                                    ),
+                                    color = style.accentColor,
+                                )
+                            }
+                        }
                     }
-                    Text(
-                        stringResource(
-                            if (isRegister) R.string.watch_store_register else R.string.watch_store_login,
-                        ),
-                    )
-                }
-                TextButton(
-                    onClick = {
-                        onAuthPageChange(
-                            if (isRegister) WatchStoreAuthPage.LOGIN else WatchStoreAuthPage.REGISTER,
+                } else {
+                    FlueButton(
+                        onClick = if (isRegister) onRegister else onLogin,
+                        enabled = enabled,
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        if (loadingAction == expectedAction) {
+                            FlueLoadingIndicator(size = 17.dp)
+                            Spacer(Modifier.width(6.dp))
+                        }
+                        Text(
+                            stringResource(
+                                if (isRegister) R.string.watch_store_register else R.string.watch_store_login,
+                            ),
                         )
-                    },
-                    enabled = enabled,
-                    modifier = Modifier.align(Alignment.CenterHorizontally),
-                ) {
-                    Text(
-                        stringResource(
-                            if (isRegister) {
-                                R.string.watch_store_back_to_login
-                            } else {
-                                R.string.watch_store_go_to_register
+                    }
+                    if (registrationEnabled) {
+                        TextButton(
+                            onClick = {
+                                onAuthPageChange(
+                                    if (isRegister) WatchStoreAuthPage.LOGIN else WatchStoreAuthPage.REGISTER,
+                                )
                             },
-                        ),
-                        color = style.accentColor,
-                    )
+                            enabled = enabled,
+                            modifier = Modifier.align(Alignment.CenterHorizontally),
+                        ) {
+                            Text(
+                                stringResource(
+                                    if (isRegister) {
+                                        R.string.watch_store_back_to_login
+                                    } else {
+                                        R.string.watch_store_go_to_register
+                                    },
+                                ),
+                                color = style.accentColor,
+                            )
+                        }
+                    }
                 }
             }
         }

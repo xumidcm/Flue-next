@@ -203,6 +203,15 @@ class WatchWeatherRepository(
     fun isUsingSystemLocation(): Boolean = manualLocation == null && manualCityValue == null
 
     /**
+     * 当前生效的坐标（手动选点优先，否则用已缓存的系统定位）。
+     *
+     * 给 `{alat}` / `{alon}` 一族用：那几个变量与天气**共用同一份已授权的定位**，
+     * 绝不为它们再单独申请一次位置权限，也不在这里发起新的定位请求 —— 只读已经
+     * 落盘的那份，没有就返回 null 让标签渲染 `--`。
+     */
+    internal fun activeLocation(): WatchWeatherLocation? = manualLocation ?: readSystemLocation()
+
+    /**
      * Resolves multiple forward-geocoding candidates. This method performs IO;
      * callers must invoke it off the main thread and persist only a chosen item.
      */
@@ -717,6 +726,9 @@ class WatchWeatherRepository(
             "?latitude=${"%.5f".format(Locale.US, location.latitude)}" +
             "&longitude=${"%.5f".format(Locale.US, location.longitude)}" +
             "&current=temperature_2m,relative_humidity_2m,cloud_cover,weather_code,is_day" +
+            ",wind_speed_10m,wind_direction_10m" +
+            // 直接要 m/s，免得在渲染侧再猜一遍单位（Open-Meteo 默认是 km/h）。
+            "&wind_speed_unit=ms" +
             "&daily=temperature_2m_mean,temperature_2m_max,temperature_2m_min,weather_code,sunrise,sunset" +
             "&hourly=temperature_2m,weather_code,is_day&forecast_hours=13" +
             "&forecast_days=6&timezone=auto"
@@ -802,6 +814,9 @@ class WatchWeatherRepository(
             sunsetText = clockTimeFromIsoLocalTime(daily?.optJSONArray("sunset")?.optString(0)),
             forecast = forecasts,
             hourlyForecast = hourlyForecasts,
+            // {wws} / {wwd} / {wwdb} / {wwdbb}。风速已按 wind_speed_unit=ms 拿到 m/s。
+            windSpeedMetersPerSecond = current.optDoubleOrNull("wind_speed_10m"),
+            windDirectionDegrees = current.optDoubleOrNull("wind_direction_10m"),
         )
     }
 

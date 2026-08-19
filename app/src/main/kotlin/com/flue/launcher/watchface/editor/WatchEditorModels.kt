@@ -2,6 +2,7 @@ package com.flue.launcher.watchface.editor
 
 import java.io.File
 import java.io.IOException
+import java.util.Locale
 import java.util.UUID
 
 /**
@@ -38,6 +39,39 @@ value class WatchEditorLayerKey(val value: String) {
     }
 }
 
+/**
+ * 把草稿内的相对路径转成**写进 watch.xml 的 `path` 值**。
+ *
+ * ## 为什么必须转
+ *
+ * 规范里 `path` 是**约定目录内的裸文件名**：`WM_FORMAT_1.0.md` §7.1 image 写的是
+ * 「Filename inside `images/`」、§7.14 video 是「Filename inside `videos/`」；
+ * `WM_FORMAT_2.0.md` §7/§9/§17 的例子全是 `path="img_5qyxcg.png"`，上游两个真实样本包
+ * （`share2.watch` / `Untitled.watch`）也都是裸名。
+ *
+ * 而 Flue 的 `importResource` 返回的是**草稿相对路径**（`images/foo.png`）—— 直接写进
+ * `path` 就变成 `images/images/foo.png` 在别的渲染器里去找。Flue 自己看不出来：它的
+ * `resolveAsset` 会先按原样相对 watch.xml 解一次，正好命中。所以这个 bug 只在**把表盘
+ * 拿到官方 WatchMaker / CloX / wftools 里**才暴露成「图片、帧序列、视频全是空层」。
+ *
+ * 字体那条路一直是对的（调用点自己 `substringAfterLast('/')`），图片与视频漏了这一步。
+ *
+ * ## 为什么只剥一层约定目录
+ *
+ * 作者可能在 `images/` 下再建子目录（`images/hands/big.png`）。规范只规定「在 images/
+ * 里面」，没禁止子目录，所以这里**只剥掉约定目录那一段**，子路径原样保留 ——
+ * 一律取 basename 会让两个不同子目录里的同名文件撞车。
+ */
+fun watchXmlAssetPath(draftRelativePath: String, conventionalDirectory: String): String {
+    val normalized = draftRelativePath.trim().replace('\\', '/').removePrefix("/")
+    val prefix = "$conventionalDirectory/"
+    return if (normalized.startsWith(prefix, ignoreCase = true)) {
+        normalized.substring(prefix.length)
+    } else {
+        normalized
+    }
+}
+
 data class WatchEditorLayer(
     val key: WatchEditorLayerKey,
     val id: String?,
@@ -46,6 +80,15 @@ data class WatchEditorLayer(
     val attributes: Map<String, String>,
     val childElementNames: List<String>,
     val order: Int,
+    /**
+     * 同一图层在渲染器 `WatchmakerDefinition.layers` 里的下标。
+     *
+     * 与 [order] 的区别只有一个、但很致命：[order] 数的是**顶层**图层，渲染器那张表
+     * 是**含嵌套**的扁平前序表。带分组的表盘上两者不相等，凡是要告诉渲染器「我说的是
+     * 哪一层」的接口（实时变换 `setLiveLayerTransform`、序列帧预览
+     * `setEditorAnimatedImageLayer`）都必须用这个值，不能用 [order]。
+     */
+    val definitionIndex: Int = order,
 )
 
 /**
@@ -105,5 +148,60 @@ data class WatchEditorExportResult(
     val bytes: Long,
     val entryCount: Int,
 )
+
+/**
+ * 草稿里的一份素材。资源管理器逐行显示它。
+ *
+ * [referenced] 为 false 表示「文档里没有任何图层用到它」——那就是可以安全删掉的孤儿。
+ * 字体、脚本、着色器、预览图一律算已引用：它们不是按 `path` 引用的，静态分析看不出来，
+ * 误删的代价是一块渲染不出来的表盘。
+ */
+/**
+ * 素材的大类。资源管理器按它决定缩略图怎么出。
+ *
+ * 按**扩展名**判而不是按所在目录：老表盘把素材堆在包根目录是常见写法（见
+ * `draftRelativeAssetPath` 的注释），只看 `images/` 会把这些全归成「其它」。
+ */
+enum class WatchEditorResourceKind {
+    IMAGE,
+    VIDEO,
+    /** 可被 `Typeface` 加载的矢量字体（ttf / otf）。 */
+    FONT,
+    /** 位图字体描述文件（`.fnt`）—— 是文本，出不了缩略图。 */
+    BITMAP_FONT,
+    SCRIPT,
+    OTHER,
+}
+
+data class WatchEditorResourceEntry(
+    val relativePath: String,
+    val bytes: Long,
+    val referenced: Boolean,
+) {
+    /** 归档里的一级目录（`images` / `videos` / `fonts`…），根目录下的文件归 `""`。 */
+    val directory: String get() = relativePath.substringBeforeLast('/', "")
+
+    val fileName: String get() = relativePath.substringAfterLast('/')
+
+    val extension: String get() = fileName.substringAfterLast('.', "").lowercase(Locale.ROOT)
+
+    val kind: WatchEditorResourceKind
+        get() = when (extension) {
+            in IMAGE_EXTENSIONS -> WatchEditorResourceKind.IMAGE
+            in VIDEO_EXTENSIONS -> WatchEditorResourceKind.VIDEO
+            in FONT_EXTENSIONS -> WatchEditorResourceKind.FONT
+            "fnt" -> WatchEditorResourceKind.BITMAP_FONT
+            in SCRIPT_EXTENSIONS -> WatchEditorResourceKind.SCRIPT
+            else -> WatchEditorResourceKind.OTHER
+        }
+
+    private companion object {
+        // ppng 是受保护表盘里的加密孪生图，解不开也就出不了缩略图 —— 不列进 IMAGE。
+        val IMAGE_EXTENSIONS = setOf("png", "jpg", "jpeg", "webp", "bmp", "gif")
+        val VIDEO_EXTENSIONS = setOf("mp4", "m4v", "mov", "webm", "mkv", "3gp")
+        val FONT_EXTENSIONS = setOf("ttf", "otf")
+        val SCRIPT_EXTENSIONS = setOf("txt", "lua")
+    }
+}
 
 open class WatchEditorException(message: String, cause: Throwable? = null) : IOException(message, cause)

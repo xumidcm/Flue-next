@@ -47,9 +47,33 @@ class WatchStoreUiPreferences(context: Context) {
         preferences.edit().remove(KEY_BASE_URL).apply()
     }
 
+    /**
+     * 内置 WebView 的显示缩放（百分比，H6）。
+     *
+     * 这一项**要限范围**（与画布数值输入那条「不限量程」相反）：WebView 的缩放超出
+     * 25–250 就直接排版崩坏，而 25 / 250 正是老师给的界。
+     */
+    fun readWebZoomPercent(): Int =
+        normalizeWebZoomPercent(preferences.getInt(KEY_WEB_ZOOM, DEFAULT_WEB_ZOOM_PERCENT))
+
+    fun writeWebZoomPercent(percent: Int): Int {
+        val normalized = normalizeWebZoomPercent(percent)
+        preferences.edit().putInt(KEY_WEB_ZOOM, normalized).apply()
+        return normalized
+    }
+
     private companion object {
         const val PREFERENCES_NAME = "flue_watch_store_ui"
         const val KEY_VIEW_MODE = "view_mode"
         const val KEY_BASE_URL = "base_url"
+        const val KEY_WEB_ZOOM = "web_zoom_percent"
     }
 }
+
+const val MIN_WEB_ZOOM_PERCENT: Int = 25
+const val MAX_WEB_ZOOM_PERCENT: Int = 250
+const val DEFAULT_WEB_ZOOM_PERCENT: Int = 100
+
+/** 夹到 25..250。存量脏数据与用户输入都走这一道，纯函数便于单测。 */
+fun normalizeWebZoomPercent(raw: Int): Int =
+    raw.coerceIn(MIN_WEB_ZOOM_PERCENT, MAX_WEB_ZOOM_PERCENT)

@@ -145,18 +145,24 @@ internal class NativeAppListDragController(
         val folderCandidate = host.folderKeyAt(x, y).takeIf {
             allowFolderCreation()
         }
-        // 开启「允许创建文件夹」后不再播实时避让位移（老师指定）。
+        // 排序预览与合成用**空间**消歧，不再靠「开了文件夹就整个关掉预览」。
         //
-        // 两件事抢同一个悬停语义：拖到另一个图标上，既可以理解成「插到它
-        // 前面」（邻居让位）也可以理解成「和它合成文件夹」。同时播避让，
-        // 手指底下的格子会一边让位一边高亮成文件夹目标，落手前根本看不出
-        // 会发生哪一种。所以文件夹功能开着时，把实时预览目标掐成 null：
-        // 状态机不再发 Move 效果，也就没有 previewMove 的位移动画。
+        // 上一版是 `if (allowFolderCreation()) null else reorderTarget` —— 开关一开，
+        // 实时避让位移就全程消失，等于用「不能排序预览」换「两个手势不打架」。
+        // 老师现在要两个都要：能自由拖动排序，也能拖到图标上合成。
         //
-        // 排序本身不受影响——onUp 仍然拿真实的 reorderTarget 去提交，
-        // 且 lastMoveTarget 停在 source 上，那条「与上次预览相同就跳过」
-        // 的短路不会误伤落手时的排序。
-        val previewTarget = if (allowFolderCreation()) null else reorderTarget
+        // 判据本来就有，只是没被用上：folderKeyAt 带 42% 图标半径的核心区门槛，
+        // 出了这个圈返回 null。于是两种意图在空间上天然分开 ——
+        //
+        //   指针落在图标间隙 / 外圈  → folderCandidate == null → 播避让预览
+        //   指针落在某个图标核心区  → folderCandidate != null → 让位给合成高亮
+        //
+        // 这也正是成熟桌面（Launcher3 的 hit-region + alarm）的分法。
+        //
+        // 在核心区里把预览目标掐成 null 是**冻结**而不是回弹：状态机对 null 目标
+        // 什么都不做（不发 Move 效果、lastMoveTarget 不变），所以位移停在上一帧，
+        // 手指移出核心区后接着往下走，不会出现「一进图标中心整列弹回去」。
+        val previewTarget = if (folderCandidate != null) null else reorderTarget
         val effects = machine.onMove(
             pointerX = x,
             pointerY = y,

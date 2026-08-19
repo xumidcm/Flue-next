@@ -5,6 +5,27 @@ import org.junit.Test
 
 class MediaCardLayoutTest {
     @Test
+    fun `marquee next copy enters before the previous copy fully leaves`() {
+        val spec = mediaMarqueeSpec(
+            textWidthPx = 320,
+            viewportWidthPx = 120,
+            gapPx = 8,
+        )
+
+        assertEquals(328, spec.cycleDistancePx)
+        assertEquals(208, spec.nextCopyEntryOffsetPx)
+        assertEquals(112, spec.previousCopyVisiblePxAtEntry)
+    }
+
+    @Test
+    fun `marquee duration grows with measured text distance`() {
+        val shortDuration = mediaMarqueeDurationMs(distancePx = 120, density = 2f, minimumMs = 0)
+        val longDuration = mediaMarqueeDurationMs(distancePx = 360, density = 2f, minimumMs = 0)
+
+        assertEquals(true, longDuration > shortDuration)
+    }
+
+    @Test
     fun `side-screen music card matches the full control-center layout`() {
         val sideScreen = sideScreenMediaCardLayoutSpec()
         val full = mediaCardLayoutSpec(compact = false)

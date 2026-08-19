@@ -73,6 +73,7 @@ import androidx.compose.ui.window.DialogProperties
 import androidx.core.content.ContextCompat
 import com.flue.launcher.R
 import com.flue.launcher.ui.settings.miuix.MiuixIcons
+import com.flue.launcher.ui.theme.LauncherTheme
 import com.flue.launcher.ui.theme.ProvideDialogUiScale
 import java.io.File
 import java.util.Locale
@@ -218,6 +219,9 @@ private fun InternalFileBrowserDialog(
         properties = DialogProperties(
             dismissOnBackPress = false,
             usePlatformDefaultWidth = false,
+            // 全屏 Dialog 自己接管 insets（下面 Column 已用 safeDrawing 让位）：
+            // 默认 true 时窗口会被系统下移，顶部让出的一条不被 Surface 背景覆盖。
+            decorFitsSystemWindows = false,
         ),
     ) {
         BackHandler(onBack = ::goUpOrDismiss)
@@ -349,7 +353,7 @@ private fun InternalFileBrowserRow(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(16.dp))
+            .clip(LauncherTheme.style.rowShape)
             .background(background)
             .clickable(onClick = onClick)
             .padding(horizontal = 12.dp, vertical = 11.dp),

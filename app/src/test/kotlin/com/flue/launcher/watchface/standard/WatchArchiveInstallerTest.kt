@@ -851,6 +851,39 @@ class WatchArchiveInstallerTest {
         assertTrue(runCatching { WatchmakerDefinitionParser().parse(schema) }.isFailure)
     }
 
+    /**
+     * `protection` 是「标准受保护表盘」与 jbwatch 之间**唯一**可靠的分界线。
+     *
+     * 两种格式的文件结构一模一样（剥空的 watch.xml ＋ 编码过的 watch.pxml），按文件名
+     * 判类型必然分不开。手动导入曾经无条件把这个组合判成 jbwatch，于是 Flue 自己导出的
+     * 受保护表盘（一定带 `protection="y"`）从浏览器下载再导入就走错渲染器：名字退化成
+     * 文件名、卡顿、不能编辑也不能调画布。
+     */
+    @Test
+    fun protectionDeclarationSeparatesStandardProtectedArchivesFromLookalikes() {
+        val root = Files.createTempDirectory("flue-protection-sniff-").toFile()
+        try {
+            val declared = File(root, "declared.watch").also(::writeSyntheticProtectedFixture)
+            assertTrue(watchArchiveDeclaresProtection(declared))
+
+            // 结构一样、但没声明 protection：标准安装器读到的只会是零图层骨架，
+            // 那才该落回 jbwatch。
+            val silent = File(root, "silent.watch")
+            writeZip(
+                silent,
+                "watch.xml" to "<Watch name=\"Lookalike\" />".toByteArray(),
+                "watch.pxml" to encodeProtectedXml(SYNTHETIC_PROTECTED_XML.toByteArray()),
+            )
+            assertEquals(false, watchArchiveDeclaresProtection(silent))
+
+            // 读不出来时不猜：这是路由提示，不是安全闸门。
+            val broken = File(root, "broken.watch").apply { writeText("not a zip") }
+            assertEquals(false, watchArchiveDeclaresProtection(broken))
+        } finally {
+            root.deleteRecursively()
+        }
+    }
+
     private fun assertArchiveFailure(
         reason: WatchArchiveFailureReason,
         block: () -> Unit,

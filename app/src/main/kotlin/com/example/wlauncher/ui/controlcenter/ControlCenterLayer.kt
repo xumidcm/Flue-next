@@ -173,7 +173,9 @@ private const val CONTROL_NOTIFICATION_STACK_TRANSLATION_DP = 7f
 private const val CONTROL_NOTIFICATION_STACK_HORIZONTAL_INSET_DP = 8f
 private const val MUSIC_TEXT_FADE_EDGE_DP = 18f
 private const val MUSIC_TEXT_FADE_TRANSITION_MS = 80
-private const val MUSIC_TEXT_MARQUEE_SIDE_PADDING_DP = 8f
+// Keep a readable gap between the tail of one copy and the head of the next.
+// The previous 8dp gap made the copies visually touch on long titles.
+private const val MUSIC_TEXT_MARQUEE_SIDE_PADDING_DP = 20f
 internal const val CONTROL_TOGGLE_LABEL_MARQUEE_SPEED_DP_PER_SECOND = 14f
 
 private data class ControlCenterMediaState(
@@ -267,6 +269,31 @@ internal fun sideScreenContentAllowsVerticalScroll(
 
 internal fun sideScreenContentUsesElasticOverscroll(showMusicCard: Boolean): Boolean = showMusicCard
 
+internal data class MediaMarqueeSpec(
+    val cycleDistancePx: Int,
+    val nextCopyEntryOffsetPx: Int,
+    val previousCopyVisiblePxAtEntry: Int,
+    val contentWidthPx: Int,
+)
+
+internal fun mediaMarqueeSpec(
+    textWidthPx: Int,
+    viewportWidthPx: Int,
+    gapPx: Int,
+): MediaMarqueeSpec {
+    val textWidth = textWidthPx.coerceAtLeast(0)
+    val viewportWidth = viewportWidthPx.coerceAtLeast(0)
+    val gap = gapPx.coerceAtLeast(0)
+    val cycleDistance = textWidth + gap
+    val nextCopyEntryOffset = (cycleDistance - viewportWidth).coerceAtLeast(0)
+    return MediaMarqueeSpec(
+        cycleDistancePx = cycleDistance,
+        nextCopyEntryOffsetPx = nextCopyEntryOffset,
+        previousCopyVisiblePxAtEntry = (textWidth - nextCopyEntryOffset).coerceAtLeast(0),
+        contentWidthPx = cycleDistance * 2 + viewportWidth,
+    )
+}
+
 internal fun controlToggleLabelOverflows(slotWidthPx: Float, textWidthPx: Float): Boolean =
     slotWidthPx.isFinite() && textWidthPx.isFinite() && textWidthPx > slotWidthPx
 
@@ -310,6 +337,18 @@ fun ControlCenterLayer(
     onPowerClick: () -> Unit = {},
     glassHighlightEnabled: Boolean = true,
     overlayMaskCornerRadiusDp: Int = DEFAULT_OVERLAY_MASK_CORNER_RADIUS_DP,
+    /**
+     * 控制中心此刻是否处于打开态。
+     *
+     * 这一层是**常驻组合**的（靠位移移出屏外，不是条件挂载），所以 `rememberScrollState`
+     * 会一直活着 —— 上滑退出后再次下拉，内容还停在上次退出时的滚动位置（老师报的
+     * 「应该重新回到控制中心顶上，而不是从退出位置进入」）。拿这个标志在
+     * 「不可见 → 可见」那条边上把滚动复位。
+     *
+     * 刻意选开场而不是收场：收场时退出动画还在跑，那会儿 scrollTo(0) 会让内容一边
+     * 滑走一边跳回顶部；开场时这一层还在屏外，复位落在第一帧之前，看不见。
+     */
+    contentVisible: Boolean = true,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -342,6 +381,13 @@ fun ControlCenterLayer(
     // dismiss gesture, where there is no child ScrollState to report
     // unconsumed deltas.
     val sharedVerticalElasticState = rememberFlueElasticScrollState(verticalScrollState)
+    // 见 contentVisible 的注释：打开那一刻把两条滚动都拉回顶部。
+    LaunchedEffect(contentVisible) {
+        if (contentVisible) {
+            verticalScrollState.scrollTo(0)
+            toggleScrollState.scrollTo(0)
+        }
+    }
     var controlCenterGestureLocked by remember { mutableStateOf(false) }
     var scrollDismissDragPx by remember { mutableFloatStateOf(0f) }
     var scrollDismissActive by remember { mutableStateOf(false) }
@@ -2300,51 +2346,45 @@ private fun OneShotMarqueeText(
     val hasOverflow = containerWidthPx > 0 &&
         rawTextWidthPx > 0 &&
         rawTextWidthPx + sidePaddingPx > containerWidthPx.toFloat()
-    val contentLayoutReady = !hasOverflow || contentWidthPx.toFloat() >=
-        (rawTextWidthPx + sidePaddingPx + containerWidthPx) * 2f - 1f
+    val marqueeSpec = mediaMarqueeSpec(
+        textWidthPx = rawTextWidthPx,
+        viewportWidthPx = containerWidthPx,
+        gapPx = sidePaddingPx.roundToInt(),
+    )
+    val contentLayoutReady = !hasOverflow || contentWidthPx >= marqueeSpec.contentWidthPx - 1
     val marqueeScrollState = rememberScrollState()
     val restingTargetPx = if (hasOverflow && contentLayoutReady) {
-        (rawTextWidthPx + sidePaddingPx - containerWidthPx).roundToInt().coerceAtLeast(0)
+        marqueeSpec.nextCopyEntryOffsetPx
     } else {
         0
     }
     val exitTargetPx = if (hasOverflow && contentLayoutReady) {
-        (rawTextWidthPx + sidePaddingPx).roundToInt().coerceAtLeast(restingTargetPx)
+        marqueeSpec.cycleDistancePx
     } else {
         0
     }
-    val repeatCyclePx = if (hasOverflow && contentLayoutReady) {
-        (rawTextWidthPx + sidePaddingPx + containerWidthPx).roundToInt()
-    } else {
-        0
-    }
-    val repeatRestingTargetPx = repeatCyclePx + restingTargetPx
-    val repeatExitTargetPx = repeatCyclePx + exitTargetPx
 
     LaunchedEffect(
         text,
         hasOverflow,
         restingTargetPx,
         exitTargetPx,
-        repeatRestingTargetPx,
-        repeatExitTargetPx,
         density.density,
     ) {
         marqueeScrollState.scrollTo(0)
         if (
             hasOverflow &&
             restingTargetPx > 0 &&
-            exitTargetPx > restingTargetPx &&
-            repeatExitTargetPx > repeatRestingTargetPx
+            exitTargetPx > restingTargetPx
         ) {
             delay(MUSIC_TEXT_MARQUEE_INITIAL_DELAY_MS)
-            val firstDurationMs = marqueeDurationMs(restingTargetPx, density.density, minimumMs = 900)
+            val firstDurationMs = mediaMarqueeDurationMs(restingTargetPx, density.density, minimumMs = 900)
             marqueeScrollState.animateScrollTo(
                 value = restingTargetPx,
                 animationSpec = tween(durationMillis = firstDurationMs, easing = LinearEasing),
             )
             delay(MUSIC_TEXT_MARQUEE_END_HOLD_MS)
-            val exitDurationMs = marqueeDurationMs(
+            val exitDurationMs = mediaMarqueeDurationMs(
                 exitTargetPx - restingTargetPx,
                 density.density,
                 minimumMs = 420,
@@ -2355,53 +2395,36 @@ private fun OneShotMarqueeText(
             )
 
             while (true) {
-                val reentryDurationMs = marqueeDurationMs(
-                    repeatCyclePx - exitTargetPx,
-                    density.density,
-                    minimumMs = 420,
-                )
-                marqueeScrollState.animateScrollTo(
-                    value = repeatCyclePx,
-                    animationSpec = tween(durationMillis = reentryDurationMs, easing = LinearEasing),
-                )
+                // At the end of one cycle the second copy is exactly where the first copy
+                // started. Rewinding by one cycle is therefore visually identical and avoids
+                // inserting a blank viewport between copies.
+                marqueeScrollState.scrollTo(0)
                 delay(MUSIC_TEXT_MARQUEE_END_HOLD_MS)
-                val repeatScrollDurationMs = marqueeDurationMs(
-                    repeatRestingTargetPx - repeatCyclePx,
-                    density.density,
-                    minimumMs = 900,
-                )
+                val repeatScrollDurationMs = mediaMarqueeDurationMs(restingTargetPx, density.density, minimumMs = 900)
                 marqueeScrollState.animateScrollTo(
-                    value = repeatRestingTargetPx,
+                    value = restingTargetPx,
                     animationSpec = tween(durationMillis = repeatScrollDurationMs, easing = LinearEasing),
                 )
                 delay(MUSIC_TEXT_MARQUEE_END_HOLD_MS)
-                val repeatExitDurationMs = marqueeDurationMs(
-                    repeatExitTargetPx - repeatRestingTargetPx,
+                val repeatExitDurationMs = mediaMarqueeDurationMs(
+                    exitTargetPx - restingTargetPx,
                     density.density,
                     minimumMs = 420,
                 )
                 marqueeScrollState.animateScrollTo(
-                    value = repeatExitTargetPx,
+                    value = exitTargetPx,
                     animationSpec = tween(durationMillis = repeatExitDurationMs, easing = LinearEasing),
                 )
-                // Both positions are visually empty: the previous copy has left the viewport and
-                // the next copy is exactly outside the right edge. Rewind there, never to x = 0.
-                marqueeScrollState.scrollTo(exitTargetPx)
             }
         }
     }
 
     val scrollOffsetPx = marqueeScrollState.value.toFloat()
-    val currentRestingTargetPx = if (marqueeScrollState.value <= exitTargetPx) {
-        restingTargetPx
-    } else {
-        repeatRestingTargetPx
-    }
+    val currentRestingTargetPx = restingTargetPx
     val remainingScrollPx = (currentRestingTargetPx - marqueeScrollState.value)
         .coerceAtLeast(0)
         .toFloat()
-    val atCycleStart = scrollOffsetPx <= 0.5f ||
-        (repeatCyclePx > 0 && abs(scrollOffsetPx - repeatCyclePx) <= 0.5f)
+    val atCycleStart = scrollOffsetPx <= 0.5f
     val leftFadeTarget = if (hasOverflow && fadeEdgePx > 0f) {
         if (!atCycleStart) 1f else 0f
     } else {
@@ -2470,9 +2493,6 @@ private fun OneShotMarqueeText(
             )
             if (hasOverflow) {
                 Spacer(Modifier.width(sidePadding))
-                // A full viewport gap lets one copy leave to the left exactly as the next copy
-                // reaches the right edge, so repeated entrance remains continuous.
-                Spacer(Modifier.width((containerWidthPx / density.density).dp))
                 Text(
                     text = text,
                     color = color,
@@ -2483,13 +2503,14 @@ private fun OneShotMarqueeText(
                     overflow = TextOverflow.Clip,
                 )
                 Spacer(Modifier.width(sidePadding))
+                // Keep a trailing viewport so the scroll range can finish one full copy cycle.
                 Spacer(Modifier.width((containerWidthPx / density.density).dp))
             }
         }
     }
 }
 
-private fun marqueeDurationMs(distancePx: Int, density: Float, minimumMs: Int): Int =
+internal fun mediaMarqueeDurationMs(distancePx: Int, density: Float, minimumMs: Int): Int =
     ((distancePx.coerceAtLeast(1) / density.coerceAtLeast(0.1f)) /
         MUSIC_TEXT_MARQUEE_SPEED_DP_PER_SECOND * 1_000f)
         .roundToInt()

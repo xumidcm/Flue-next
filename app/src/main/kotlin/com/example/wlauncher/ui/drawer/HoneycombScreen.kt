@@ -115,7 +115,6 @@ fun HoneycombScreen(
     fisheyeStrengthPercent: Int = 100,
     materialHoneycombTopFisheyeEnabled: Boolean = false,
     edgeSpacingCompressionEnabled: Boolean = true,
-    twoToneIconsEnabled: Boolean = false,
     iconShadowEnabled: Boolean = true,
     themeColor: Color = Color(0xFF7BE8FF),
     uiStyle: UiStyle = UiStyle.APPLE_WATCH,
@@ -149,11 +148,11 @@ fun HoneycombScreen(
             apps = apps,
             blurEnabled = blurEnabled,
             edgeBlurEnabled = edgeBlurEnabled && !suppressHeavyEffects,
-            twoToneIconsEnabled = twoToneIconsEnabled,
             iconShadowEnabled = iconShadowEnabled,
             themeColor = themeColor,
             darkMode = darkMode,
-            columns = (narrowCols + 1).coerceIn(2, 6),
+            // 与原生网格同源：均匀网格的列数就是设置值，不再沿用蜂窝的 narrow+1。
+            columns = narrowCols.coerceIn(1, 6),
             topBlurRadiusDp = topBlurRadiusDp,
             bottomBlurRadiusDp = bottomBlurRadiusDp,
             topFadeRangeDp = topFadeRangeDp,
@@ -985,7 +984,6 @@ fun HoneycombScreen(
                     val effectiveItemBlur = itemBlur
                     AppBubble(
                         icon = app.iconForDisplay(
-                            useTwoTone = twoToneIconsEnabled,
                             blurred = blurEnabled &&
                                 effectiveEdgeBlur &&
                                 effectiveItemBlur > 0.5f &&
@@ -1097,7 +1095,6 @@ fun HoneycombScreen(
                 }
                 AppBubble(
                     icon = dragOverlayApp.iconForDisplay(
-                        useTwoTone = twoToneIconsEnabled,
                         blurred = blurEnabled && effectiveEdgeBlur && dragOverlayBlur > 0.5f && Build.VERSION.SDK_INT < Build.VERSION_CODES.S
                     ),
                     size = iconSizeDp,
@@ -1145,7 +1142,6 @@ fun HoneycombScreen(
             )
             AppBubble(
                 icon = settlingOverlayApp.iconForDisplay(
-                    useTwoTone = twoToneIconsEnabled,
                     blurred = blurEnabled && effectiveEdgeBlur && settlingBlur > 0.5f && Build.VERSION.SDK_INT < Build.VERSION_CODES.S
                 ),
                 size = iconSizeDp,
@@ -1240,7 +1236,6 @@ private fun MaterialDenseGridScreen(
     apps: List<AppInfo>,
     blurEnabled: Boolean,
     edgeBlurEnabled: Boolean,
-    twoToneIconsEnabled: Boolean,
     iconShadowEnabled: Boolean,
     themeColor: Color,
     darkMode: Boolean,
@@ -1846,14 +1841,10 @@ private fun MaterialDenseGridScreen(
                     app.cachedIcon,
                     app.cachedPlainIcon,
                     app.cachedPlainBlurredIcon,
-                    app.cachedPlainTwoToneIcon,
-                    app.cachedPlainTwoToneBlurredIcon,
                     app.cachedBlurredIcon,
-                    twoToneIconsEnabled,
                     usePreRenderedBlur,
                 ) {
                     app.plainIconForDisplay(
-                        useTwoTone = twoToneIconsEnabled,
                         blurred = usePreRenderedBlur,
                     )
                 }
@@ -1965,11 +1956,8 @@ private fun MaterialDenseGridScreen(
             val overlayIcon = remember(
                 dragOverlayApp.componentKey,
                 dragOverlayApp.cachedPlainIcon,
-                dragOverlayApp.cachedPlainTwoToneIcon,
-                twoToneIconsEnabled
             ) {
                 dragOverlayApp.plainIconForDisplay(
-                    useTwoTone = twoToneIconsEnabled,
                     blurred = false
                 )
             }
