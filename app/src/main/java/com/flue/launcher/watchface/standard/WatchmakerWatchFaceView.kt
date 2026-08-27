@@ -37,6 +37,13 @@ import com.flue.launcher.watchface.WatchFaceDescriptor
 import com.flue.launcher.ui.anim.createLegacyPrebuiltBlur
 import com.flue.launcher.ui.common.isFlueScreenRound
 import com.flue.launcher.watchface.editor.WatchCanvasSize
+import com.flue.launcher.watchface.editor.shape.WatchShapeKind
+import com.flue.launcher.watchface.editor.shape.buildWatchRoundedRectPath
+import com.flue.launcher.watchface.editor.shape.buildWatchRoundedRectPathIn
+import com.flue.launcher.watchface.editor.shape.buildWatchShapePath
+import com.flue.launcher.watchface.editor.shape.watchShapeClampCornerRadius
+import com.flue.launcher.watchface.editor.shape.watchShapeHasRoundedCorner
+import com.flue.launcher.watchface.editor.shape.watchShapeKindOf
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -2561,6 +2568,35 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
     }
 
     /**
+     * 求值 `shader` + `u_1..u_5`，造出挂到 Paint 上的渐变 / 颜色矩阵。
+     *
+     * 没有 shader 时返回 null，渲染路径零开销。`u_*` 允许挂表达式，所以数值与颜色
+     * 都通过 [dynamicNumber] / [resolveColor] 求值 —— 这也是为什么这一层要留在
+     * View 里，而纯数学放在 [buildWatchShapeShaderEffect]。
+     *
+     * 规范里只有 `shape` 与 `rounded` 支持 shader（`progress` 明确不支持），
+     * 所以只有那两条绘制路径调用它。
+     */
+    private fun resolveWatchShapeShader(
+        attrs: Map<String, String>,
+        width: Float,
+        height: Float,
+        source: PreparedSource,
+    ): WatchShapePaintEffect? {
+        val kind = watchShapeShaderKindOf(attrs["shader"])
+        if (kind == WatchShapeShaderKind.NONE) return null
+        val baseColor = resolveColor(attrs["color"], Color.WHITE, source)
+        return buildWatchShapeShaderEffect(
+            kind = kind,
+            width = width,
+            height = height,
+            baseColor = baseColor,
+            number = { key, fallback -> dynamicNumber(attrs[key], fallback, source) },
+            color = { key, fallback -> resolveColor(attrs[key], fallback, source) },
+        )
+    }
+
+    /**
      * 求值 outline/o_size/o_color/o_opacity 四个属性。没有描边（含尺寸或
      * 不透明度为 0）时返回 null，渲染路径零开销。o_size 经全局封顶
      * [MAX_WATCH_OUTLINE_SIZE] 收口，防恶意表盘拖帧。
@@ -3282,59 +3318,188 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         }
     }
 
+    /**
+     * `progress` —— 线性进度条。
+     *
+     * 以前这里只画「color3 全铺 + color 按百分比铺」两条圆角矩形，与规范差了 5 件事：
+     *
+     * 1. **`margin`**：规范原文是「The `color3` track and `color4` border are only drawn
+     *    when `margin` > 0」（`WM_FORMAT_1.0.md:219`）—— margin 为 0 时未填充区应当
+     *    **完全透明**。以前无条件画 color3，于是所有没写 margin 的进度条都多出一条
+     *    深灰底；反过来，写了 margin 的表盘又看不到 color4 边框。
+     * 2. **`corner_type`**：根本没读，永远四角全圆。
+     * 3. **`color2`**：填充段应当是 `color → color2` 的渐变（沿填充方向）。
+     * 4. **`angle`**：填充**轴向** —— 90 或缺省是横向左→右，0 / 180 是纵向下→上
+     *    （`WM_FORMAT_1.0.md:218`）。以前恒为横向，竖直进度条全画错。
+     * 5. **`end_style`**：前沿端头圆/平。
+     *
+     * 缺省值也一并对齐 clox `applyBox`（`wf_render.lua:1578-1585`）：
+     * `width` 120、`height` 24、`radius` 50、`corner_type` 1、`angle` 90。
+     */
     private fun drawProgress(canvas: Canvas, attrs: Map<String, String>, alpha: Float, source: PreparedSource) {
         val sharedSize = attrs["size"]
-        val width = dynamicNumber(attrs["width"] ?: sharedSize, 100f, source).coerceAtLeast(1f)
-        val height = dynamicNumber(attrs["height"] ?: sharedSize, 20f, source).coerceAtLeast(1f)
+        val width = dynamicNumber(attrs["width"] ?: sharedSize, 120f, source).coerceAtLeast(1f)
+        val height = dynamicNumber(attrs["height"] ?: sharedSize, 24f, source).coerceAtLeast(1f)
         val pct = dynamicNumber(attrs["pct_complete"], 0f, source).coerceIn(0f, 100f) / 100f
-        val radius = dynamicNumber(attrs["radius"], height / 2f, source).coerceAtLeast(0f).coerceAtMost(height / 2f)
-        val left = -width / 2f
-        val top = -height / 2f
-        shapePaint.color = resolveColor(attrs["color3"], Color.DKGRAY, source)
-        shapePaint.alpha = paintAlpha(alpha * dynamicNumber(attrs["outside_opacity"], 100f, source) / 100f)
-        canvas.drawRoundRect(left, top, left + width, top + height, radius, radius, shapePaint)
-        shapePaint.color = resolveColor(attrs["color"], Color.WHITE, source)
+        val margin = dynamicNumber(attrs["margin"], 0f, source).coerceAtLeast(0f)
+        val cornerType = dynamicNumber(attrs["corner_type"], 1f, source).toInt()
+        val radius = watchShapeClampCornerRadius(
+            dynamicNumber(attrs["radius"], 50f, source),
+            width,
+            height,
+        )
+        // angle 是轴向不是旋转：只有 0 / 180 才算纵向，别的值（含缺省 90）都按横向。
+        val angle = dynamicNumber(attrs["angle"], 90f, source)
+        val vertical = angle == 0f || angle == 180f
+        val outsideOpacity = dynamicNumber(attrs["outside_opacity"], 100f, source)
+            .coerceIn(0f, 100f) / 100f
+        val roundEnd = attrs["end_style"]?.trim()?.equals("round", ignoreCase = true) == true
+
+        if (!attrs["tap_action"].isNullOrBlank() || !attrs["action"].isNullOrBlank()) {
+            rectScratch.set(-width / 2f, -height / 2f, width / 2f, height / 2f)
+            recordTapTarget(canvas, rectScratch, attrs)
+        }
+
+        // ① margin > 0 才画边框与轨道。margin == 0 时未填充区完全透明。
+        val innerWidth = (width - margin * 2f).coerceAtLeast(0f)
+        val innerHeight = (height - margin * 2f).coerceAtLeast(0f)
+        if (margin > 0f) {
+            shapePaint.shader = null
+            shapePaint.color = resolveColor(attrs["color4"], Color.BLACK, source)
+            shapePaint.alpha = paintAlpha(alpha)
+            fillProgressBox(canvas, width, height, radius, cornerType)
+            if (innerWidth > 0f && innerHeight > 0f) {
+                shapePaint.color = resolveColor(attrs["color3"], Color.DKGRAY, source)
+                shapePaint.alpha = paintAlpha(alpha * outsideOpacity)
+                fillProgressBox(
+                    canvas,
+                    innerWidth,
+                    innerHeight,
+                    watchShapeClampCornerRadius(radius, innerWidth, innerHeight),
+                    cornerType,
+                )
+            }
+        }
+
+        if (innerWidth <= 0f || innerHeight <= 0f || pct <= 0f) {
+            shapePaint.shader = null
+            return
+        }
+
+        // ② 填充段：裁进内框的圆角轮廓，再按轴向铺一条 color→color2 渐变。
+        //    用 clip 而不是自己算「填充部分的圆角」——后者在 pct 很小时会算出比
+        //    半径还窄的角，画出来是个尖楔子。
+        val innerRadius = watchShapeClampCornerRadius(radius, innerWidth, innerHeight)
+        val startColor = resolveColor(attrs["color"], Color.WHITE, source)
+        val endColor = attrs["color2"]?.takeIf { it.isNotBlank() }
+            ?.let { resolveColor(it, startColor, source) } ?: startColor
+        canvas.save()
+        canvas.clipPath(
+            buildWatchRoundedRectPath(innerWidth, innerHeight, innerRadius, cornerType, pathScratch),
+        )
+        val fillLength = if (vertical) innerHeight * pct else innerWidth * pct
+        val left: Float
+        val top: Float
+        val right: Float
+        val bottom: Float
+        if (vertical) {
+            // 纵向从**下往上**长（规范 §7.6：0 / 180 = 从底部向上填充）。
+            left = -innerWidth / 2f
+            right = innerWidth / 2f
+            bottom = innerHeight / 2f
+            top = bottom - fillLength
+        } else {
+            left = -innerWidth / 2f
+            right = left + fillLength
+            top = -innerHeight / 2f
+            bottom = innerHeight / 2f
+        }
+        shapePaint.color = startColor
         shapePaint.alpha = paintAlpha(alpha)
-        canvas.drawRoundRect(left, top, left + width * pct, top + height, radius, radius, shapePaint)
+        shapePaint.shader = if (endColor != startColor) {
+            // 渐变只跨**已填充**那一段（规范：gradient spans the filled portion）。
+            android.graphics.LinearGradient(
+                if (vertical) 0f else left,
+                if (vertical) bottom else 0f,
+                if (vertical) 0f else right,
+                if (vertical) top else 0f,
+                startColor,
+                endColor,
+                android.graphics.Shader.TileMode.CLAMP,
+            )
+        } else {
+            null
+        }
+        if (roundEnd) {
+            // 前沿端头圆：整段按内半径倒圆，起始那侧被 clip 修回内框轮廓。
+            canvas.drawRoundRect(left, top, right, bottom, innerRadius, innerRadius, shapePaint)
+        } else {
+            canvas.drawRect(left, top, right, bottom, shapePaint)
+        }
+        shapePaint.shader = null
+        canvas.restore()
+    }
+
+    /** 按 `corner_type` 决定走圆角路径还是矩形快路径。 */
+    private fun fillProgressBox(
+        canvas: Canvas,
+        width: Float,
+        height: Float,
+        radius: Float,
+        cornerType: Int,
+    ) {
+        if (watchShapeHasRoundedCorner(cornerType, radius)) {
+            canvas.drawPath(
+                buildWatchRoundedRectPath(width, height, radius, cornerType, pathScratch),
+                shapePaint,
+            )
+        } else {
+            canvas.drawRect(-width / 2f, -height / 2f, width / 2f, height / 2f, shapePaint)
+        }
     }
 
     private fun drawShape(canvas: Canvas, attrs: Map<String, String>, alpha: Float, source: PreparedSource) {
         val sharedSize = attrs["size"]
         val width = dynamicNumber(attrs["width"] ?: sharedSize, 64f, source).coerceAtLeast(1f)
         val height = dynamicNumber(attrs["height"] ?: sharedSize, width, source).coerceAtLeast(1f)
-        val shape = attrs["shape"].orEmpty().lowercase(Locale.ROOT)
+        // 7 种合法字形统一走 WatchShapeGeometry。以前这里只认 circle / triangle，
+        // Star / Pentagon / Hexagon / Heart 全落到 else 分支画成矩形。
+        val kind = watchShapeKindOf(attrs["shape"])
         if (!attrs["tap_action"].isNullOrBlank() || !attrs["action"].isNullOrBlank()) {
             rectScratch.set(-width / 2f, -height / 2f, width / 2f, height / 2f)
             recordTapTarget(canvas, rectScratch, attrs)
         }
         // 描边通道：与文字同一规格，先 STROKE 环、后 FILL 本体（内半被填充盖住）。
         resolveOutline(attrs, source)?.let { outline ->
-            drawShapeOutline(canvas, shape, width, height, outline, alpha)
+            drawShapeOutline(canvas, kind, width, height, outline, alpha)
         }
         // 阴影在描边之上、本体之下（同文字：clox 描边 z=-2、阴影 z=-1）。
         resolveShadow(attrs, source)?.let { shadow ->
-            drawShapeShadow(canvas, shape, width, height, shadow, alpha)
+            drawShapeShadow(canvas, kind, width, height, shadow, alpha)
         }
         shapePaint.color = resolveColor(attrs["color"], Color.WHITE, source)
         shapePaint.alpha = paintAlpha(alpha)
-        when {
-            shape.contains("circle") -> canvas.drawOval(-width / 2f, -height / 2f, width / 2f, height / 2f, shapePaint)
-            shape.contains("triangle") -> {
-                pathScratch.reset()
-                pathScratch.moveTo(0f, -height / 2f)
-                pathScratch.lineTo(width / 2f, height / 2f)
-                pathScratch.lineTo(-width / 2f, height / 2f)
-                pathScratch.close()
-                canvas.drawPath(pathScratch, shapePaint)
-            }
-            else -> canvas.drawRect(-width / 2f, -height / 2f, width / 2f, height / 2f, shapePaint)
+        // shader 通道：GradientLinear / Rainbow / Progress… 共 11 种，直接挂在 Paint 上，
+        // 所以描边与阴影不受影响（它们用自己的 Paint），与规范「shader 只作用于填充」一致。
+        val shader = resolveWatchShapeShader(attrs, width, height, source)
+        shapePaint.shader = shader?.shader
+        shapePaint.colorFilter = shader?.colorFilter
+        if (kind == WatchShapeKind.CIRCLE) {
+            canvas.drawOval(-width / 2f, -height / 2f, width / 2f, height / 2f, shapePaint)
+        } else if (kind == WatchShapeKind.SQUARE) {
+            canvas.drawRect(-width / 2f, -height / 2f, width / 2f, height / 2f, shapePaint)
+        } else {
+            canvas.drawPath(buildWatchShapePath(kind, width, height, pathScratch), shapePaint)
         }
+        // Paint 是复用的实例，用完必须摘干净，否则下一层跟着套同一个渐变。
+        shapePaint.shader = null
+        shapePaint.colorFilter = null
     }
 
     /** shape 描边：硬描边一环 / Glow 多环，几何与本体完全一致。 */
     private fun drawShapeOutline(
         canvas: Canvas,
-        shape: String,
+        kind: WatchShapeKind,
         width: Float,
         height: Float,
         outline: ResolvedOutline,
@@ -3353,18 +3518,12 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
                 1f
             }
             outlinePaint.alpha = paintAlpha(alpha * outline.opacity * ringAlpha)
-            when {
-                shape.contains("circle") ->
-                    canvas.drawOval(-width / 2f, -height / 2f, width / 2f, height / 2f, outlinePaint)
-                shape.contains("triangle") -> {
-                    pathScratch.reset()
-                    pathScratch.moveTo(0f, -height / 2f)
-                    pathScratch.lineTo(width / 2f, height / 2f)
-                    pathScratch.lineTo(-width / 2f, height / 2f)
-                    pathScratch.close()
-                    canvas.drawPath(pathScratch, outlinePaint)
-                }
-                else -> canvas.drawRect(-width / 2f, -height / 2f, width / 2f, height / 2f, outlinePaint)
+            if (kind == WatchShapeKind.CIRCLE) {
+                canvas.drawOval(-width / 2f, -height / 2f, width / 2f, height / 2f, outlinePaint)
+            } else if (kind == WatchShapeKind.SQUARE) {
+                canvas.drawRect(-width / 2f, -height / 2f, width / 2f, height / 2f, outlinePaint)
+            } else {
+                canvas.drawPath(buildWatchShapePath(kind, width, height, pathScratch), outlinePaint)
             }
         }
     }
@@ -3379,7 +3538,7 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
      */
     private fun drawShapeShadow(
         canvas: Canvas,
-        shape: String,
+        kind: WatchShapeKind,
         width: Float,
         height: Float,
         shadow: ResolvedShadow,
@@ -3392,47 +3551,150 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
             val distance = watchShadowCopyDistance(shadow.mode, shadow.distance, copy)
             val dx = watchShadowOffsetX(distance, shadow.angleDegrees)
             val dy = watchShadowOffsetY(distance, shadow.angleDegrees)
-            when {
-                shape.contains("circle") -> canvas.drawOval(
+            if (kind == WatchShapeKind.CIRCLE) {
+                canvas.drawOval(
                     dx - width / 2f,
                     dy - height / 2f,
                     dx + width / 2f,
                     dy + height / 2f,
                     shadowPaint,
                 )
-                shape.contains("triangle") -> {
-                    pathScratch.reset()
-                    pathScratch.moveTo(dx, dy - height / 2f)
-                    pathScratch.lineTo(dx + width / 2f, dy + height / 2f)
-                    pathScratch.lineTo(dx - width / 2f, dy + height / 2f)
-                    pathScratch.close()
-                    canvas.drawPath(pathScratch, shadowPaint)
-                }
-                else -> canvas.drawRect(
+            } else if (kind == WatchShapeKind.SQUARE) {
+                canvas.drawRect(
                     dx - width / 2f,
                     dy - height / 2f,
                     dx + width / 2f,
                     dy + height / 2f,
+                    shadowPaint,
+                )
+            } else {
+                canvas.drawPath(
+                    buildWatchShapePath(kind, width, height, pathScratch, dx, dy),
                     shadowPaint,
                 )
             }
         }
     }
 
+    /**
+     * `rounded` —— 带 `corner_type` 的圆角矩形。
+     *
+     * 三处以前与上游不一致的地方：
+     * - **`corner_type` 根本没读**，永远四角全圆；规范 §7.12 那张 0..16 的表
+     *   （`WM_FORMAT_1.0.md:405-425`）决定哪几个角圆。
+     * - **`radius` 缺省算成 `min(w,h)/4`**，而 clox 是 `evalNum("radius", 0)`
+     *   （`wf_render.lua:1477`）—— 没写 radius 的图层本该是直角矩形。
+     * - **缺省宽高是 64×64**，clox 是 `width` 100 / `height` 60（`:1476`）。
+     * - **没有描边与阴影通道**，同为形状族的 `shape` 有 —— 同一张表盘换个图层类型
+     *   效果就没了。
+     */
     private fun drawRounded(canvas: Canvas, attrs: Map<String, String>, alpha: Float, source: PreparedSource) {
         val sharedSize = attrs["size"]
-        val width = dynamicNumber(attrs["width"] ?: sharedSize, 64f, source).coerceAtLeast(1f)
-        val height = dynamicNumber(attrs["height"] ?: sharedSize, 64f, source).coerceAtLeast(1f)
-        val radius = dynamicNumber(attrs["radius"], min(width, height) / 4f, source).coerceAtLeast(0f)
+        val width = dynamicNumber(attrs["width"] ?: sharedSize, 100f, source).coerceAtLeast(1f)
+        val height = dynamicNumber(attrs["height"] ?: sharedSize, 60f, source).coerceAtLeast(1f)
+        val radius = watchShapeClampCornerRadius(
+            dynamicNumber(attrs["radius"], 0f, source),
+            width,
+            height,
+        )
+        val cornerType = dynamicNumber(attrs["corner_type"], 1f, source).toInt()
         if (!attrs["tap_action"].isNullOrBlank() || !attrs["action"].isNullOrBlank()) {
             watchLayerTapBox("rounded", width, height)?.let { box ->
                 rectScratch.set(box.left, box.top, box.right, box.bottom)
                 recordTapTarget(canvas, rectScratch, attrs)
             }
         }
+        val rounded = watchShapeHasRoundedCorner(cornerType, radius)
+        resolveOutline(attrs, source)?.let { outline ->
+            drawRoundedOutline(canvas, width, height, radius, cornerType, rounded, outline, alpha)
+        }
+        resolveShadow(attrs, source)?.let { shadow ->
+            drawRoundedShadow(canvas, width, height, radius, cornerType, rounded, shadow, alpha)
+        }
         shapePaint.color = resolveColor(attrs["color"], Color.WHITE, source)
         shapePaint.alpha = paintAlpha(alpha)
-        canvas.drawRoundRect(-width / 2f, -height / 2f, width / 2f, height / 2f, radius, radius, shapePaint)
+        val shader = resolveWatchShapeShader(attrs, width, height, source)
+        shapePaint.shader = shader?.shader
+        shapePaint.colorFilter = shader?.colorFilter
+        if (rounded) {
+            canvas.drawPath(
+                buildWatchRoundedRectPath(width, height, radius, cornerType, pathScratch),
+                shapePaint,
+            )
+        } else {
+            canvas.drawRect(-width / 2f, -height / 2f, width / 2f, height / 2f, shapePaint)
+        }
+        shapePaint.shader = null
+        shapePaint.colorFilter = null
+    }
+
+    /** `rounded` 的描边：几何与本体完全一致，Glow 多环，与 [drawShapeOutline] 同规格。 */
+    private fun drawRoundedOutline(
+        canvas: Canvas,
+        width: Float,
+        height: Float,
+        radius: Float,
+        cornerType: Int,
+        rounded: Boolean,
+        outline: ResolvedOutline,
+        alpha: Float,
+    ) {
+        outlinePaint.style = Paint.Style.STROKE
+        outlinePaint.strokeJoin = Paint.Join.ROUND
+        outlinePaint.strokeCap = Paint.Cap.ROUND
+        outlinePaint.color = outline.color
+        val rings = if (outline.mode == WatchOutlineMode.GLOW) watchGlowRingCount(outline.size) else 1
+        for (ring in rings downTo 1) {
+            outlinePaint.strokeWidth = outline.size * 2f * ring / rings
+            val ringAlpha = if (outline.mode == WatchOutlineMode.GLOW) {
+                watchGlowRingAlpha(ring, rings)
+            } else {
+                1f
+            }
+            outlinePaint.alpha = paintAlpha(alpha * outline.opacity * ringAlpha)
+            if (rounded) {
+                canvas.drawPath(
+                    buildWatchRoundedRectPath(width, height, radius, cornerType, pathScratch),
+                    outlinePaint,
+                )
+            } else {
+                canvas.drawRect(-width / 2f, -height / 2f, width / 2f, height / 2f, outlinePaint)
+            }
+        }
+    }
+
+    /** `rounded` 的阴影：本体的实心偏移拷贝，与 [drawShapeShadow] 同规格。 */
+    private fun drawRoundedShadow(
+        canvas: Canvas,
+        width: Float,
+        height: Float,
+        radius: Float,
+        cornerType: Int,
+        rounded: Boolean,
+        shadow: ResolvedShadow,
+        alpha: Float,
+    ) {
+        shadowPaint.color = shadow.color
+        shadowPaint.alpha = paintAlpha(alpha * shadow.opacity)
+        for (copy in shadow.copies downTo 1) {
+            val distance = watchShadowCopyDistance(shadow.mode, shadow.distance, copy)
+            val dx = watchShadowOffsetX(distance, shadow.angleDegrees)
+            val dy = watchShadowOffsetY(distance, shadow.angleDegrees)
+            if (rounded) {
+                canvas.drawPath(
+                    buildWatchRoundedRectPath(width, height, radius, cornerType, pathScratch, dx, dy),
+                    shadowPaint,
+                )
+            } else {
+                canvas.drawRect(
+                    dx - width / 2f,
+                    dy - height / 2f,
+                    dx + width / 2f,
+                    dy + height / 2f,
+                    shadowPaint,
+                )
+            }
+        }
     }
 
     /**
@@ -3898,23 +4160,41 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
             val thickness = dynamicNumber(attrs["bar_thickness"], 72f, source)
                 .coerceIn(5f, 100f) / 100f
             val barWidth = (spacing * thickness).coerceAtLeast(1f)
+            // corner_type 是 0..16 的**枚举**（规范 §7.12 那张表），不是像素半径。
+            // 以前这里直接把它当半径用：corner_type="1"（四角全圆）画出来是 1px
+            // 圆角≈直角，corner_type="16"（四角全直）反而给了 16px 圆角，语义整个反了。
+            val cornerType = dynamicNumber(attrs["corner_type"], 0f, source).toInt()
+            // 枚举本身不带半径，柱状图按「半个柱宽」取上限做胶囊角，与上游 bar 的观感一致。
+            val barRadius = min(barWidth, height) / 2f
+            val rounded = watchShapeHasRoundedCorner(cornerType, barRadius)
             values.forEachIndexed { index, value ->
                 val cx = left + spacing * (index + 0.5f)
                 val y = yFor(value)
                 val baseline = yFor(minValue)
-                val radius = dynamicNumber(attrs["corner_type"], 0f, source)
-                    .coerceIn(0f, min(barWidth, height) / 2f)
                 shapePaint.color = color
                 shapePaint.alpha = paintAlpha(alpha)
-                canvas.drawRoundRect(
-                    cx - barWidth / 2f,
-                    min(y, baseline),
-                    cx + barWidth / 2f,
-                    max(y, baseline),
-                    radius,
-                    radius,
-                    shapePaint,
-                )
+                if (rounded) {
+                    canvas.drawPath(
+                        buildWatchRoundedRectPathIn(
+                            cx - barWidth / 2f,
+                            min(y, baseline),
+                            cx + barWidth / 2f,
+                            max(y, baseline),
+                            barRadius,
+                            cornerType,
+                            pathScratch,
+                        ),
+                        shapePaint,
+                    )
+                } else {
+                    canvas.drawRect(
+                        cx - barWidth / 2f,
+                        min(y, baseline),
+                        cx + barWidth / 2f,
+                        max(y, baseline),
+                        shapePaint,
+                    )
+                }
             }
             return
         }
@@ -5516,8 +5796,15 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         }
         if (intent == null) {
             val reason = (action as? WatchTapAction.Unsupported)?.reason
-                ?: "找不到应用 ${(action as? WatchTapAction.AppLaunch)?.packageName}"
-            Toast.makeText(context, "表盘点击动作不可用: $reason", Toast.LENGTH_SHORT).show()
+                ?: context.getString(
+                    R.string.watch_face_tap_missing_app_fmt,
+                    (action as? WatchTapAction.AppLaunch)?.packageName.orEmpty(),
+                )
+            Toast.makeText(
+                context,
+                context.getString(R.string.watch_face_tap_unavailable_fmt, reason),
+                Toast.LENGTH_SHORT,
+            ).show()
             return
         }
         // **先问 PackageManager**：`CATEGORY_APP_WEATHER` 这类类目在手表上经常没人声明，

@@ -249,11 +249,17 @@ import com.flue.launcher.watchface.editor.watchEditorSelectionBox
 import com.flue.launcher.watchface.editor.watchEditorViewPxFromDesign
 import com.flue.launcher.watchface.editor.conversion.WatchConversionResult
 import com.flue.launcher.watchface.editor.conversion.WatchFormatConverter
+import com.flue.launcher.watchface.editor.shape.WATCH_SHAPE_ATTRIBUTE_VALUES
+import com.flue.launcher.watchface.editor.shape.watchShapeCornerRadii
 import com.flue.launcher.watchface.standard.MAX_WATCH_OUTLINE_SIZE
 import com.flue.launcher.watchface.standard.PLAYABLE_VIDEO_EXTENSIONS
 import com.flue.launcher.watchface.standard.WATCHMAKER_ID_PREFIX
 import com.flue.launcher.watchface.standard.WatchFaceShape
 import com.flue.launcher.watchface.standard.WatchOutlineMode
+import com.flue.launcher.watchface.standard.WatchShapeShaderKind
+import com.flue.launcher.watchface.standard.watchShapeShaderAttributeValue
+import com.flue.launcher.watchface.standard.watchShapeShaderDefaults
+import com.flue.launcher.watchface.standard.watchShapeShaderKindOf
 import com.flue.launcher.watchface.standard.WatchmakerGeometry
 import com.flue.launcher.watchface.standard.WatchmakerWatchFaceStorage
 import com.flue.launcher.watchface.standard.WatchmakerWatchFaceStageView
@@ -548,7 +554,11 @@ private fun WatchEditorRoute(
         }
     }
 
-    val exportDocument = rememberLauncherForActivityResult(CreateDocument("application/zip")) { uri ->
+    // MIME 必须是 */*，不能是 application/zip：SAF 的 DocumentsUI 会用
+    // MimeTypeMap.getExtensionFromMimeType 反查扩展名，发现建议名的后缀和 MIME 不符就
+    // 自动追加，于是 xxx.watch 变成 xxx.watch.zip。换成 application/octet-stream 也不行
+    // （会追加 .bin）。*/* 查不到扩展名，才不会动我们给的文件名。
+    val exportDocument = rememberLauncherForActivityResult(CreateDocument("*/*")) { uri ->
         val active = session
         if (uri != null && active != null) {
             scope.launch {
@@ -5000,7 +5010,8 @@ private fun LayerPropertiesEditor(
         )
     }
     var expandedAttributePicker by remember(layer.key) { mutableStateOf<String?>(null) }
-    var colorPickerVisible by remember(layer.key) { mutableStateOf(false) }
+    // 六个颜色通道共用一个取色器，记住的是「正在给哪个属性取色」而不是布尔开关。
+    var colorPickerAttribute by remember(layer.key) { mutableStateOf<String?>(null) }
 
     fun liveValue(name: String, value: String): String? =
         if (value.isEmpty() && name != "text") null else value
@@ -5010,9 +5021,25 @@ private fun LayerPropertiesEditor(
             stringResource(R.string.watch_editor_layer_properties_fmt, localizedLayerType),
             fontWeight = FontWeight.SemiBold,
         )
+        // 分组标题的去重游标。形状族一层能有二十多个属性，平铺一长条在 230dp
+        // 圆屏上根本找不到东西，所以按「变换 / 几何 / 颜色 / 描边 / 阴影 / 着色器」分段。
+        var lastSectionHeader: Int? = null
         editableAttributes.forEach { attribute ->
+            attributeSectionHeaderRes(attribute)
+                ?.takeIf { it != lastSectionHeader }
+                ?.let { headerRes ->
+                    lastSectionHeader = headerRes
+                    Text(
+                        stringResource(headerRes),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Medium,
+                        modifier = Modifier.padding(top = 2.dp),
+                    )
+                }
+            val enumOptions = attributeEnumOptions(layer.type, attribute)
             val hasAnimationPicker = attribute == "anim_in" || attribute == "anim_out"
-            val hasColorPicker = attribute == "color"
+            val hasColorPicker = attribute in COLOR_ATTRIBUTES
             val hasExpressionPicker = attribute in WATCH_EXPRESSION_ATTRIBUTES && !hasColorPicker
             Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 OutlinedTextField(
@@ -5029,7 +5056,7 @@ private fun LayerPropertiesEditor(
                     },
                     modifier = Modifier.fillMaxWidth(),
                     enabled = enabled,
-                    label = { Text(stringResource(attributeLabelRes(attribute))) },
+                    label = { Text(stringResource(attributeLabelRes(layer.type, attribute))) },
                     singleLine = attribute != "text",
                     minLines = if (attribute == "text") 2 else 1,
                     keyboardOptions = KeyboardOptions(
@@ -5043,7 +5070,7 @@ private fun LayerPropertiesEditor(
                         hasColorPicker -> {
                             {
                                 IconButton(
-                                    onClick = { colorPickerVisible = true },
+                                    onClick = { colorPickerAttribute = attribute },
                                     enabled = enabled,
                                 ) {
                                     Box(
@@ -5059,7 +5086,7 @@ private fun LayerPropertiesEditor(
                                 }
                             }
                         }
-                        hasAnimationPicker || hasExpressionPicker -> {
+                        enumOptions != null || hasExpressionPicker -> {
                             {
                                 IconButton(
                                     onClick = {
@@ -5082,31 +5109,30 @@ private fun LayerPropertiesEditor(
                     },
                 )
                 if (expandedAttributePicker == attribute) {
-                    if (hasAnimationPicker) {
-                        InlineAnimationOptionsPanel(
+                    if (enumOptions != null) {
+                        InlineOptionsPanel(
+                            options = enumOptions,
                             selectedValue = drafts[attribute]?.text.orEmpty(),
                             enabled = enabled,
                             onSelect = { value ->
                                 val next = TextFieldValue(value, TextRange(value.length))
-                                if (attribute == "anim_in") {
-                                    val restart = if (value.isBlank()) "N" else "Y"
-                                    drafts = drafts + mapOf(
-                                        attribute to next,
-                                        "restart_on_load" to TextFieldValue(
-                                            restart,
-                                            TextRange(restart.length),
-                                        ),
+                                // 两处联动写入：anim_in 决定 restart_on_load；shader 要把
+                                // u_1..u_5 铺上缺省值，否则选了 GradientLinear 画面毫无变化，
+                                // 用户会以为着色器没生效。
+                                val companions: Map<String, String?> = when (attribute) {
+                                    "anim_in" -> mapOf(
+                                        "restart_on_load" to if (value.isBlank()) "N" else "Y",
                                     )
-                                    onLiveChange(
-                                        mapOf(
-                                            attribute to value.ifBlank { null },
-                                            "restart_on_load" to restart,
-                                        ),
-                                    )
-                                } else {
-                                    drafts = drafts + (attribute to next)
-                                    onLiveChange(mapOf(attribute to value.ifBlank { null }))
+                                    "shader" -> watchShaderCompanionAttributes(value)
+                                    else -> emptyMap()
                                 }
+                                drafts = drafts + (attribute to next) + companions.mapValues { (_, raw) ->
+                                    val text = raw.orEmpty()
+                                    TextFieldValue(text, TextRange(text.length))
+                                }
+                                onLiveChange(
+                                    mapOf(attribute to value.ifBlank { null }) + companions,
+                                )
                                 expandedAttributePicker = null
                             },
                         )
@@ -5170,16 +5196,16 @@ private fun LayerPropertiesEditor(
             )
         }
         // 颜色输入框右侧的色块直接打开取色器，并写回同一个 draft + live 通道。
-        if (colorPickerVisible) {
+        colorPickerAttribute?.let { target ->
             EditorColorPickerDialog(
-                initial = parseEditorHexColor(drafts["color"]?.text.orEmpty()) ?: Color.White,
-                onDismiss = { colorPickerVisible = false },
+                initial = parseEditorHexColor(drafts[target]?.text.orEmpty()) ?: Color.White,
+                onDismiss = { colorPickerAttribute = null },
                 onConfirm = { color ->
-                    colorPickerVisible = false
+                    colorPickerAttribute = null
                     val hex = editorColorToHex(color)
                     val newValue = TextFieldValue(hex, TextRange(hex.length))
-                    drafts = drafts + ("color" to newValue)
-                    onLiveChange(mapOf("color" to liveValue("color", hex)))
+                    drafts = drafts + (target to newValue)
+                    onLiveChange(mapOf(target to liveValue(target, hex)))
                 },
             )
         }
@@ -5390,8 +5416,14 @@ private fun ExpressionReferencePanel(
     }
 }
 
+/**
+ * 枚举属性的横向芯片行。原本只服务文字入场动画，现在形状 / 圆角位 / 着色器 /
+ * 端头 / 锚点 / 显示模式共用同一套：横向滚动比纵向列表省竖向空间，`corner_type`
+ * 那 17 个取值铺成一行也还能扫。
+ */
 @Composable
-private fun InlineAnimationOptionsPanel(
+private fun InlineOptionsPanel(
+    options: List<EditorEnumOption>,
     selectedValue: String,
     enabled: Boolean,
     onSelect: (String) -> Unit,
@@ -5407,18 +5439,36 @@ private fun InlineAnimationOptionsPanel(
                 .padding(6.dp),
             horizontalArrangement = Arrangement.spacedBy(6.dp),
         ) {
-            TEXT_ENTRY_ANIMATION_OPTIONS.forEach { (value, labelRes) ->
-                if (selectedValue == value) {
-                    Button(onClick = { onSelect(value) }, enabled = enabled) {
-                        Text(stringResource(labelRes))
+            options.forEach { option ->
+                val label = option.literalLabel
+                    ?: option.labelRes?.let { stringResource(it) }
+                    ?: option.value
+                if (selectedValue.equals(option.value, ignoreCase = true)) {
+                    Button(onClick = { onSelect(option.value) }, enabled = enabled) {
+                        Text(label)
                     }
                 } else {
-                    OutlinedButton(onClick = { onSelect(value) }, enabled = enabled) {
-                        Text(stringResource(labelRes))
+                    OutlinedButton(onClick = { onSelect(option.value) }, enabled = enabled) {
+                        Text(label)
                     }
                 }
             }
         }
+    }
+}
+
+/**
+ * 选中某个 `shader` 时要一并写下的 `u_*`。
+ *
+ * 缺省值取渲染器那份唯一的 [watchShapeShaderDefaults]（它照抄上游 `.fsh` 的
+ * uniform 初值），所以面板与渲染永远说的是同一套数。切成「无」时把五个 uniform
+ * 一起清掉 —— 留着会跟着下一个着色器被重新解释成别的意思。
+ */
+internal fun watchShaderCompanionAttributes(rawShader: String): Map<String, String?> {
+    val seeded = watchShapeShaderDefaults(watchShapeShaderKindOf(rawShader)).toMap()
+    return (1..5).associate { index ->
+        val name = "u_$index"
+        name to seeded[name]
     }
 }
 
@@ -6333,6 +6383,19 @@ internal fun defaultAttributes(
         put("x", "0")
         put("y", "0")
     }
+    // `rounded` 的四个必填项（上游 watchParser.js 的 LAYER_REQUIRED：
+    // width / height / radius / corner_type）一次写齐 —— 少一个上传就会被记账。
+    // 缺省宽高按 clox 的 applyBox（100×60），radius 给 12 是为了「插进来就看得出
+    // 是圆角矩形」；corner_type=1 是规范缺省（四角全圆）。
+    "rounded" -> mapOf(
+        "width" to "100",
+        "height" to "60",
+        "radius" to "12",
+        "corner_type" to "1",
+        "color" to WATCH_DEFAULT_COLOR,
+        "x" to "0",
+        "y" to "0",
+    )
     "image" -> mapOf("x" to "0", "y" to "0", "opacity" to "100")
     "image_gif" -> mapOf(
         "x" to "0",
@@ -6353,11 +6416,23 @@ internal fun defaultAttributes(
         "x" to "0",
         "y" to "0",
     )
+    // 规范 §7.4。写齐 radius / corner_type / margin / color3 / color4 五项，插进来
+    // 就是一条「药丸形、有底槽」的进度条 —— 也就是所有人心里「进度条」的样子。
+    //
+    // 关键在 margin：**只有 margin > 0 才画 color4 边框与 color3 底槽**。以前默认不写
+    // margin，插出来是一条没有底槽的裸色块，作者不看规范根本猜不到底槽开关在哪。
+    // radius 显式写 12（= height/2，正好是药丸形）而不是留空靠规范缺省 50：留空的话
+    // 面板里那一格是空的，而实际生效值是 50 —— 用户改不了自己看不见的数。
     "progress" -> mapOf(
         "width" to "240",
         "height" to "24",
         "pct_complete" to "50",
+        "radius" to "12",
+        "corner_type" to "1",
+        "margin" to "2",
         "color" to WATCH_DEFAULT_COLOR,
+        "color3" to "3a3a3c",
+        "color4" to "1c1c1e",
         "x" to "0",
         "y" to "0",
     )
@@ -6382,8 +6457,59 @@ internal fun defaultAttributes(
 /** 规范口径的白色：`hex RRGGBB`，小写、不带 `#`。见 [defaultAttributes] 的说明。 */
 internal const val WATCH_DEFAULT_COLOR: String = "ffffff"
 
+/**
+ * 属性的显示名。
+ *
+ * 按 [layerType] 分流是必需的，不是讲究：同一个属性名在不同图层上是**不同的东西** ——
+ * `ring` 的 `radius` 是端帽倒角（外半径叫 `radius_outer`），`rounded` / `progress` 的
+ * `radius` 才是圆角半径；`ring` 的 `angle` 是已填充角度，`progress` 的 `angle` 是填充
+ * 轴向。以前只按名字查表，写出来的标签有一半是错的。
+ */
 @StringRes
-private fun attributeLabelRes(name: String): Int = when (name) {
+internal fun attributeLabelRes(layerType: String, name: String): Int = when (name) {
+    "radius" -> if (layerType.equals("ring", ignoreCase = true)) {
+        R.string.watch_editor_attribute_cap_radius
+    } else {
+        R.string.watch_editor_attribute_radius
+    }
+    "angle" -> when {
+        layerType.equals("ring", ignoreCase = true) ->
+            R.string.watch_editor_attribute_ring_angle
+        layerType.equals("progress", ignoreCase = true) ->
+            R.string.watch_editor_attribute_progress_angle
+        else -> R.string.watch_editor_attribute_angle
+    }
+    "shape" -> R.string.watch_editor_attribute_shape
+    "width" -> R.string.watch_editor_attribute_width
+    "height" -> R.string.watch_editor_attribute_height
+    "corner_type" -> R.string.watch_editor_attribute_corner_type
+    "margin" -> R.string.watch_editor_attribute_margin
+    "pct_complete" -> R.string.watch_editor_attribute_pct_complete
+    "end_style" -> R.string.watch_editor_attribute_end_style
+    "outside_opacity" -> R.string.watch_editor_attribute_outside_opacity
+    "color2" -> R.string.watch_editor_attribute_color2
+    "color3" -> R.string.watch_editor_attribute_color3
+    "color4" -> R.string.watch_editor_attribute_color4
+    "outline" -> R.string.watch_editor_attribute_outline
+    "o_color" -> R.string.watch_editor_attribute_o_color
+    "o_size" -> R.string.watch_editor_attribute_o_size
+    "o_opacity" -> R.string.watch_editor_attribute_o_opacity
+    "shadow" -> R.string.watch_editor_attribute_shadow
+    "w_color" -> R.string.watch_editor_attribute_w_color
+    "w_distance" -> R.string.watch_editor_attribute_w_distance
+    "w_angle" -> R.string.watch_editor_attribute_w_angle
+    "w_opacity" -> R.string.watch_editor_attribute_w_opacity
+    "shader" -> R.string.watch_editor_attribute_shader
+    "u_1" -> R.string.watch_editor_attribute_u1
+    "u_2" -> R.string.watch_editor_attribute_u2
+    "u_3" -> R.string.watch_editor_attribute_u3
+    "u_4" -> R.string.watch_editor_attribute_u4
+    "u_5" -> R.string.watch_editor_attribute_u5
+    "radius_outer" -> R.string.watch_editor_attribute_radius_outer
+    "radius_inner" -> R.string.watch_editor_attribute_radius_inner
+    "angle_total" -> R.string.watch_editor_attribute_angle_total
+    "is_clockwise" -> R.string.watch_editor_attribute_is_clockwise
+    "display" -> R.string.watch_editor_attribute_display
     "x" -> R.string.watch_editor_attribute_x
     "y" -> R.string.watch_editor_attribute_y
     "rotation" -> R.string.watch_editor_attribute_rotation
@@ -6768,6 +6894,9 @@ private fun hasEditorBodySensorsPermission(context: Context): Boolean =
 private val BASIC_LAYER_TYPES = listOf(
     "text" to R.string.watch_editor_layer_text,
     "shape" to R.string.watch_editor_layer_shape,
+    // rounded 是规范 §7.12 的独立类型（不是 shape 的一个枚举值），而且是 corner_type
+    // 唯一真正用得上的地方。以前插不了，用户只能靠导入外来表盘才能拿到这种图层。
+    "rounded" to R.string.watch_editor_layer_rounded,
     "image" to R.string.watch_editor_layer_image,
     "image_gif" to R.string.watch_editor_layer_looping_background,
     "ring" to R.string.watch_editor_layer_ring,
@@ -6841,10 +6970,113 @@ private val TEXT_ANIMATION_ATTRIBUTES = listOf(
     "restart_on_load",
 )
 
-/** Attributes whose runtime value is parsed as WatchMaker text or a dynamic number/path. */
-private val WATCH_EXPRESSION_ATTRIBUTES = (
-    EDITABLE_ATTRIBUTES + TEXT_ANIMATION_ATTRIBUTES
-).toSet() - setOf("anim_in", "anim_out", "restart_on_load")
+/**
+ * 描边族。渲染器只在 `text` / 位图文字 / `shape` / `rounded` 上读它们
+ * （`resolveOutline` 的四个调用点），与 `WM_EFFECTS.md` §7 的支持矩阵一致 ——
+ * 所以别给 `ring` / `progress` 挂这一组，那会让面板承诺渲染器不做的事。
+ */
+private val OUTLINE_ATTRIBUTES = listOf("outline", "o_color", "o_size", "o_opacity")
+
+/** 阴影族。支持范围同 [OUTLINE_ATTRIBUTES]。 */
+private val SHADOW_ATTRIBUTES = listOf("shadow", "w_color", "w_distance", "w_angle", "w_opacity")
+
+/**
+ * 着色器族。`u_1..u_5` 的含义随 `shader` 变（见 `WM_EFFECTS.md` §3），
+ * 所以标签只能是通用的「着色器参数 u_n」。
+ *
+ * 只挂在 `shape` / `rounded` 上：这两个是 Flue 渲染器真正实现了 `shader` 的类型。
+ * 规范说 `progress` **不支持** shader；`text` / `image` / `ring` 支持但 Flue 还没做 ——
+ * 后者是渲染器缺口，不该先在面板上放出来。
+ */
+private val SHADER_ATTRIBUTES = listOf("shader", "u_1", "u_2", "u_3", "u_4", "u_5")
+
+/** `shape`（规范 §7.11）。 */
+internal val SHAPE_STYLE_ATTRIBUTES =
+    listOf("shape", "width", "height", "alignment", "display") +
+        OUTLINE_ATTRIBUTES + SHADOW_ATTRIBUTES + SHADER_ATTRIBUTES
+
+/** `rounded`（规范 §7.12）—— `corner_type` 唯一真正用得上的图层类型。 */
+internal val ROUNDED_STYLE_ATTRIBUTES =
+    listOf("width", "height", "radius", "corner_type", "alignment", "display") +
+        OUTLINE_ATTRIBUTES + SHADOW_ATTRIBUTES + SHADER_ATTRIBUTES
+
+/**
+ * `progress`（规范 §7.4）。
+ *
+ * `margin` 排在 `radius` 前面是有意的：**只有 margin > 0 才画 color4 边框与 color3
+ * 轨道**，所以「我的进度条没有底槽」这类问题的答案就在这一格，得让人先看到它。
+ */
+internal val PROGRESS_STYLE_ATTRIBUTES = listOf(
+    "width",
+    "height",
+    "pct_complete",
+    "angle",
+    "margin",
+    "radius",
+    "corner_type",
+    "end_style",
+    "color2",
+    "color3",
+    "color4",
+    "outside_opacity",
+    "alignment",
+    "display",
+)
+
+/**
+ * `ring`（规范 §7.3）。
+ *
+ * 这里的 `radius` 是**端帽倒角**，不是外半径 —— 外半径是 `radius_outer`。
+ * 渲染器把它夹在 `[0, 环厚/2]`，省略时取上限（经典半圆帽）。
+ */
+internal val RING_STYLE_ATTRIBUTES = listOf(
+    "radius_outer",
+    "radius_inner",
+    "angle_total",
+    "angle",
+    "is_clockwise",
+    "radius",
+    "end_style",
+    "color2",
+    "color3",
+    "outside_opacity",
+    "alignment",
+    "display",
+)
+
+/** 走取色器的属性。这些位置不给表达式入口 —— 色块本身就是最快的输入方式。 */
+internal val COLOR_ATTRIBUTES = setOf("color", "color2", "color3", "color4", "o_color", "w_color")
+
+/**
+ * 有固定取值表的属性名。这些位置的下拉槽位给枚举面板，不给表达式面板。
+ *
+ * 单独列一个 set 而不是去问 [attributeEnumOptions]，是因为后者按图层类型分流
+ * （`end_style` 在 `progress` 与 `ring` 上取值不同），而这里只需要「是不是枚举」。
+ */
+internal val ENUM_ATTRIBUTE_NAMES = setOf(
+    "shape",
+    "corner_type",
+    "outline",
+    "shadow",
+    "shader",
+    "end_style",
+    "is_clockwise",
+    "alignment",
+    "display",
+    "anim_in",
+    "anim_out",
+)
+
+/**
+ * 能挂 WatchMaker 表达式的属性 —— 输入框右侧给「插入变量」入口。
+ *
+ * 排除三类：枚举（槽位给枚举面板）、颜色（槽位给取色器）、以及
+ * `restart_on_load` 那种由 `anim_in` 联动写入的开关。
+ */
+internal val WATCH_EXPRESSION_ATTRIBUTES = (
+    EDITABLE_ATTRIBUTES + TEXT_ANIMATION_ATTRIBUTES + SHAPE_STYLE_ATTRIBUTES +
+        ROUNDED_STYLE_ATTRIBUTES + PROGRESS_STYLE_ATTRIBUTES + RING_STYLE_ATTRIBUTES
+).toSet() - setOf("restart_on_load") - ENUM_ATTRIBUTE_NAMES - COLOR_ATTRIBUTES
 
 private val TEXT_ENTRY_ANIMATION_OPTIONS = listOf(
     "" to R.string.watch_editor_none,
@@ -6857,15 +7089,152 @@ private val TEXT_ENTRY_ANIMATION_OPTIONS = listOf(
     "ZoomOut" to R.string.watch_editor_animation_zoom_out,
     "Spin" to R.string.watch_editor_animation_spin,
 )
-private fun editableAttributesFor(type: String): List<String> = buildList {
+internal fun editableAttributesFor(type: String): List<String> = buildList {
     addAll(EDITABLE_ATTRIBUTES)
     when (type.lowercase(Locale.ROOT)) {
         "gif", "image_gif" -> add("gif_delay")
         "text", "text_curved" -> addAll(TEXT_ANIMATION_ATTRIBUTES)
+        // 形状族四种：渲染器早就读这些属性了，以前面板一个都不给，作者只能靠
+        // 导入外来表盘或手写 XML 才能碰到 corner_type / shader / margin 这些。
+        "shape" -> addAll(SHAPE_STYLE_ATTRIBUTES)
+        "rounded" -> addAll(ROUNDED_STYLE_ATTRIBUTES)
+        "progress" -> addAll(PROGRESS_STYLE_ATTRIBUTES)
+        "ring" -> addAll(RING_STYLE_ATTRIBUTES)
     }
 }
 
-private val NUMERIC_ATTRIBUTES = setOf(
+/** 枚举选项：写进 XML 的值 + 显示名。显示名可以是资源，也可以是与语言无关的字面量。 */
+internal data class EditorEnumOption(
+    val value: String,
+    @StringRes val labelRes: Int? = null,
+    val literalLabel: String? = null,
+)
+
+/**
+ * 某个属性的固定取值表；返回 null 表示这不是枚举属性。
+ *
+ * **写进 XML 的值一律保持规范原样大小写**（`Square` / `Outline` / `GradientLinear`…）。
+ * Flue 自己读的时候会 lowercase，但别的渲染器是拿原值去拼 `shape_<小写>.png`
+ * 这类查表键的 —— 写成小写就整层不显示。这条坑 [defaultAttributes] 的注释里
+ * 已经踩过一次。
+ *
+ * 按 [layerType] 分流是因为 `end_style` 在 `progress` 与 `ring` 上取值不同。
+ */
+internal fun attributeEnumOptions(
+    layerType: String,
+    name: String,
+): List<EditorEnumOption>? = when (name) {
+    "anim_in", "anim_out" -> TEXT_ENTRY_ANIMATION_OPTIONS.map { (value, labelRes) ->
+        EditorEnumOption(value, labelRes = labelRes)
+    }
+    "shape" -> WATCH_SHAPE_ATTRIBUTE_VALUES.map { value ->
+        EditorEnumOption(value, labelRes = watchShapeKindLabelRes(value))
+    }
+    "corner_type" -> (0..16).map { type ->
+        EditorEnumOption(type.toString(), literalLabel = cornerTypeChipLabel(type))
+    }
+    "outline" -> listOf(
+        EditorEnumOption("", labelRes = R.string.watch_editor_none),
+        EditorEnumOption("Outline", labelRes = R.string.watch_editor_attribute_outline_stroke),
+        EditorEnumOption("Glow", labelRes = R.string.watch_editor_attribute_outline_glow),
+    )
+    "shadow" -> listOf(
+        EditorEnumOption("", labelRes = R.string.watch_editor_none),
+        EditorEnumOption("Drop", labelRes = R.string.watch_editor_attribute_shadow_drop),
+        EditorEnumOption("Flat", labelRes = R.string.watch_editor_attribute_shadow_flat),
+    )
+    // 着色器名不翻译：GradientLinear 这类是规范里的专有名字，每份教程、每个
+    // 编辑器都这么写，译成中文反而对不上文档。
+    "shader" -> WatchShapeShaderKind.entries.map { kind ->
+        if (kind == WatchShapeShaderKind.NONE) {
+            EditorEnumOption("", labelRes = R.string.watch_editor_none)
+        } else {
+            val value = watchShapeShaderAttributeValue(kind)
+            EditorEnumOption(value, literalLabel = value)
+        }
+    }
+    "end_style" -> if (layerType.equals("ring", ignoreCase = true)) {
+        // ring 省略 end_style 时是半圆帽；butt = 平、square = 方。
+        listOf(
+            EditorEnumOption("", labelRes = R.string.watch_editor_attribute_cap_round),
+            EditorEnumOption("butt", labelRes = R.string.watch_editor_attribute_cap_butt),
+            EditorEnumOption("square", labelRes = R.string.watch_editor_attribute_cap_square),
+        )
+    } else {
+        // progress 的规范取值是 round / flat，缺省 flat。
+        listOf(
+            EditorEnumOption("", labelRes = R.string.watch_editor_attribute_cap_butt),
+            EditorEnumOption("round", labelRes = R.string.watch_editor_attribute_cap_round),
+            EditorEnumOption("flat", labelRes = R.string.watch_editor_attribute_cap_butt),
+        )
+    }
+    "is_clockwise" -> listOf(
+        EditorEnumOption("Y", labelRes = R.string.watch_editor_attribute_clockwise),
+        EditorEnumOption("N", labelRes = R.string.watch_editor_attribute_counter_clockwise),
+    )
+    // 九个锚点用规范自己的两字母代码。译成「左上／上中／…」会让这一行在 230dp
+    // 圆屏上宽出三倍，而 tl/tc/tr 本身就是文档、教程里通用的写法。
+    "alignment" -> listOf("tl", "tc", "tr", "cl", "cc", "cr", "bl", "bc", "br").map { code ->
+        EditorEnumOption(code, literalLabel = code)
+    }
+    "display" -> listOf(
+        EditorEnumOption("", labelRes = R.string.watch_editor_attribute_display_default),
+        EditorEnumOption("b", labelRes = R.string.watch_editor_attribute_display_bright),
+        EditorEnumOption("d", labelRes = R.string.watch_editor_attribute_display_dim),
+        EditorEnumOption("bd", labelRes = R.string.watch_editor_attribute_display_both),
+    )
+    else -> null
+}
+
+@StringRes
+private fun watchShapeKindLabelRes(value: String): Int = when (value) {
+    "Square" -> R.string.watch_editor_shape_kind_square
+    "Circle" -> R.string.watch_editor_shape_kind_circle
+    "Triangle" -> R.string.watch_editor_shape_kind_triangle
+    "Pentagon" -> R.string.watch_editor_shape_kind_pentagon
+    "Hexagon" -> R.string.watch_editor_shape_kind_hexagon
+    "Star" -> R.string.watch_editor_shape_kind_star
+    "Heart" -> R.string.watch_editor_shape_kind_heart
+    else -> R.string.watch_editor_attribute_unknown
+}
+
+/**
+ * `corner_type` 的芯片文案：值 + 被倒圆的角，例如 `6 · TL TR`、`0 · —`。
+ *
+ * 直接从 [watchShapeCornerRadii] 反推，不另写一张 17 行的对照表 —— 那张表在
+ * 渲染器里已经有唯一一份，抄第二遍就会漂。`TL/TR/BL/BR` 也正是规范 §7.12
+ * 那张表的列名，所以这串文案不需要翻译。
+ */
+internal fun cornerTypeChipLabel(cornerType: Int): String {
+    val radii = watchShapeCornerRadii(cornerType, 1f)
+    // addRoundRect 的数组顺序是 TL,TL, TR,TR, BR,BR, BL,BL。
+    val rounded = buildList {
+        if (radii[0] > 0f) add("TL")
+        if (radii[2] > 0f) add("TR")
+        if (radii[6] > 0f) add("BL")
+        if (radii[4] > 0f) add("BR")
+    }
+    return "$cornerType · " + rounded.joinToString(" ").ifEmpty { "—" }
+}
+
+/**
+ * 分组标题：在这个属性之前插一条小标题。相邻重复的标题由调用方去重，
+ * 所以 `shape` 与 `width` 都指向「几何与样式」也不会画出两条。
+ */
+@StringRes
+private fun attributeSectionHeaderRes(name: String): Int? = when (name) {
+    "x" -> R.string.watch_editor_section_transform
+    "shape", "width", "radius_outer" -> R.string.watch_editor_section_geometry
+    "color2" -> R.string.watch_editor_section_colors
+    "outline" -> R.string.watch_editor_section_outline
+    "shadow" -> R.string.watch_editor_section_shadow
+    "shader" -> R.string.watch_editor_section_shader
+    "alignment" -> R.string.watch_editor_section_anchor
+    "anim_in" -> R.string.watch_editor_section_text_animation
+    else -> null
+}
+
+internal val NUMERIC_ATTRIBUTES = setOf(
     "x",
     "y",
     "rotation",
@@ -6881,6 +7250,29 @@ private val NUMERIC_ATTRIBUTES = setOf(
     "dur_off",
     "delay_start",
     "repeat_count",
+    // 形状族的纯几何 / 效果数值。
+    //
+    // 刻意**不**收 `angle` 与 `pct_complete`：整份格式里最常被写成表达式的就是这两个
+    // （`angle="{dh}*30"`、`pct_complete="{hp}"`），给它们上数字键盘等于让人打不出
+    // 花括号。它们仍有 fx 入口，键盘留 Text。
+    "width",
+    "height",
+    "radius",
+    "corner_type",
+    "margin",
+    "outside_opacity",
+    "radius_outer",
+    "radius_inner",
+    "angle_total",
+    "o_size",
+    "o_opacity",
+    "w_distance",
+    "w_angle",
+    "w_opacity",
+    // u_1 / u_2 在两种渐变里是十六进制颜色，不能锁数字键盘；u_3..u_5 恒为数值。
+    "u_3",
+    "u_4",
+    "u_5",
 )
 
 /** 有文字渲染路径、应展示字体选择器的图层类型。 */

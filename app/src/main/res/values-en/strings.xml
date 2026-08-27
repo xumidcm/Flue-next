@@ -737,6 +737,8 @@
     <string name="backup_summary_none">None</string>
     <string name="wf_tools_promo">For more advanced watch face editing, get “WFTools”</string>
     <string name="wf_tools_no_browser_fmt">No browser found. Please visit %1$s manually.</string>
+    <string name="watch_face_tap_unavailable_fmt">Watch face tap action unavailable: %1$s</string>
+    <string name="watch_face_tap_missing_app_fmt">App not found: %1$s</string>
     <string name="backup_share_title">Share settings backup</string>
     <string name="backup_export_detail_sections_fmt">Contents: %1$s</string>
     <string name="backup_export_detail_size_fmt">Size: %1$s</string>
@@ -1605,4 +1607,79 @@
     <string name="watch_editor_script_bytes_fmt">UTF-8: %1$d / %2$d bytes</string>
     <string name="watch_editor_script_too_large">The script exceeds 256 KiB. Shorten it before saving.</string>
     <string name="watch_editor_status_saving_script">Saving global script</string>
+    <!-- Rounded rectangle layer -->
+    <string name="watch_editor_layer_rounded">Rounded rectangle</string>
+
+
+
+
+
+
+
+
+    <!-- Shape family property panel -->
+    <string name="watch_editor_section_transform">Position and transform</string>
+    <string name="watch_editor_section_geometry">Geometry and style</string>
+    <string name="watch_editor_section_colors">Color channels</string>
+    <string name="watch_editor_section_outline">Outline</string>
+    <string name="watch_editor_section_shadow">Shadow</string>
+    <string name="watch_editor_section_shader">Shader</string>
+    <string name="watch_editor_section_anchor">Anchor and visibility</string>
+    <string name="watch_editor_section_text_animation">Text animation</string>
+    <string name="watch_editor_attribute_shape">Shape</string>
+    <string name="watch_editor_attribute_width">Width</string>
+    <string name="watch_editor_attribute_height">Height</string>
+    <string name="watch_editor_attribute_radius">Corner radius</string>
+    <string name="watch_editor_attribute_cap_radius">End cap rounding</string>
+    <string name="watch_editor_attribute_corner_type">Rounded corners</string>
+    <string name="watch_editor_attribute_margin">Border margin (track needs more than 0)</string>
+    <string name="watch_editor_attribute_angle">Angle</string>
+    <string name="watch_editor_attribute_ring_angle">Filled angle</string>
+    <string name="watch_editor_attribute_progress_angle">Fill axis (0/180 vertical, 90 horizontal)</string>
+    <string name="watch_editor_attribute_angle_total">Total angle</string>
+    <string name="watch_editor_attribute_pct_complete">Progress percentage</string>
+    <string name="watch_editor_attribute_end_style">End cap style</string>
+    <string name="watch_editor_attribute_outside_opacity">Unfilled opacity</string>
+    <string name="watch_editor_attribute_color2">Color 2 Â· gradient end</string>
+    <string name="watch_editor_attribute_color3">Color 3 Â· track</string>
+    <string name="watch_editor_attribute_color4">Color 4 Â· border</string>
+    <string name="watch_editor_attribute_outline">Outline mode</string>
+    <string name="watch_editor_attribute_o_color">Outline color</string>
+    <string name="watch_editor_attribute_o_size">Outline size</string>
+    <string name="watch_editor_attribute_o_opacity">Outline opacity</string>
+    <string name="watch_editor_attribute_shadow">Shadow mode</string>
+    <string name="watch_editor_attribute_w_color">Shadow color</string>
+    <string name="watch_editor_attribute_w_distance">Shadow distance</string>
+    <string name="watch_editor_attribute_w_angle">Shadow angle</string>
+    <string name="watch_editor_attribute_w_opacity">Shadow opacity</string>
+    <string name="watch_editor_attribute_shader">Shader</string>
+    <string name="watch_editor_attribute_u1">Shader uniform u_1</string>
+    <string name="watch_editor_attribute_u2">Shader uniform u_2</string>
+    <string name="watch_editor_attribute_u3">Shader uniform u_3</string>
+    <string name="watch_editor_attribute_u4">Shader uniform u_4</string>
+    <string name="watch_editor_attribute_u5">Shader uniform u_5</string>
+    <string name="watch_editor_attribute_radius_outer">Outer radius</string>
+    <string name="watch_editor_attribute_radius_inner">Inner radius</string>
+    <string name="watch_editor_attribute_is_clockwise">Direction</string>
+    <string name="watch_editor_attribute_display">Display mode</string>
+    <string name="watch_editor_attribute_outline_stroke">Outline</string>
+    <string name="watch_editor_attribute_outline_glow">Glow</string>
+    <string name="watch_editor_attribute_shadow_drop">Drop</string>
+    <string name="watch_editor_attribute_shadow_flat">Flat</string>
+    <string name="watch_editor_attribute_cap_round">Round</string>
+    <string name="watch_editor_attribute_cap_butt">Flat</string>
+    <string name="watch_editor_attribute_cap_square">Square</string>
+    <string name="watch_editor_attribute_clockwise">Clockwise</string>
+    <string name="watch_editor_attribute_counter_clockwise">Counter-clockwise</string>
+    <string name="watch_editor_attribute_display_default">Default</string>
+    <string name="watch_editor_attribute_display_bright">Bright only</string>
+    <string name="watch_editor_attribute_display_dim">Dim only</string>
+    <string name="watch_editor_attribute_display_both">Bright and dim</string>
+    <string name="watch_editor_shape_kind_square">Square</string>
+    <string name="watch_editor_shape_kind_circle">Circle</string>
+    <string name="watch_editor_shape_kind_triangle">Triangle</string>
+    <string name="watch_editor_shape_kind_pentagon">Pentagon</string>
+    <string name="watch_editor_shape_kind_hexagon">Hexagon</string>
+    <string name="watch_editor_shape_kind_star">Star</string>
+    <string name="watch_editor_shape_kind_heart">Heart</string>
 </resources>

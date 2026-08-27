@@ -754,6 +754,8 @@
     <string name="backup_summary_none">无</string>
     <string name="wf_tools_promo">欲获得更专业的表盘编辑能力，请下载「WFTools」</string>
     <string name="wf_tools_no_browser_fmt">未找到浏览器，请手动访问 %1$s</string>
+    <string name="watch_face_tap_unavailable_fmt">表盘点击动作不可用：%1$s</string>
+    <string name="watch_face_tap_missing_app_fmt">找不到应用 %1$s</string>
     <string name="backup_share_title">分享配置备份</string>
     <string name="backup_export_detail_sections_fmt">内容：%1$s</string>
     <string name="backup_export_detail_size_fmt">大小：%1$s</string>
@@ -1636,4 +1638,81 @@
     <string name="internal_file_browser_pick_conversion">选择要转换的表盘</string>
     <string name="watch_face_loading">表盘加载中</string>
     <string name="watch_face_loading_fallback">切换默认表盘并重启</string>
+    <!-- ═══ 圆角矩形图层 ═══ -->
+    <string name="watch_editor_layer_rounded">圆角矩形</string>
+
+    <!-- corner_type 0..16（规范 §7.12） -->
+
+    <!-- shape 的 7 个合法值 -->
+
+
+
+
+
+
+    <!-- âââ å½¢ç¶æå±æ§é¢æ¿ âââ -->
+    <string name="watch_editor_section_transform">ä½ç½®ä¸åæ¢</string>
+    <string name="watch_editor_section_geometry">å ä½ä¸æ ·å¼</string>
+    <string name="watch_editor_section_colors">é¢è²éé</string>
+    <string name="watch_editor_section_outline">æè¾¹</string>
+    <string name="watch_editor_section_shadow">é´å½±</string>
+    <string name="watch_editor_section_shader">çè²å¨</string>
+    <string name="watch_editor_section_anchor">éç¹ä¸æ¾ç¤º</string>
+    <string name="watch_editor_section_text_animation">æå­å¨ç»</string>
+    <string name="watch_editor_attribute_shape">å½¢ç¶</string>
+    <string name="watch_editor_attribute_width">å®½åº¦</string>
+    <string name="watch_editor_attribute_height">é«åº¦</string>
+    <string name="watch_editor_attribute_radius">åè§åå¾</string>
+    <string name="watch_editor_attribute_cap_radius">ç«¯å¸½åè§</string>
+    <string name="watch_editor_attribute_corner_type">åè§ä½ç½®</string>
+    <string name="watch_editor_attribute_margin">è¾¹æ¡çç½ï¼å¤§äº 0 æç»åºæ§½ï¼</string>
+    <string name="watch_editor_attribute_angle">è§åº¦</string>
+    <string name="watch_editor_attribute_ring_angle">å·²å¡«åè§åº¦</string>
+    <string name="watch_editor_attribute_progress_angle">å¡«åè½´åï¼0/180 ç«ï¼90 æ¨ªï¼</string>
+    <string name="watch_editor_attribute_angle_total">æ»è§åº¦</string>
+    <string name="watch_editor_attribute_pct_complete">å®æç¾åæ¯</string>
+    <string name="watch_editor_attribute_end_style">ç«¯å¤´æ ·å¼</string>
+    <string name="watch_editor_attribute_outside_opacity">æªå¡«åä¸éæåº¦</string>
+    <string name="watch_editor_attribute_color2">é¢è² 2 Â· æ¸åç»ç¹</string>
+    <string name="watch_editor_attribute_color3">é¢è² 3 Â· åºæ§½</string>
+    <string name="watch_editor_attribute_color4">é¢è² 4 Â· è¾¹æ¡</string>
+    <string name="watch_editor_attribute_outline">æè¾¹æ¨¡å¼</string>
+    <string name="watch_editor_attribute_o_color">æè¾¹é¢è²</string>
+    <string name="watch_editor_attribute_o_size">æè¾¹ç²ç»</string>
+    <string name="watch_editor_attribute_o_opacity">æè¾¹ä¸éæåº¦</string>
+    <string name="watch_editor_attribute_shadow">é´å½±æ¨¡å¼</string>
+    <string name="watch_editor_attribute_w_color">é´å½±é¢è²</string>
+    <string name="watch_editor_attribute_w_distance">é´å½±è·ç¦»</string>
+    <string name="watch_editor_attribute_w_angle">é´å½±è§åº¦</string>
+    <string name="watch_editor_attribute_w_opacity">é´å½±ä¸éæåº¦</string>
+    <string name="watch_editor_attribute_shader">çè²å¨</string>
+    <string name="watch_editor_attribute_u1">çè²å¨åæ° u_1</string>
+    <string name="watch_editor_attribute_u2">çè²å¨åæ° u_2</string>
+    <string name="watch_editor_attribute_u3">çè²å¨åæ° u_3</string>
+    <string name="watch_editor_attribute_u4">çè²å¨åæ° u_4</string>
+    <string name="watch_editor_attribute_u5">çè²å¨åæ° u_5</string>
+    <string name="watch_editor_attribute_radius_outer">å¤åå¾</string>
+    <string name="watch_editor_attribute_radius_inner">ååå¾</string>
+    <string name="watch_editor_attribute_is_clockwise">æ¹å</string>
+    <string name="watch_editor_attribute_display">æ¾ç¤ºæ¨¡å¼</string>
+    <string name="watch_editor_attribute_outline_stroke">æè¾¹</string>
+    <string name="watch_editor_attribute_outline_glow">åå</string>
+    <string name="watch_editor_attribute_shadow_drop">æå½±</string>
+    <string name="watch_editor_attribute_shadow_flat">å¹³éº</string>
+    <string name="watch_editor_attribute_cap_round">åå¤´</string>
+    <string name="watch_editor_attribute_cap_butt">å¹³å¤´</string>
+    <string name="watch_editor_attribute_cap_square">æ¹å¤´</string>
+    <string name="watch_editor_attribute_clockwise">é¡ºæ¶é</string>
+    <string name="watch_editor_attribute_counter_clockwise">éæ¶é</string>
+    <string name="watch_editor_attribute_display_default">é»è®¤</string>
+    <string name="watch_editor_attribute_display_bright">ä»äº®å±</string>
+    <string name="watch_editor_attribute_display_dim">ä»æ¯å±</string>
+    <string name="watch_editor_attribute_display_both">äº®å±ä¸æ¯å±</string>
+    <string name="watch_editor_shape_kind_square">æ¹å½¢</string>
+    <string name="watch_editor_shape_kind_circle">åå½¢</string>
+    <string name="watch_editor_shape_kind_triangle">ä¸è§å½¢</string>
+    <string name="watch_editor_shape_kind_pentagon">äºè¾¹å½¢</string>
+    <string name="watch_editor_shape_kind_hexagon">å­è¾¹å½¢</string>
+    <string name="watch_editor_shape_kind_star">æå½¢</string>
+    <string name="watch_editor_shape_kind_heart">å¿å½¢</string>
 </resources>

@@ -737,6 +737,8 @@
     <string name="backup_summary_none">なし</string>
     <string name="wf_tools_promo">より高度な文字盤編集には「WFTools」をご利用ください</string>
     <string name="wf_tools_no_browser_fmt">ブラウザが見つかりません。%1$s を手動で開いてください。</string>
+    <string name="watch_face_tap_unavailable_fmt">文字盤のタップ操作を実行できません: %1$s</string>
+    <string name="watch_face_tap_missing_app_fmt">アプリが見つかりません: %1$s</string>
     <string name="backup_share_title">設定バックアップを共有</string>
     <string name="backup_export_detail_sections_fmt">内容：%1$s</string>
     <string name="backup_export_detail_size_fmt">サイズ：%1$s</string>
@@ -1605,4 +1607,79 @@
     <string name="watch_editor_script_bytes_fmt">UTF-8：%1$d / %2$d バイト</string>
     <string name="watch_editor_script_too_large">スクリプトが 256 KiB を超えています。短くしてから保存してください。</string>
     <string name="watch_editor_status_saving_script">グローバルスクリプトを保存中</string>
+    <!-- Rounded rectangle layer -->
+    <string name="watch_editor_layer_rounded">角丸長方形</string>
+
+
+
+
+
+
+
+
+    <!-- Shape family property panel -->
+    <string name="watch_editor_section_transform">位置と変形</string>
+    <string name="watch_editor_section_geometry">形状とスタイル</string>
+    <string name="watch_editor_section_colors">カラーチャンネル</string>
+    <string name="watch_editor_section_outline">縁取り</string>
+    <string name="watch_editor_section_shadow">影</string>
+    <string name="watch_editor_section_shader">シェーダー</string>
+    <string name="watch_editor_section_anchor">アンカーと表示</string>
+    <string name="watch_editor_section_text_animation">文字アニメーション</string>
+    <string name="watch_editor_attribute_shape">形状</string>
+    <string name="watch_editor_attribute_width">幅</string>
+    <string name="watch_editor_attribute_height">高さ</string>
+    <string name="watch_editor_attribute_radius">角丸半径</string>
+    <string name="watch_editor_attribute_cap_radius">端の丸み</string>
+    <string name="watch_editor_attribute_corner_type">角丸の位置</string>
+    <string name="watch_editor_attribute_margin">枠の余白（0 より大きい場合にトラックを描画）</string>
+    <string name="watch_editor_attribute_angle">角度</string>
+    <string name="watch_editor_attribute_ring_angle">充填角度</string>
+    <string name="watch_editor_attribute_progress_angle">充填軸（0/180 は縦、90 は横）</string>
+    <string name="watch_editor_attribute_angle_total">全体の角度</string>
+    <string name="watch_editor_attribute_pct_complete">進捗率</string>
+    <string name="watch_editor_attribute_end_style">端のスタイル</string>
+    <string name="watch_editor_attribute_outside_opacity">未充填の不透明度</string>
+    <string name="watch_editor_attribute_color2">色2 · グラデーション終点</string>
+    <string name="watch_editor_attribute_color3">色3 · トラック</string>
+    <string name="watch_editor_attribute_color4">色4 · 枠</string>
+    <string name="watch_editor_attribute_outline">縁取りモード</string>
+    <string name="watch_editor_attribute_o_color">縁の色</string>
+    <string name="watch_editor_attribute_o_size">縁の太さ</string>
+    <string name="watch_editor_attribute_o_opacity">縁の不透明度</string>
+    <string name="watch_editor_attribute_shadow">影のモード</string>
+    <string name="watch_editor_attribute_w_color">影の色</string>
+    <string name="watch_editor_attribute_w_distance">影の距離</string>
+    <string name="watch_editor_attribute_w_angle">影の角度</string>
+    <string name="watch_editor_attribute_w_opacity">影の不透明度</string>
+    <string name="watch_editor_attribute_shader">シェーダー</string>
+    <string name="watch_editor_attribute_u1">シェーダー引数 u_1</string>
+    <string name="watch_editor_attribute_u2">シェーダー引数 u_2</string>
+    <string name="watch_editor_attribute_u3">シェーダー引数 u_3</string>
+    <string name="watch_editor_attribute_u4">シェーダー引数 u_4</string>
+    <string name="watch_editor_attribute_u5">シェーダー引数 u_5</string>
+    <string name="watch_editor_attribute_radius_outer">外半径</string>
+    <string name="watch_editor_attribute_radius_inner">内半径</string>
+    <string name="watch_editor_attribute_is_clockwise">向き</string>
+    <string name="watch_editor_attribute_display">表示モード</string>
+    <string name="watch_editor_attribute_outline_stroke">縁取り</string>
+    <string name="watch_editor_attribute_outline_glow">グロー</string>
+    <string name="watch_editor_attribute_shadow_drop">ドロップ</string>
+    <string name="watch_editor_attribute_shadow_flat">フラット</string>
+    <string name="watch_editor_attribute_cap_round">丸</string>
+    <string name="watch_editor_attribute_cap_butt">平</string>
+    <string name="watch_editor_attribute_cap_square">角</string>
+    <string name="watch_editor_attribute_clockwise">時計回り</string>
+    <string name="watch_editor_attribute_counter_clockwise">反時計回り</string>
+    <string name="watch_editor_attribute_display_default">既定</string>
+    <string name="watch_editor_attribute_display_bright">点灯時のみ</string>
+    <string name="watch_editor_attribute_display_dim">消灯時のみ</string>
+    <string name="watch_editor_attribute_display_both">点灯と消灯</string>
+    <string name="watch_editor_shape_kind_square">四角</string>
+    <string name="watch_editor_shape_kind_circle">円</string>
+    <string name="watch_editor_shape_kind_triangle">三角</string>
+    <string name="watch_editor_shape_kind_pentagon">五角形</string>
+    <string name="watch_editor_shape_kind_hexagon">六角形</string>
+    <string name="watch_editor_shape_kind_star">星</string>
+    <string name="watch_editor_shape_kind_heart">ハート</string>
 </resources>
