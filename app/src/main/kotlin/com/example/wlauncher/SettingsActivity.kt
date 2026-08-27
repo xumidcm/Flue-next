@@ -6730,7 +6730,7 @@ private fun OverlayMaskCornerRadiusDialog(
                         interactionSource = interactionSource,
                         indication = null,
                     ) {
-                        localRadiusDp = (localRadiusDp - 5f).coerceAtLeast(0f)
+                        localRadiusDp = (localRadiusDp - 1f).coerceAtLeast(0f)
                     },
                 contentAlignment = Alignment.Center,
             ) {
@@ -6757,7 +6757,7 @@ private fun OverlayMaskCornerRadiusDialog(
                         interactionSource = interactionSource,
                         indication = null,
                     ) {
-                        localRadiusDp = (localRadiusDp + 5f)
+                        localRadiusDp = (localRadiusDp + 1f)
                             .coerceAtMost(MAX_OVERLAY_MASK_CORNER_RADIUS_DP.toFloat())
                     },
                 contentAlignment = Alignment.Center,

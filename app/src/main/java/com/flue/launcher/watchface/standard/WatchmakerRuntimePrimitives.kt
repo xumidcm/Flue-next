@@ -1119,7 +1119,9 @@ object WatchTapActionParser {
         // 包含 / : . 的其他格式（URL、component name 等）暂不支持
         if (lower.contains('/') || lower.contains(':') || lower.contains('.'))
             return WatchTapAction.Unsupported("custom intents are disabled")
-        return WatchTapAction.Unsupported("unsupported action")
+        // 带上原始动作名：否则用户只看到一句「动作不支持」，既不知道是哪个按钮、
+        // 也没法反馈给我们（老师那张 17 页测试表盘就是这样，实际缺的是 color_switch_*）。
+        return WatchTapAction.Unsupported("unsupported action: $lower")
     }
 
     private val MEDIA_ACTIONS = mapOf(

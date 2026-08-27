@@ -8,14 +8,19 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.unit.dp
-import kotlin.math.roundToInt
 
 const val DEFAULT_OVERLAY_MASK_CORNER_RADIUS_DP = 40
 const val MAX_OVERLAY_MASK_CORNER_RADIUS_DP = 120
 
+/**
+ * 只做范围夹取，**不要再 snap 到 5 的倍数**。
+ *
+ * 旧写法是 `((value / 5f).roundToInt() * 5)`，于是 56 会被算成 55（56/5=11.2→11→55）、
+ * 57 也是 55、58 跳到 60 —— 用户在滑块上停在 56 点完成，重开弹窗却显示 55。
+ * 滑块本身一直是连续的，是这里把值吃掉的。
+ */
 fun normalizeOverlayMaskCornerRadiusDp(value: Int): Int =
-    ((value.coerceIn(0, MAX_OVERLAY_MASK_CORNER_RADIUS_DP) / 5f).roundToInt() * 5)
-        .coerceIn(0, MAX_OVERLAY_MASK_CORNER_RADIUS_DP)
+    value.coerceIn(0, MAX_OVERLAY_MASK_CORNER_RADIUS_DP)
 
 /**
  * 屏幕形状来源的唯一入口。

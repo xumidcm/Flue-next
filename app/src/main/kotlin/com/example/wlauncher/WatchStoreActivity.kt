@@ -218,6 +218,7 @@ import com.flue.launcher.ui.theme.LauncherStyle
 import com.flue.launcher.ui.theme.LauncherTheme
 import com.flue.launcher.ui.theme.UiStyle
 import com.flue.launcher.ui.theme.LocalGlobalUiScale
+import com.flue.launcher.ui.theme.ProvideDialogUiScale
 import com.flue.launcher.ui.theme.ProvideGlobalUiScale
 import com.flue.launcher.ui.theme.WatchColors
 import com.flue.launcher.ui.theme.WatchLauncherTheme
@@ -3740,7 +3741,11 @@ private fun WatchStoreSocialDetailSection(
         scope.launch {
             runCatching {
                 withContext(Dispatchers.IO) { api.setRating(token, remoteId, value) }
-            }.onSuccess { rating = it }
+                // POST /watchfaces/:id/rating 的响应把「我这一票」放在 rating 字段里，
+                // 而 ratingSummary 解析器读的是 mine（那是 GET /my/watchfaces/:id/rating 的
+                // 字段名）→ mine 恒为 null → 星星不亮，必须退出重进才看到。
+                // 平均分和总数在响应里有，所以只有自己那几颗星不亮，与反馈一致。
+            }.onSuccess { rating = it.copy(mine = value) }
                 .onFailure { failure ->
                     failure.throwIfCancellation()
                     error = failure.userFacingMessage(context)
@@ -4095,36 +4100,41 @@ private fun WatchStoreSocialDetailSection(
                         decorFitsSystemWindows = false,
                     ),
                 ) {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .background(style.screenBackground),
-                    ) {
-                        Row(
+                    // Dialog 是独立 Window，Compose 会按它自己的 DisplayMetrics 重新提供
+                    // LocalDensity，外层 ProvideGlobalUiScale 那份缩放过的到不了这里 ——
+                    // 所以评论二级页一直按系统原始 density 排版，「全局 UI 大小」对它无效。
+                    ProvideDialogUiScale {
+                        Column(
                             modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(horizontal = 6.dp, vertical = 4.dp),
-                            verticalAlignment = Alignment.CenterVertically,
+                                .fillMaxSize()
+                                .background(style.screenBackground),
                         ) {
-                            IconButton(onClick = { allCommentsVisible = false }) {
-                                Icon(
-                                    MiuixIcons.Back,
-                                    contentDescription = stringResource(R.string.watch_editor_back),
-                                    tint = style.titleColor,
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 6.dp, vertical = 4.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                IconButton(onClick = { allCommentsVisible = false }) {
+                                    Icon(
+                                        MiuixIcons.Back,
+                                        contentDescription = stringResource(R.string.watch_editor_back),
+                                        tint = style.titleColor,
+                                    )
+                                }
+                                StoreOverlayTitleBlock(
+                                    title = stringResource(
+                                        R.string.watch_store_comments_count_fmt,
+                                        commentsCount,
+                                    ),
+                                    subtitle = null,
                                 )
                             }
-                            StoreOverlayTitleBlock(
-                                title = stringResource(
-                                    R.string.watch_store_comments_count_fmt,
-                                    commentsCount,
-                                ),
-                                subtitle = null,
-                            )
-                        }
-                        // StoreRoundList：圆屏弦宽 + 回弹 + 首尾能拉到圆心，一处给全。
-                        StoreRoundList(modifier = Modifier.weight(1f)) {
-                            items(threads, key = { it.root.id }, contentType = { "comment_thread" }) { thread ->
-                                renderThread(thread)
+                            // StoreRoundList：圆屏弦宽 + 回弹 + 首尾能拉到圆心，一处给全。
+                            StoreRoundList(modifier = Modifier.weight(1f)) {
+                                items(threads, key = { it.root.id }, contentType = { "comment_thread" }) { thread ->
+                                    renderThread(thread)
+                                }
                             }
                         }
                     }
@@ -4400,6 +4410,10 @@ private fun WatchStoreCommentRow(
         modifier = Modifier.fillMaxWidth().animateContentSize(),
         shape = style.compactShape,
         color = style.pressedCardColor,
+        // 评论行不要默认描边：flueCardBorder() 在深色档的 outlineColor 近白，
+        // 叠在 pressedCardColor 上就是老师说的那圈白框。外层评论卡已经关过了，
+        // 只有这一行漏了。
+        border = null,
     ) {
         Column(
             modifier = Modifier.padding(8.dp),
@@ -7254,76 +7268,79 @@ private fun FullscreenWatchPreview(
             decorFitsSystemWindows = false,
         ),
     ) {
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .background(Color.Black.copy(alpha = 0.96f))
-                .onSizeChanged { viewport = it }
-                .pointerInput(bitmap, viewport) {
-                    detectTapGestures(
-                        onDoubleTap = { position ->
-                            if (scale > 1.01f) {
-                                scale = 1f
-                                translation = Offset.Zero
-                            } else {
-                                val targetScale = 2.5f
-                                val maxX = viewport.width * (targetScale - 1f) / 2f
-                                val maxY = viewport.height * (targetScale - 1f) / 2f
-                                translation = Offset(
-                                    x = ((viewport.width / 2f - position.x) * (targetScale - 1f))
-                                        .coerceIn(-maxX, maxX),
-                                    y = ((viewport.height / 2f - position.y) * (targetScale - 1f))
-                                        .coerceIn(-maxY, maxY),
-                                )
-                                scale = targetScale
-                            }
-                        },
-                    )
-                }
-                .pointerInput(bitmap, viewport) {
-                    detectTransformGestures { _, pan, zoom, _ ->
-                        val nextScale = (scale * zoom).coerceIn(1f, 5f)
-                        val maxX = viewport.width * (nextScale - 1f) / 2f
-                        val maxY = viewport.height * (nextScale - 1f) / 2f
-                        translation = if (nextScale <= 1.001f) {
-                            Offset.Zero
-                        } else {
-                            Offset(
-                                x = (translation.x + pan.x).coerceIn(-maxX, maxX),
-                                y = (translation.y + pan.y).coerceIn(-maxY, maxY),
-                            )
-                        }
-                        scale = nextScale
-                    }
-                },
-            contentAlignment = Alignment.Center,
-        ) {
-            Image(
-                bitmap = image,
-                contentDescription = stringResource(R.string.watch_store_preview),
+        // 同上：Dialog 独立 Window 会重置 LocalDensity，全屏预览也要重新挂缩放。
+        ProvideDialogUiScale {
+            Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .graphicsLayer {
-                        scaleX = scale
-                        scaleY = scale
-                        translationX = translation.x
-                        translationY = translation.y
+                    .background(Color.Black.copy(alpha = 0.96f))
+                    .onSizeChanged { viewport = it }
+                    .pointerInput(bitmap, viewport) {
+                        detectTapGestures(
+                            onDoubleTap = { position ->
+                                if (scale > 1.01f) {
+                                    scale = 1f
+                                    translation = Offset.Zero
+                                } else {
+                                    val targetScale = 2.5f
+                                    val maxX = viewport.width * (targetScale - 1f) / 2f
+                                    val maxY = viewport.height * (targetScale - 1f) / 2f
+                                    translation = Offset(
+                                        x = ((viewport.width / 2f - position.x) * (targetScale - 1f))
+                                            .coerceIn(-maxX, maxX),
+                                        y = ((viewport.height / 2f - position.y) * (targetScale - 1f))
+                                            .coerceIn(-maxY, maxY),
+                                    )
+                                    scale = targetScale
+                                }
+                            },
+                        )
+                    }
+                    .pointerInput(bitmap, viewport) {
+                        detectTransformGestures { _, pan, zoom, _ ->
+                            val nextScale = (scale * zoom).coerceIn(1f, 5f)
+                            val maxX = viewport.width * (nextScale - 1f) / 2f
+                            val maxY = viewport.height * (nextScale - 1f) / 2f
+                            translation = if (nextScale <= 1.001f) {
+                                Offset.Zero
+                            } else {
+                                Offset(
+                                    x = (translation.x + pan.x).coerceIn(-maxX, maxX),
+                                    y = (translation.y + pan.y).coerceIn(-maxY, maxY),
+                                )
+                            }
+                            scale = nextScale
+                        }
                     },
-                contentScale = ContentScale.Fit,
-            )
-            IconButton(
-                onClick = onDismiss,
-                modifier = Modifier
-                    .align(Alignment.TopStart)
-                    .padding(12.dp)
-                    .size(44.dp)
-                    .background(Color.Black.copy(alpha = 0.45f), CircleShape),
+                contentAlignment = Alignment.Center,
             ) {
-                Icon(
-                    imageVector = MiuixIcons.Back,
-                    contentDescription = stringResource(R.string.watch_editor_back),
-                    tint = Color.White,
+                Image(
+                    bitmap = image,
+                    contentDescription = stringResource(R.string.watch_store_preview),
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .graphicsLayer {
+                            scaleX = scale
+                            scaleY = scale
+                            translationX = translation.x
+                            translationY = translation.y
+                        },
+                    contentScale = ContentScale.Fit,
                 )
+                IconButton(
+                    onClick = onDismiss,
+                    modifier = Modifier
+                        .align(Alignment.TopStart)
+                        .padding(12.dp)
+                        .size(44.dp)
+                        .background(Color.Black.copy(alpha = 0.45f), CircleShape),
+                ) {
+                    Icon(
+                        imageVector = MiuixIcons.Back,
+                        contentDescription = stringResource(R.string.watch_editor_back),
+                        tint = Color.White,
+                    )
+                }
             }
         }
     }

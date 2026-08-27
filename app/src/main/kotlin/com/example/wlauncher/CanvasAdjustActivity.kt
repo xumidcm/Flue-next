@@ -73,6 +73,7 @@ import com.flue.launcher.ui.settings.miuix.MiuixSettingsRow
 import com.flue.launcher.ui.style.FlueSlider
 import com.flue.launcher.ui.style.FlueSwitch
 import com.flue.launcher.ui.theme.LauncherTheme
+import com.flue.launcher.ui.theme.LocalGlobalUiScale
 import com.flue.launcher.ui.theme.ProvideGlobalUiScale
 import com.flue.launcher.ui.theme.UiStyle
 import com.flue.launcher.ui.theme.WatchLauncherTheme
@@ -220,6 +221,11 @@ private fun CanvasAdjustScreen(
         }
 
         val configuration = LocalConfiguration.current
+        // 屏高要先换算回「布局 dp」：本页在 ProvideGlobalUiScale 之内（density 已乘过
+        // scale），而 screenHeightDp 始终是系统原始 dp。直接乘 0.62 的话，全局 UI 大小
+        // 拉到 150% 时这块面板会占到约 93% 屏高。写法与 WatchStoreActivity 那处同源。
+        val uiScale = LocalGlobalUiScale.current.coerceAtLeast(0.01f)
+        val screenHeight = configuration.screenHeightDp.dp / uiScale
         val round = isFlueScreenRound()
         Column(modifier = Modifier.fillMaxSize()) {
             // 表盘可视区：点这里收起，等价于 clox 的 root.setOnClickListener { finish() }。
@@ -235,7 +241,7 @@ private fun CanvasAdjustScreen(
                 faceName = descriptor.displayName,
                 settings = draft,
                 followsDefault = draftFollowsDefault,
-                maxPanelHeight = configuration.screenHeightDp.dp * 0.62f,
+                maxPanelHeight = screenHeight * 0.62f,
                 horizontalMargin = if (round) 20.dp else 10.dp,
                 bottomMargin = if (round) 16.dp else 8.dp,
                 onFollowToggle = { follow ->

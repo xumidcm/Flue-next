@@ -532,16 +532,6 @@ class NativeAppListView @JvmOverloads constructor(
 
     override fun dispatchTouchEvent(event: MotionEvent): Boolean {
         if (released) return super.dispatchTouchEvent(event)
-        if (event.actionMasked == MotionEvent.ACTION_DOWN ||
-            event.actionMasked == MotionEvent.ACTION_UP ||
-            event.actionMasked == MotionEvent.ACTION_CANCEL
-        ) {
-            android.util.Log.d(
-                "FlueTouch",
-                "dispatch a=${event.actionMasked} active=${currentConfig.value.active} " +
-                    "owned=$dragTouchOwned scrollState=$scrollState",
-            )
-        }
         if (!currentConfig.value.active) return handleInactiveTouchStream(event)
         updateGesturePointer(event)
         prepareLegacyEdgePointer(event)
@@ -683,14 +673,12 @@ class NativeAppListView @JvmOverloads constructor(
                 finishRecyclerGesture(event)
                 dragController.finishAdditionalPointer()
                 finishOwnedTouch()
-                android.util.Log.d("FlueTouch", "terminal consumed in place a=${event.actionMasked}")
                 return true
             }
             dragTouchOwned = true
             interceptedAction = event.actionMasked
             interceptedEventTime = event.eventTime
             parent?.requestDisallowInterceptTouchEvent(true)
-            android.util.Log.d("FlueTouch", "dragTouchOwned latched a=${event.actionMasked}")
             return true
         }
 
@@ -1229,7 +1217,6 @@ class NativeAppListView @JvmOverloads constructor(
     }
 
     private fun finishOwnedTouch(scheduleMotionBlurRestore: Boolean = true) {
-        if (dragTouchOwned) android.util.Log.d("FlueTouch", "dragTouchOwned released")
         dragTouchOwned = false
         clearGlidePressed()
         recyclerGestureNeedsTerminal = false

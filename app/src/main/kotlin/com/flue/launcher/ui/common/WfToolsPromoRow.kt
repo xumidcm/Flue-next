@@ -1,15 +1,22 @@
 package com.flue.launcher.ui.common
 
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -49,13 +56,42 @@ fun WfToolsPromoRow(
             .padding(horizontal = 18.dp, vertical = 14.dp),
     ) {
         Text(
-            text = stringResource(R.string.wf_tools_promo),
+            text = wfToolsPromoText(),
             color = style.secondaryTextColor,
             fontSize = 11.sp,
             lineHeight = 15.sp,
             textAlign = TextAlign.Center,
             modifier = Modifier.fillMaxWidth(),
         )
+    }
+}
+
+/**
+ * 把文案里的 `WFTools` 一词染成蓝色（老师原话「把 wftools 字体改为蓝色」）。
+ *
+ * 用固定的系统蓝而不是 `style.accentColor`：强调色是用户可改的，改成橙色以后
+ * 「蓝色」这条要求就不成立了。两档各取对应亮度的蓝，深色档上浅色档下都够对比。
+ *
+ * 三种语言的文案里这个词都是拉丁字母原样出现，所以按子串定位是安全的；
+ * 万一以后译文改了写法，`indexOf` 返回 -1 就整句退回次级文字色，不会崩。
+ */
+@Composable
+private fun wfToolsPromoText(): AnnotatedString {
+    val raw = stringResource(R.string.wf_tools_promo)
+    val brand = "WFTools"
+    val start = raw.indexOf(brand, ignoreCase = true)
+    val linkBlue = if (isSystemInDarkTheme()) Color(0xFF0A84FF) else Color(0xFF007AFF)
+    return remember(raw, start, linkBlue) {
+        buildAnnotatedString {
+            append(raw)
+            if (start >= 0) {
+                addStyle(
+                    SpanStyle(color = linkBlue, fontWeight = FontWeight.SemiBold),
+                    start,
+                    start + brand.length,
+                )
+            }
+        }
     }
 }
 

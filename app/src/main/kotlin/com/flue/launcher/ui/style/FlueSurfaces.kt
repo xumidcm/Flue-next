@@ -62,9 +62,12 @@ fun FlueCard(
 fun FlueSettingsRow(
     modifier: Modifier = Modifier,
     minHeight: Dp = 56.dp,
+    // 默认值保持 flueCardBorder()，所有现有调用点行为不变；只有确实不想要那圈
+    // 白线的地方（我的资料页那些纯文字行）传 null。
+    border: BorderStroke? = flueCardBorder(),
     content: @Composable RowScope.() -> Unit,
 ) {
-    FlueSurface(modifier = modifier.fillMaxWidth()) {
+    FlueSurface(modifier = modifier.fillMaxWidth(), border = border) {
         androidx.compose.foundation.layout.Row(
             modifier = Modifier
                 .fillMaxWidth()

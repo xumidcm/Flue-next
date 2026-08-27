@@ -433,6 +433,9 @@ private fun ProfileValueRow(label: String, value: String?, onClick: (() -> Unit)
         modifier = Modifier
             .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier),
         minHeight = 0.dp,
+        // 老师原话「把我的资料页面那些文字边框去掉」：这几行本来就靠底色和间距分隔，
+        // 深色档下那圈近白的描边纯属噪音。
+        border = null,
     ) {
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
             Text(label, color = style.titleColor, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)

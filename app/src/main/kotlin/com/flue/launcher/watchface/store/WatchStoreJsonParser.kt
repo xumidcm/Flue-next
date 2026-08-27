@@ -242,13 +242,20 @@ internal object WatchStoreJsonParser {
         return parseComment(root.optJSONObject("data") ?: root)
     }
 
-    /** `GET /watchfaces/:id/rating` → `{average, count}`。 */
+    /**
+     * `GET /watchfaces/:id/rating` → `{average, count}`。
+     *
+     * 同一个解析器也用来解 `POST /watchfaces/:id/rating` 的响应，而上游那条把「我这一票」
+     * 叫 `rating` 而不是 `mine`（`mine` 只出现在 `GET /my/watchfaces/:id/rating`）。
+     * 所以这里两个键都试一遍 —— GET 的响应里没有 `rating` 键，不会误判。
+     */
     fun ratingSummary(payload: String): WatchStoreRatingSummary {
         val root = parseObject(payload)
         return WatchStoreRatingSummary(
             average = optionalDouble(root, "average"),
             count = optionalLong(root, "count"),
-            mine = optionalIntOrNull(root, "mine", 1, 5),
+            mine = optionalIntOrNull(root, "mine", 1, 5)
+                ?: optionalIntOrNull(root, "rating", 1, 5),
         )
     }
 
