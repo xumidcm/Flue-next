@@ -470,6 +470,32 @@ private data class StoreQueryKey(
 
 private const val STORE_BROWSE_CONTROLS_KEY = "watch_store_browse_controls"
 
+/** 商店卡片预览图的解码最长边；显示目标只有一两百像素，压住第三方包的超大 preview。 */
+private const val MAX_PREVIEW_DECODE_SIDE_PX = 512
+
+/**
+ * 两趟解码：先量边界再按 inSampleSize 采样。第三方表盘包的 preview 尺寸
+ * 不受控（2048² PNG 解出来就是 16MB），列表滚动时每张卡片都要解一次。
+ */
+internal fun decodeSampledFileBitmap(file: File, maxSide: Int): Bitmap? {
+    val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+    BitmapFactory.decodeFile(file.absolutePath, bounds)
+    var sampleSize = 1
+    var width = bounds.outWidth
+    var height = bounds.outHeight
+    while (width > 0 && height > 0 && (width / 2 >= maxSide || height / 2 >= maxSide)) {
+        width /= 2
+        height /= 2
+        sampleSize *= 2
+    }
+    return runCatching {
+        BitmapFactory.decodeFile(
+            file.absolutePath,
+            BitmapFactory.Options().apply { inSampleSize = sampleSize },
+        )
+    }.getOrNull()
+}
+
 @Composable
 private fun WatchStoreScreen(
     repository: WatchStoreRepository,
@@ -7442,7 +7468,7 @@ private fun LocalInstalledWatchPreview(
             previewPath
                 ?.let(::File)
                 ?.takeIf(File::isFile)
-                ?.let { file -> BitmapFactory.decodeFile(file.absolutePath) }
+                ?.let { file -> decodeSampledFileBitmap(file, MAX_PREVIEW_DECODE_SIDE_PX) }
         }
     }
     val image = remember(bitmap) { bitmap?.asImageBitmap() }

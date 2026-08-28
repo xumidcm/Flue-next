@@ -1,6 +1,7 @@
 package com.flue.launcher.watchface
 
 import android.content.Context
+import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.drawable.BitmapDrawable
 import android.graphics.drawable.Drawable
@@ -82,7 +83,7 @@ object WatchFaceDescriptors {
         descriptor.previewFilePath?.let { previewPath ->
             val previewFile = File(previewPath)
             if (previewFile.isFile) {
-                BitmapFactory.decodeFile(previewFile.absolutePath)?.let { bitmap ->
+                decodeSampledPreview(previewFile)?.let { bitmap ->
                     return BitmapDrawable(context.resources, bitmap)
                 }
             }
@@ -92,5 +93,30 @@ object WatchFaceDescriptors {
         } else {
             null
         }
+    }
+
+    /**
+     * 第三方包的 preview 尺寸不受控（2048² 解出来 16MB），而预览卡的显示
+     * 目标只有一两百像素。两趟解码把最长边压到 [MAX_PREVIEW_DECODE_SIDE] 以内。
+     */
+    private const val MAX_PREVIEW_DECODE_SIDE = 512
+
+    private fun decodeSampledPreview(file: File): Bitmap? {
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        BitmapFactory.decodeFile(file.absolutePath, bounds)
+        var sampleSize = 1
+        var width = bounds.outWidth
+        var height = bounds.outHeight
+        while (width > 0 && height > 0 && (width / 2 >= MAX_PREVIEW_DECODE_SIDE || height / 2 >= MAX_PREVIEW_DECODE_SIDE)) {
+            width /= 2
+            height /= 2
+            sampleSize *= 2
+        }
+        return runCatching {
+            BitmapFactory.decodeFile(
+                file.absolutePath,
+                BitmapFactory.Options().apply { inSampleSize = sampleSize },
+            )
+        }.getOrNull()
     }
 }

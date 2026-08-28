@@ -76,6 +76,9 @@ import kotlin.math.sin
 private const val JB_LAYOUT_CANVAS_WIDTH = 512
 private const val JB_LAYOUT_CANVAS_HEIGHT = 512
 private const val DEFAULT_JB_GIF_DURATION_MS = 1_000
+
+/** GIF 帧在视觉帧缓存里的名义成本（Movie 是 native 对象，没有 byteCount 可量）。 */
+private const val DEFAULT_JB_GIF_FRAME_COST_BYTES = 512 * 1024
 private val JB_PROTECTED_IMAGE_KEY = byteArrayOf(0x53, 0x57, 0x48, 0x6E, 0x2D)
 private const val JB_STANDARD_BASE64 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
 private const val JB_CUSTOM_BASE64 = "ABCgEFGHIJK4MNOPQRSTUVWXYZabcdefDhijklmnopqrstuvwxyz0123L56789+/"
@@ -1761,10 +1764,18 @@ private fun jbLastVisualFrameKey(face: JbWatchFace, layerIndex: Int): String = b
  * extracted yet. Keep the last successfully decoded visual for that exact
  * face/layer so the watch background never falls through to its black root
  * colour between two valid frames.
+ *
+ * 预算按**字节**计而不是条数：一张帧就是原图尺寸 × 4 字节，按条数封顶时换
+ * 几张表盘就能把几十上百 MB 的位图压在缓存里。字节预算把最坏驻留钉在
+ * [MAX_CACHE_BYTES] 内；逐出只丢引用、不主动 recycle —— 后台预热线程与绘制
+ * 线程可能同时持有同一帧，过早 recycle 会把正在绘制的位图打穿。
  */
 private object JbWatchLastVisualFrameCache {
-    private const val MAX_FRAMES = 48
-    private val cache = LruCache<String, JbWatchVisualFrame>(MAX_FRAMES)
+    private const val MAX_CACHE_BYTES = 12 * 1024 * 1024
+    private val cache = object : LruCache<String, JbWatchVisualFrame>(MAX_CACHE_BYTES) {
+        override fun sizeOf(key: String, value: JbWatchVisualFrame): Int =
+            value.bitmap?.byteCount ?: DEFAULT_JB_GIF_FRAME_COST_BYTES
+    }
 
     fun get(key: String): JbWatchVisualFrame? = synchronized(cache) {
         cache.get(key)?.takeIf { frame ->
@@ -1783,6 +1794,10 @@ private object JbWatchLastVisualFrameCache {
 
 private object JbWatchBitmapCache {
     private const val MAX_CACHE_KB = 24 * 1024
+
+    /** 解码最长边上限；与标准表盘渲染器的 decodeBitmapSafely 对齐。 */
+    private const val MAX_DECODED_SIDE = 1024
+
     private val cache = object : LruCache<String, Bitmap>(MAX_CACHE_KB) {
         override fun sizeOf(key: String, value: Bitmap): Int = value.byteCount / 1024
     }
@@ -1791,9 +1806,28 @@ private object JbWatchBitmapCache {
         if (!file.isFile) return null
         val key = "${file.absolutePath}:${file.lastModified()}:${file.length()}"
         cache.get(key)?.let { return it }
-        val bitmap = decodeBitmap(file) ?: return null
+        val bitmap = decodeSampled(file) ?: return null
         cache.put(key, bitmap)
         return bitmap
+    }
+
+    /**
+     * 两趟解码：先量边界再按 inSampleSize 采样，把最长边压到 [MAX_DECODED_SIDE]
+     * 以内。JB 素材原始尺寸不受控（1024² 起步、更大的也不少见），直接解码是
+     * 原图 × 4 字节的瞬时分配，而显示目标只有表盘画布，超采样纯属浪费。
+     */
+    private fun decodeSampled(file: File): Bitmap? {
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        decodeBitmap(file, bounds)
+        var sampleSize = 1
+        var width = bounds.outWidth
+        var height = bounds.outHeight
+        while (width > 0 && height > 0 && (width / 2 >= MAX_DECODED_SIDE || height / 2 >= MAX_DECODED_SIDE)) {
+            width /= 2
+            height /= 2
+            sampleSize *= 2
+        }
+        return decodeBitmap(file, BitmapFactory.Options().apply { inSampleSize = sampleSize })
     }
 
     fun bounds(file: File): Pair<Int, Int>? {
