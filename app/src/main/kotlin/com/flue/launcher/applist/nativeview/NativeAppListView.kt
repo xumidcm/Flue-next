@@ -110,12 +110,19 @@ class NativeAppListView @JvmOverloads constructor(
             // 脏区（[scheduleScrollIndicatorFrame]）就够：整屏 invalidate 会让每行
             // 重走一遍鱼眼/模糊绘制，滚动期间每帧一次是纯浪费。
             if (currentConfig.value.scrollIndicatorEnabled) scheduleScrollIndicatorFrame()
+            // 活动时间戳在这里也记一份：惯性帧由 ViewFlinger 驱动，与子类钩子
+            // onScrolled 是两条路，谁漏了另一份都兜得住「滑动中指示器常亮」。
+            if (dx != 0 || dy != 0) markScrollIndicatorActivity()
         }
 
         override fun onScrollStateChanged(recyclerView: RecyclerView, newState: Int) {
             removeCallbacks(restoreMotionBlur)
             if (newState != SCROLL_STATE_DRAGGING) clearGlidePressed()
             if (newState == SCROLL_STATE_IDLE) {
+                // 惯性收尾回 IDLE：把指示器的保持窗口重起算一枚钉子。快甩抬手后
+                // 的「保持 + 淡出」全靠最后一次活动时间 + 定时器，这里无论最后一条
+                // 滚动事件从哪条路来的，淡出都必然有调度。
+                markScrollIndicatorActivity()
                 // Avoid reattaching multiple RenderEffects on the exact frame
                 // a fling settles; let the final composite frame land first.
                 postDelayed(restoreMotionBlur, MOTION_BLUR_RESTORE_DELAY_MS)
@@ -2491,11 +2498,15 @@ class NativeAppListView @JvmOverloads constructor(
         scrollIndicatorFrameUptimeMs = now
         val target = nativeScrollIndicatorTargetAlpha(
             // DRAGGING 只在手指确实还按着时才算「在动」：那个状态会被拖图标的链路
-            // 留成脏值。SETTLING（惯性）没有这个问题，照常认。
+            // 留成脏值。SETTLING（惯性）同病同治 —— 只在活动时间戳还新鲜（真的还有
+            // 滚动事件进来）时才算在动；快速甩动抬手后某条路径把状态留在 SETTLING
+            // 不回 IDLE 的话，没有这道窗口指示器就永远全亮不淡出。
             scrolling = when (scrollState) {
                 SCROLL_STATE_DRAGGING -> scrollIndicatorPointerDown
                 SCROLL_STATE_IDLE -> false
-                else -> true
+                else ->
+                    now - scrollIndicatorActivityUptimeMs <=
+                        NATIVE_SCROLL_INDICATOR_SETTLING_FRESH_MS
             },
             millisSinceScrollActivity = now - scrollIndicatorActivityUptimeMs,
             pointerDown = scrollIndicatorPointerDown,

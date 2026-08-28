@@ -30,6 +30,16 @@ internal const val NATIVE_SCROLL_INDICATOR_HOLD_MS = 700L
 internal const val NATIVE_SCROLL_INDICATOR_FADE_OUT_MS = 320L
 
 /**
+ * 惯性(SETTLING)状态仍算「在动」的新鲜窗口。
+ *
+ * 惯性中每一帧都有滚动事件把活动时间戳刷新,所以只要超过这个窗口没有新事件,
+ * 就说明惯性实际上已经停了 —— 哪怕 `scrollState` 因为某条路径(拖拽移交吞事件、
+ * 边界弹簧吸收)没回 IDLE,也不再按「在动」处理。没有这道保险,状态卡在 SETTLING
+ * 的那次惯性会让指示器永远全亮:快速甩动抬手,指示器赖着不消失,正是这个病。
+ */
+internal const val NATIVE_SCROLL_INDICATOR_SETTLING_FRESH_MS = 120L
+
+/**
  * 目标不透明度:手指按着、正在滚动、或停下后还在保持窗口内 = 1,否则 0。
  *
  * @param scrolling 列表此刻是否真的在动(DRAGGING 且手指在上,或惯性 SETTLING)。

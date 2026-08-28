@@ -338,7 +338,15 @@ internal fun NativeAppListConfig.toFisheyeParameters(): FisheyeParameters {
                 ?.coerceIn(0f, 0.99f)
                 ?: 0.6f,
             maximumSpacingCompression = if (edgeSpacingCompressionEnabled) {
-                (0.30f * safeStrength).coerceIn(0f, 0.30f)
+                // 圆屏列表的边缘行除了向心压缩还要过圆内软钳，30% 的压缩会把
+                // 最外几行拉到几乎同一个 Y —— 老师截图里上下两角图标叠成一摞。
+                // 圆屏减半：边缘行仍有序收拢，但不再堆成一点。方屏没有软钳叠加，
+                // 维持原档。
+                if (deviceShape == NativeDeviceShape.ROUND) {
+                    (0.15f * safeStrength).coerceIn(0f, 0.15f)
+                } else {
+                    (0.30f * safeStrength).coerceIn(0f, 0.30f)
+                }
             } else {
                 0f
             },

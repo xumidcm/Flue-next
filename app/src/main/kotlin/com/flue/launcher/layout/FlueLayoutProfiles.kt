@@ -60,9 +60,9 @@ object FlueLayoutProfiles {
     /**
      * 星环与蜂窝 / 网格 / 列表同为「只吃鱼眼六项」的档案，月牙那两项存着不用。
      *
-     * 它的四边收拢**复用鱼眼的强度与生效行数**（见
-     * `NativeAppListConfig.nativeRingConvergenceFraction`），所以没有专属参数要加 ——
-     * 出厂值就是鱼眼那份默认值，切过去立刻是参考图的样子。
+     * 它的上下边缘鱼眼带**复用鱼眼的强度与生效行数**（见
+     * `NativeAppListConfig.nativeRingFisheyeProgress`），所以没有专属参数要加 ——
+     * 出厂值就是鱼眼那份默认值。两种屏形同一套平铺渲染，没有圆屏专属参数。
      */
     val Ring: FlueLayoutProfile = Honeycomb.copy(
         id = RING_ID,
