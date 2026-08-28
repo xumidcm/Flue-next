@@ -386,7 +386,7 @@ fun ControlCenterLayer(
     var connectivity by remember(context) { mutableStateOf(readConnectivitySnapshot(context)) }
     var bluetoothEnabled by remember(context) { mutableStateOf(isBluetoothLikelyEnabled(context)) }
     var dndEnabled by remember(context) { mutableStateOf(isDndEnabled(context)) }
-    val mediaState = rememberMediaState(context)
+    val mediaState = rememberMediaState(context, active = contentVisible)
     val density = LocalDensity.current
     val verticalScrollState = rememberScrollState()
     val toggleScrollState = rememberScrollState()
@@ -607,10 +607,15 @@ fun ControlCenterLayer(
         bluetoothEnabled = isBluetoothLikelyEnabled(context)
     }
 
-    LaunchedEffect(context) {
+    // 这一层常驻组合（关闭后只是移出屏外），轮询必须用 contentVisible 门控，
+    // 否则表盘界面上也在每 250ms 查一遍系统状态。打开期间才轮询：
+    // 音量/亮度跟随滑杆交互保 250ms；电池/网络/蓝牙/DND 与手势无关，降到 1s。
+    LaunchedEffect(context, contentVisible) {
+        if (!contentVisible) return@LaunchedEffect
+        val timeFormatter = SimpleDateFormat("HH:mm", Locale.getDefault())
+        var slowPollCounter = 0
         while (true) {
-            batteryStatus = readBatteryStatus(context)
-            timeText = SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date())
+            timeText = timeFormatter.format(Date())
             val polledMediaVolume = readMusicVolume(audioManager)
             val requestedMediaVolume = pendingRequestedMediaVolume
             when {
@@ -621,9 +626,13 @@ fun ControlCenterLayer(
                 }
             }
             brightness = readBrightness(context)
-            connectivity = readConnectivitySnapshot(context)
-            bluetoothEnabled = isBluetoothLikelyEnabled(context)
-            dndEnabled = isDndEnabled(context)
+            if (slowPollCounter == 0) {
+                batteryStatus = readBatteryStatus(context)
+                connectivity = readConnectivitySnapshot(context)
+                bluetoothEnabled = isBluetoothLikelyEnabled(context)
+                dndEnabled = isDndEnabled(context)
+            }
+            slowPollCounter = (slowPollCounter + 1) % 4
             delay(250)
         }
     }
@@ -1078,10 +1087,12 @@ fun SideScreenControlCenterMusicCard(
     musicTextSwitchAnimation: String = MusicTextSwitchAnimations.DEFAULT_ID,
     showMediaCustomActions: Boolean = true,
     glassHighlightEnabled: Boolean = true,
+    // 负一屏同样常驻组合；只在它可见时才轮询媒体状态。
+    active: Boolean = true,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
-    val mediaState = rememberMediaState(context)
+    val mediaState = rememberMediaState(context, active = active)
     MediaControlCard(
         mediaState = mediaState,
         notificationAccessGranted = notificationAccessGranted,
@@ -2695,7 +2706,7 @@ private fun controlCenterGreeting(now: Calendar = Calendar.getInstance()): Strin
 }
 
 @Composable
-private fun rememberMediaState(context: Context): ControlCenterMediaState {
+private fun rememberMediaState(context: Context, active: Boolean = true): ControlCenterMediaState {
     var state by remember(context) { mutableStateOf(ControlCenterMediaState()) }
     var retainedArtwork by remember(context) { mutableStateOf<ImageBitmap?>(null) }
     var retainedArtworkColor by remember(context) { mutableStateOf(Color(0xFF2F3B45)) }
@@ -2703,9 +2714,15 @@ private fun rememberMediaState(context: Context): ControlCenterMediaState {
     var retainedArtworkIdentity by remember(context) { mutableStateOf<String?>(null) }
     var retainedAppIcon by remember(context) { mutableStateOf<ImageBitmap?>(null) }
     var retainedAppIconPackage by remember(context) { mutableStateOf<String?>(null) }
-    LaunchedEffect(context) {
+    // 这一层（控制中心本体和负一屏音乐卡片）都是常驻组合、靠位移移出屏外；
+    // 不加门控的话轮询在表盘界面上也一直跑。active=false 时整段停掉，
+    // 重新可见的第一帧立即刷新一次。
+    LaunchedEffect(context, active) {
+        if (!active) return@LaunchedEffect
         while (true) {
-            val next = readMediaState(context)
+            // 读取含 binder IPC（getActiveSessions）、图标包 mapping 与
+            // 数百次 getPixel 取色/指纹，不允许钉在主线程上做。
+            val next = withContext(Dispatchers.Default) { readMediaState(context) }
             state = when {
                 next.controller == null -> {
                     retainedArtwork = null

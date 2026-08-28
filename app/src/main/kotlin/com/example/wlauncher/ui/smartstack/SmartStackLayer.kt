@@ -544,9 +544,14 @@ fun SmartStackLayer(
      */
     onOvershootChange: (Float) -> Unit = {},
     showSteps: Boolean,
+    /**
+     * 负一屏此刻是否处于打开态。这一层是常驻组合、靠位移移出屏外的，
+     * 卡片类内容（音乐媒体轮询等）以它为门控，不打开就不跑。
+     */
+    contentVisible: Boolean = true,
     modifier: Modifier = Modifier
 ) {
-    val clock = rememberClockSnapshot()
+    val clock = rememberClockSnapshot(contentVisible = contentVisible)
     val currentOnDismissProgressChange by rememberUpdatedState(onDismissProgressChange)
     val currentOnDismissRelease by rememberUpdatedState(onDismissRelease)
     val currentOnOvershootChange by rememberUpdatedState(onOvershootChange)
@@ -872,6 +877,7 @@ fun SmartStackLayer(
                     musicTextSwitchAnimation = musicTextSwitchAnimation,
                     showMediaCustomActions = showMediaCustomActions,
                     glassHighlightEnabled = glassHighlightEnabled,
+                    active = contentVisible,
                     modifier = Modifier.width(contentWidth)
                 )
                 Spacer(Modifier.height(20.dp))
@@ -3297,11 +3303,13 @@ private suspend fun AwaitPointerEventScope.awaitPrimaryDown(): PointerInputChang
     }
 }
 
-@Composable private fun rememberClockSnapshot(): SideScreenClockSnapshot {
+@Composable private fun rememberClockSnapshot(contentVisible: Boolean = true): SideScreenClockSnapshot {
     val context = LocalContext.current
     val locale = context.resources.configuration.locales[0] ?: Locale.getDefault()
     var snapshot by remember { mutableStateOf(SideScreenClockSnapshot("--:--", "--")) }
-    LaunchedEffect(locale) {
+    // 负一屏常驻组合，不可见时停掉秒级轮询，重新可见的首帧立即刷新。
+    LaunchedEffect(locale, contentVisible) {
+        if (!contentVisible) return@LaunchedEffect
         val datePattern = android.text.format.DateFormat.getBestDateTimePattern(locale, "MMMdEEEE")
         val dateFormatter = SimpleDateFormat(datePattern, locale)
         val timeFormatter = android.text.format.DateFormat.getTimeFormat(context)

@@ -2629,6 +2629,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
                         shortcutColumns = sideScreenShortcutCols,
                         previewGroups = sideScreenPreviewGroups,
                         showMusicCard = cardPlacement.musicOnSideScreen,
+                        contentVisible = sideScreenVisible,
                         showMediaCustomActions = showMediaCustomActions,
                         musicTextSwitchAnimation = musicTextSwitchAnimation,
                         glassHighlightEnabled = glassHighlightEnabled,
