@@ -42,6 +42,21 @@ class WatchFaceLuaRuntime private constructor(
     private var lastWallHour: Int? = null
     private var closed = false
     private val dynamicFaceNames = LinkedHashSet(declaredFaceNames)
+
+    // runLimited 的沙箱钩子与参数包：每次属性求值都要装/拆一遍钩子，复用同一
+    // 组实例（InstructionLimitHook 带 reset）。Lua 求值是单线程串行的。
+    private val instructionLimitHook = InstructionLimitHook()
+    private val hookArgs: Varargs = LuaValue.varargsOf(
+        arrayOf(
+            instructionLimitHook,
+            LuaValue.valueOf(""),
+            LuaValue.valueOf(INSTRUCTION_HOOK_INTERVAL),
+        ),
+    )
+    private val hookOffArgs: Varargs = LuaValue.varargsOf(arrayOf(LuaValue.NIL))
+    // stepClock 每拍一次的 Calendar；getInstance 是重量级分配，复用同一实例。
+    private val wallCalendar = java.util.Calendar.getInstance()
+
     private val compiledExpressions = object : LinkedHashMap<String, LuaValue>(
         MAX_CACHED_EXPRESSIONS,
         0.75f,
@@ -177,7 +192,7 @@ class WatchFaceLuaRuntime private constructor(
             callbackRan = true
         }
 
-        val wall = java.util.Calendar.getInstance().apply { timeInMillis = wallTimeMillis }
+        val wall = wallCalendar.apply { timeInMillis = wallTimeMillis }
         val second = wall.get(java.util.Calendar.SECOND)
         val minute = wall.get(java.util.Calendar.MINUTE)
         val hour = wall.get(java.util.Calendar.HOUR_OF_DAY)
@@ -302,7 +317,9 @@ class WatchFaceLuaRuntime private constructor(
         resolver: (String) -> WatchTagResolution,
     ): LuaValue? {
         if (expression.isBlank() || expression.length > MAX_EXPRESSION_CHARS) return null
-        val splicedExpression = spliceTags(expression)
+        // 缓存命中路径也在跑 spliceTags（逐字符扫描 + 字符串重建）。它是纯文本
+        // 变换、与运行时状态无关，按原文缓存后命中路径只剩一次 map 查找。
+        val splicedExpression = spliceTagsCached(expression)
         val cached = synchronized(evaluatedAttributes) { evaluatedAttributes[splicedExpression] }
         if (cached != null && !cached.impure && isReusable(cached, resolver)) return cached.value
 
@@ -410,6 +427,17 @@ class WatchFaceLuaRuntime private constructor(
         faceStateGeneration++
     }
 
+    // spliceTags 结果按原文缓存：一张表盘的属性表达式集合是稳定的，几十到几百条。
+    private val splicedExpressions = HashMap<String, String>()
+
+    private fun spliceTagsCached(expression: String): String =
+        synchronized(splicedExpressions) {
+            splicedExpressions[expression] ?: spliceTags(expression).also { spliced ->
+                if (splicedExpressions.size >= SPLICE_CACHE_LIMIT) splicedExpressions.clear()
+                splicedExpressions[expression] = spliced
+            }
+        }
+
     private fun compile(source: String, chunkName: String): LuaValue =
         // String input can only contain source text; unlike InputStream loads it
         // cannot select LuaJ's binary-chunk mode.
@@ -419,13 +447,12 @@ class WatchFaceLuaRuntime private constructor(
         if (closed) return Result.failure(IllegalStateException("face Lua runtime is closed"))
         stringAllocationBudget.reset()
         val setHook = internalDebugTable.get("sethook")
-        val hook = InstructionLimitHook()
+        // hook 计数对象与参数包每次求值都要用；InstructionLimitHook 加了 reset，
+        // 复用同一实例，省掉每属性两次 varargs 装配和钩子对象分配。
+        val hook = instructionLimitHook
+        hook.reset()
         return runCatching {
-            setHook.invoke(
-                LuaValue.varargsOf(
-                    arrayOf(hook, LuaValue.valueOf(""), LuaValue.valueOf(INSTRUCTION_HOOK_INTERVAL)),
-                ),
-            )
+            setHook.invoke(hookArgs)
             block()
         }.mapFailure { error ->
             if (error.message.orEmpty().contains(INSTRUCTION_LIMIT_MESSAGE)) {
@@ -434,7 +461,7 @@ class WatchFaceLuaRuntime private constructor(
                 error
             }
         }.also {
-            runCatching { setHook.invoke(LuaValue.varargsOf(arrayOf(LuaValue.NIL))) }
+            runCatching { setHook.invoke(hookOffArgs) }
             sandboxDebug.resetFrames()
         }
     }
@@ -458,6 +485,10 @@ class WatchFaceLuaRuntime private constructor(
 
     private class InstructionLimitHook : VarArgFunction() {
         private var instructions = 0
+
+        fun reset() {
+            instructions = 0
+        }
 
         override fun invoke(args: Varargs): Varargs {
             instructions += INSTRUCTION_HOOK_INTERVAL
@@ -748,6 +779,9 @@ class WatchFaceLuaRuntime private constructor(
          * 而 60fps 下真求值仍然从「每秒每表达式 60 次」降到 5 次。
          */
         private const val MAX_CACHE_AGE_NANOS = 200_000_000L
+
+        /** spliceTags 结果缓存的条数上限；一张表盘的表达式集合远到不了这个量。 */
+        private const val SPLICE_CACHE_LIMIT = 1024
 
         /** 单个表达式读到的标签数量通常是 1~2 个，列表初值给小的。 */
         private const val TAG_RECORD_INITIAL_CAPACITY = 4

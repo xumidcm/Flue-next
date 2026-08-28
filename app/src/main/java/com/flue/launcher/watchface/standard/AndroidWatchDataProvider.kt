@@ -328,7 +328,7 @@ internal class AndroidWatchDataProvider(
         val gyro = gyroscope
         val accel = accelerometer
         val currentHeartRate = watchHeartRateValue(
-            hasPermission = hasHeartRatePermission(appContext),
+            hasPermission = hasHeartRatePermissionCached(),
             value = heartRate,
         )
         val slow = slowDeviceState()
@@ -349,8 +349,9 @@ internal class AndroidWatchDataProvider(
             // 由宿主通过 WatchNotificationCounts 这个 seam 推进来。
             notificationCount = WatchNotificationCounts.current(),
             // {d24h}：DateFormat 需要 Context，而 tag 解析器是纯函数，所以在
-            // provider 侧读。用户在系统设置里改制式后，下一帧快照就跟上。
-            is24Hour = runCatching { DateFormat.is24HourFormat(appContext) }.getOrNull(),
+            // provider 侧读。改制式不是实时性敏感的变更，短 TTL 缓存换掉每帧
+            // 一次的 Settings 查询（见 [is24HourFormatCached]）。
+            is24Hour = is24HourFormatCached(),
             weather = weather,
             // Compatibility fields retain the first slice's public snapshot
             // shape. New renderers consume [weather], whose values are
@@ -464,6 +465,41 @@ internal class AndroidWatchDataProvider(
 
     @Volatile
     private var calendarReadAtMs: Long = 0L
+
+    // snapshot() 是每帧调用的，而这两项（心率权限检查、{d24h} 的改制式查询）
+    // 都是系统设置级的慢变量；按 [SLOW_STATE_TTL_MS] 缓存，省掉每帧的
+    // checkSelfPermission 与 Settings.System 查询。
+    @Volatile
+    private var cachedIs24Hour: Boolean? = null
+
+    @Volatile
+    private var is24HourReadAtMs = 0L
+
+    @Volatile
+    private var cachedHeartRatePermission: Boolean? = null
+
+    @Volatile
+    private var heartRatePermissionReadAtMs = 0L
+
+    private fun is24HourFormatCached(): Boolean? {
+        val cached = cachedIs24Hour
+        val now = SystemClock.elapsedRealtime()
+        if (cached != null && now - is24HourReadAtMs < SLOW_STATE_TTL_MS) return cached
+        val fresh = runCatching { DateFormat.is24HourFormat(appContext) }.getOrNull() ?: return cached
+        cachedIs24Hour = fresh
+        is24HourReadAtMs = now
+        return fresh
+    }
+
+    private fun hasHeartRatePermissionCached(): Boolean {
+        val cached = cachedHeartRatePermission
+        val now = SystemClock.elapsedRealtime()
+        if (cached != null && now - heartRatePermissionReadAtMs < SLOW_STATE_TTL_MS) return cached
+        val fresh = hasHeartRatePermission(appContext)
+        cachedHeartRatePermission = fresh
+        heartRatePermissionReadAtMs = now
+        return fresh
+    }
 
     private fun slowDeviceState(): SlowDeviceState {
         val now = SystemClock.elapsedRealtime()

@@ -84,6 +84,27 @@ private const val JB_CUSTOM_BASE64 = "ABCgEFGHIJK4MNOPQRSTUVWXYZabcdefDhijklmnop
 // JB host down with PatternSyntaxException / ExceptionInInitializerError.
 private val JB_DYNAMIC_TAG_PATTERN = Regex("\\{\\s*([^\\{\\}]+?)\\s*\\}")
 
+// 下面这些都在逐帧求值路径上（星期条件文本、四则表达式、天气条件、点按动作、
+// 音效脚本），正则编译提到顶层，别在调用点每帧重造。
+private val JB_DAY_CONDITIONAL_PATTERN = Regex("\\{ddw0\\}\\s*==\\s*(\\d+)\\s*and\\s*'([^']*)'")
+private val JB_DAY_CONDITIONAL_FALLBACK = Regex("or\\s*'([^']*)'\\s*$")
+private val JB_ARITHMETIC_TOKEN_PATTERN = Regex("""[*/+-]?[^*/+-]+""")
+private val JB_WEATHER_CONDITIONAL_PATTERN = Regex("'\\{wci\\}'\\s*==\\s*'([^']+)'\\s*and\\s*(\\d+)")
+private val JB_NON_ASCII_PATTERN = Regex("[^\\x09\\x0A\\x0D\\x20-\\x7E]")
+private val JB_SFX_SCRIPT_PATTERN = Regex("wm_sfx\\(\\s*['\"]([^'\"]+)['\"]\\s*\\)")
+
+// JB 的绘制是单线程逐层串行的；Paint/RectF/Calendar 每帧每层新建只是 GC 压力。
+// 统一复用：每个使用点把用到的属性全部显式赋值，不依赖跨层残留；Calendar 各
+// 使用点入口都先写 timeInMillis（同一帧内值相同，嵌套调用互不干扰），且解析
+// 路径从不改写 calendar。
+private val JB_LAYER_PAINT = Paint(Paint.ANTI_ALIAS_FLAG)
+private val JB_TEXT_PAINT = Paint(Paint.ANTI_ALIAS_FLAG)
+private val JB_OUTLINE_PAINT = Paint(Paint.ANTI_ALIAS_FLAG)
+private val JB_STROKE_PAINT = Paint(Paint.ANTI_ALIAS_FLAG)
+private val JB_FILL_PAINT = Paint(Paint.ANTI_ALIAS_FLAG)
+private val JB_RECT_SCRATCH = RectF()
+private val JB_CALENDAR_SCRATCH = Calendar.getInstance()
+
 data class JbWatchRoot(
     val name: String,
     val description: String,
@@ -667,11 +688,11 @@ private fun drawJbBitmapLayer(
     val nativeHeight = frame.height
     val displaySize = resolveJbBitmapDisplaySize(layer, nativeWidth, nativeHeight)
     val rect = resolveJbRect(face, layer, displaySize.first, displaySize.second)
-    val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+    val paint = JB_LAYER_PAINT.apply {
         alpha = resolveJbLayerOpacity(layer)
     }
     if (bitmap != null && layer.type == "image_cond" && !layer.condGrid.isNullOrBlank()) {
-        val weatherCode = WatchmakerTagResolver.resolve("wci", Calendar.getInstance().apply {
+        val weatherCode = WatchmakerTagResolver.resolve("wci", JB_CALENDAR_SCRATCH.apply {
             timeInMillis = nowMillis
         }, dataSnapshot).renderedValue
         val dayIndex = evaluateWeatherIndex(layer.condValue, weatherCode = weatherCode)
@@ -732,7 +753,7 @@ private fun drawJbTextLayer(
 ) {
     if (!shouldDisplayLayer(layer, nowMillis, dataSnapshot, animationElapsedMs, luaRuntime)) return
     val text = resolveJbText(layer.text, nowMillis, dataSnapshot, is24Hour, animationElapsedMs, luaRuntime)
-    val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+    val paint = JB_TEXT_PAINT.apply {
         color = parseJbColor(layer.color)
         textSize = layer.textSize
         textAlign = when (jbAlignmentHorizontal(layer.alignment)) {
@@ -742,6 +763,7 @@ private fun drawJbTextLayer(
         }
         alpha = resolveJbLayerOpacity(layer)
         typeface = JbWatchTypefaceCache.get(face.rootDir, face.assetRevision, layer.font)
+        style = Paint.Style.FILL
     }
     val textDisplaySize = resolveJbTextDisplaySize(layer, text, paint)
     val rect = resolveJbRect(
@@ -757,7 +779,17 @@ private fun drawJbTextLayer(
     }
     val y = rect.centerY() - (paint.descent() + paint.ascent()) / 2f
     if (layer.outline?.equals("Outline", ignoreCase = true) == true && layer.oSize > 0) {
-        val outlinePaint = Paint(paint).apply {
+        // 复用 scratch 代替 Paint(paint) 拷贝：描边要的就是文字 paint 的
+        // 字形属性 + 描边样式，全部显式重赋，不吃上一层的残留。
+        val outlinePaint = JB_OUTLINE_PAINT.apply {
+            color = parseJbColor(layer.color)
+            textSize = layer.textSize
+            textAlign = when (jbAlignmentHorizontal(layer.alignment)) {
+                0f -> Paint.Align.LEFT
+                1f -> Paint.Align.RIGHT
+                else -> Paint.Align.CENTER
+            }
+            typeface = JbWatchTypefaceCache.get(face.rootDir, face.assetRevision, layer.font)
             style = Paint.Style.STROKE
             strokeWidth = layer.oSize.toFloat()
             color = parseJbColor(layer.oColor)
@@ -799,7 +831,7 @@ private fun drawJbCurvedTextLayer(
     val radians = Math.toRadians((angle - 90f).toDouble())
     val x = center.x + cos(radians).toFloat() * radius
     val y = center.y + sin(radians).toFloat() * radius
-    val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+    val paint = JB_TEXT_PAINT.apply {
         color = parseJbColor(layer.color)
         textSize = layer.textSize
         textAlign = when (jbAlignmentHorizontal(layer.alignment)) {
@@ -809,6 +841,7 @@ private fun drawJbCurvedTextLayer(
         }
         alpha = resolveJbLayerOpacity(layer)
         typeface = JbWatchTypefaceCache.get(face.rootDir, face.assetRevision, layer.font)
+        style = Paint.Style.FILL
     }
     canvas.save()
     canvas.rotate(angle + if (layer.curveDir.equals("Down", ignoreCase = true)) 180f else 0f, x, y)
@@ -844,21 +877,23 @@ private fun drawJbRingLayer(
         animationElapsedMs,
         luaRuntime = luaRuntime,
     ) - 90f
-    val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+    val paint = JB_STROKE_PAINT.apply {
         style = Paint.Style.STROKE
         strokeCap = Paint.Cap.ROUND
         strokeWidth = stroke
         color = parseJbColor(layer.color)
         alpha = resolveJbLayerOpacity(layer)
     }
-    val oval = RectF(center.x - radius, center.y - radius, center.x + radius, center.y + radius)
+    val oval = JB_RECT_SCRATCH.apply {
+        set(center.x - radius, center.y - radius, center.x + radius, center.y + radius)
+    }
     canvas.drawArc(oval, start, if (layer.isClockwise) sweep else -sweep, false, paint)
 }
 
 private fun drawJbMarkersLayer(canvas: AndroidCanvas, face: JbWatchFace, layer: JbWatchLayer) {
     val center = jbLayerCenter(face, layer)
     val radius = layer.radius.takeIf { it > 0f } ?: 181f
-    val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+    val paint = JB_STROKE_PAINT.apply {
         style = Paint.Style.STROKE
         strokeCap = Paint.Cap.ROUND
         strokeWidth = 3f
@@ -886,7 +921,7 @@ private fun drawJbShapeLayer(canvas: AndroidCanvas, face: JbWatchFace, layer: Jb
         ?: (min(layer.width.takeIf { it > 0 } ?: 0, layer.height.takeIf { it > 0 } ?: 0) / 2f)
         .takeIf { it > 0f }
         ?: 24f
-    val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+    val paint = JB_FILL_PAINT.apply {
         style = Paint.Style.FILL
         color = parseJbColor(layer.color)
         alpha = resolveJbLayerOpacity(layer)
@@ -902,7 +937,7 @@ private fun resolveJbText(
     animationElapsedMs: Long,
     luaRuntime: JbWatchLuaExpressionRuntime?,
 ): String {
-    val calendar = Calendar.getInstance().apply { timeInMillis = nowMillis }
+    val calendar = JB_CALENDAR_SCRATCH.apply { timeInMillis = nowMillis }
     // EEE / MMM 在部分 locale 会带尾句号（es "lun."、de "Mo."），
     // 统一 trimEnd('.') 避免表盘出现「周一.」式拖尾。
     val weekday = SimpleDateFormat("EEE", Locale.getDefault()).format(nowMillis).trimEnd('.')
@@ -940,14 +975,14 @@ private fun resolveJbText(
 
 private fun resolveJbDayConditionalText(raw: String, dayOfWeekZero: Int): String? {
     if ("{ddw0}" !in raw || " and " !in raw || " or " !in raw) return null
-    Regex("\\{ddw0\\}\\s*==\\s*(\\d+)\\s*and\\s*'([^']*)'")
+    JB_DAY_CONDITIONAL_PATTERN
         .findAll(raw)
         .forEach { match ->
             if (match.groupValues.getOrNull(1)?.toIntOrNull() == dayOfWeekZero) {
                 return match.groupValues.getOrNull(2).orEmpty()
             }
         }
-    return Regex("or\\s*'([^']*)'\\s*$").find(raw)?.groupValues?.getOrNull(1)
+    return JB_DAY_CONDITIONAL_FALLBACK.find(raw)?.groupValues?.getOrNull(1)
 }
 
 private fun resolveJbTextDisplaySize(layer: JbWatchLayer, text: String, paint: Paint): Pair<Float, Float> {
@@ -1069,7 +1104,7 @@ private fun evaluateJbNumericExpression(
     fallback: Float = 0f,
     luaRuntime: JbWatchLuaExpressionRuntime? = null,
 ): Float {
-    val calendar = Calendar.getInstance().apply { timeInMillis = nowMillis }
+    val calendar = JB_CALENDAR_SCRATCH.apply { timeInMillis = nowMillis }
     val resolver: (String) -> WatchTagResolution = { tag ->
         resolveJbTag(tag, calendar, dataSnapshot, animationElapsedMs)
     }
@@ -1132,7 +1167,7 @@ private fun resolveJbDynamicPathLayer(
     luaRuntime: JbWatchLuaExpressionRuntime? = null,
 ): JbWatchLayer {
     val rawPath = layer.path?.takeIf(String::isNotBlank) ?: return layer
-    val calendar = Calendar.getInstance().apply { timeInMillis = nowMillis }
+    val calendar = JB_CALENDAR_SCRATCH.apply { timeInMillis = nowMillis }
     val resolver: (String) -> WatchTagResolution = { tag ->
         resolveJbTag(tag, calendar, dataSnapshot, animationElapsedMs)
     }
@@ -1163,7 +1198,7 @@ private fun evaluateJbArithmetic(raw: String): Float {
     if (raw.isBlank()) return 0f
     val normalized = raw.replace(',', '.')
     normalized.toFloatOrNull()?.let { return it }
-    val tokens = Regex("""[*/+-]?[^*/+-]+""").findAll(normalized).map { it.value }.toList()
+    val tokens = JB_ARITHMETIC_TOKEN_PATTERN.findAll(normalized).map { it.value }.toList()
     if (tokens.isEmpty()) return normalized.filter { it.isDigit() || it == '.' || it == '-' }
         .toFloatOrNull() ?: 0f
     var result = tokens.first().toFloatOrNull() ?: return 0f
@@ -1379,7 +1414,7 @@ private fun shouldDisplayLayer(
     luaRuntime: JbWatchLuaExpressionRuntime? = null,
 ): Boolean {
     val expr = layer.condValue?.takeIf { it.isNotBlank() } ?: return true
-    val calendar = Calendar.getInstance().apply { timeInMillis = nowMillis }
+    val calendar = JB_CALENDAR_SCRATCH.apply { timeInMillis = nowMillis }
     val resolver: (String) -> WatchTagResolution = { tag ->
         resolveJbTag(tag, calendar, dataSnapshot, animationElapsedMs)
     }
@@ -1391,7 +1426,7 @@ private fun shouldDisplayLayer(
 private fun evaluateWeatherIndex(expr: String?, weatherCode: String): Int {
     val value = expr?.takeIf { it.isNotBlank() } ?: return 0
     val code = weatherCode.lowercase(Locale.ROOT)
-    Regex("'\\{wci\\}'\\s*==\\s*'([^']+)'\\s*and\\s*(\\d+)").findAll(value).forEach { match ->
+    JB_WEATHER_CONDITIONAL_PATTERN.findAll(value).forEach { match ->
         val codeMatch = match.groupValues.getOrNull(1)?.lowercase(Locale.ROOT)
         val numberMatch = match.groupValues.getOrNull(2)?.toIntOrNull()
         if (codeMatch == code && numberMatch != null) {
@@ -1624,12 +1659,12 @@ private fun normalizeJbTapAction(raw: String): String {
         .replace("&ars;", "&apos;")
         .replace("weatjr", "weather")
         .replace("updte", "update")
-        .replace(Regex("[^\\x09\\x0A\\x0D\\x20-\\x7E]"), "")
+        .replace(JB_NON_ASCII_PATTERN, "")
         .trim()
 }
 
 private fun playJbWatchScript(rootDir: File, script: String) {
-    val match = Regex("wm_sfx\\(\\s*['\"]([^'\"]+)['\"]\\s*\\)").find(script) ?: return
+    val match = JB_SFX_SCRIPT_PATTERN.find(script) ?: return
     val soundName = match.groupValues.getOrNull(1)?.trim().orEmpty()
     if (soundName.isBlank()) return
     val candidate = listOf(

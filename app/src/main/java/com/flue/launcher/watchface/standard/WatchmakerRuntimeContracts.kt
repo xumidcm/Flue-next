@@ -41,6 +41,9 @@ data class WatchCurveArc(
 object WatchTextLayout {
     const val TTF_FONT_SCALE = 1.28f
 
+    // lines() 每帧每个文字层都会调；Regex 编译提到常量，别在调用点重复。
+    private val LONG_SPACE_RUN = Regex(" {8,}")
+
     fun ttfTextSize(designSize: Float): Float =
         (designSize.coerceIn(1f, WatchmakerGeometry.DESIGN_SIZE) * TTF_FONT_SCALE)
             .coerceAtMost(WatchmakerGeometry.DESIGN_SIZE * TTF_FONT_SCALE)
@@ -59,7 +62,7 @@ object WatchTextLayout {
             // newline into a long padding run.  Eight spaces is deliberately
             // conservative: ordinary typography is preserved, while the real
             // Vibe_coder sample's 36-space marker becomes its preview's 2 lines.
-            .replace(Regex(" {8,}"), "\n")
+            .replace(LONG_SPACE_RUN, "\n")
             .split('\n')
 
     /**
@@ -2812,9 +2815,17 @@ object WatchmakerTagResolver {
         val withUnit: Boolean = false,
     )
 
+    // 预报 tag 的兜底解析链：不认识的 tag 每次解析最多要挨个试完全部正则，
+    // 编译提到常量，别在调用点反复构造。
+    private val FORECAST_CANONICAL_TAG = Regex("^wf([0-5])d(t|th|tl|ct|ci)$")
+    private val FORECAST_LEGACY_TAG = Regex("^wf([a-e])(h|hd|l|ld|ct|ci)$")
+    private val FORECAST_NUMBERED_TAG = Regex("^wf(\\d+)(h|hd|l|ld|ct|ci)$")
+    private val FORECAST_ALT_NUMBERED_TAG = Regex("^wfa(\\d+)(h|hd|l|ld|ct|ci)$")
+    private val FORECAST_SUFFIX_TAG = Regex("^(wthd|wth|wtld|wtl|wct|wci)(\\d+)$")
+
     private fun forecastTagParts(tag: String): ForecastTagParts? {
         // Canonical WatchMaker daily vocabulary: 0=today, 1=tomorrow, ... 5.
-        Regex("^wf([0-5])d(t|th|tl|ct|ci)$").matchEntire(tag)?.let { match ->
+        FORECAST_CANONICAL_TAG.matchEntire(tag)?.let { match ->
             val dayOffset = match.groupValues[1].toInt() + 1
             return when (match.groupValues[2]) {
                 "t" -> ForecastTagParts(dayOffset, "temperature")
@@ -2826,7 +2837,7 @@ object WatchmakerTagResolver {
         }
         val legacy = when (tag) {
             "wbbh" -> ForecastTagParts(2, "high") // typo seen in legacy exports
-            else -> Regex("^wf([a-e])(h|hd|l|ld|ct|ci)$").matchEntire(tag)?.let { match ->
+            else -> FORECAST_LEGACY_TAG.matchEntire(tag)?.let { match ->
                 val day = match.groupValues[1][0] - 'a' + 1
                 when (match.groupValues[2]) {
                     "h" -> ForecastTagParts(day, "high")
@@ -2839,7 +2850,7 @@ object WatchmakerTagResolver {
             }
         }
         if (legacy != null) return legacy
-        Regex("^wf(\\d+)(h|hd|l|ld|ct|ci)$").matchEntire(tag)?.let { match ->
+        FORECAST_NUMBERED_TAG.matchEntire(tag)?.let { match ->
             val day = match.groupValues[1].toIntOrNull() ?: return@let
             return when (match.groupValues[2]) {
                 "h" -> ForecastTagParts(day, "high")
@@ -2850,7 +2861,7 @@ object WatchmakerTagResolver {
                 else -> ForecastTagParts(day, "icon")
             }
         }
-        Regex("^wfa(\\d+)(h|hd|l|ld|ct|ci)$").matchEntire(tag)?.let { match ->
+        FORECAST_ALT_NUMBERED_TAG.matchEntire(tag)?.let { match ->
             val day = match.groupValues[1].toIntOrNull() ?: return@let
             return when (match.groupValues[2]) {
                 "h" -> ForecastTagParts(day, "high")
@@ -2861,7 +2872,7 @@ object WatchmakerTagResolver {
                 else -> ForecastTagParts(day, "icon")
             }
         }
-        val numbered = Regex("^(wthd|wth|wtld|wtl|wct|wci)(\\d+)$").matchEntire(tag) ?: return null
+        val numbered = FORECAST_SUFFIX_TAG.matchEntire(tag) ?: return null
         val day = numbered.groupValues[2].toIntOrNull() ?: return null
         return when (numbered.groupValues[1]) {
             "wth" -> ForecastTagParts(day, "high")

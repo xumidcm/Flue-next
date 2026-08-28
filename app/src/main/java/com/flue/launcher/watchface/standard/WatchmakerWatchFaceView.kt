@@ -240,6 +240,25 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
     private var tickPosted = false
     private var dataProvider: WatchDataProvider = EmptyWatchDataProvider
     private var frameDataSnapshot = WatchDataSnapshot()
+
+    /** 上次取快照的时刻（wall clock）；同 tick 时间窗内复用，见 [refreshFrameDataSnapshot]。 */
+    private var frameDataSnapshotAtMs = 0L
+
+    /**
+     * 刷新当帧数据快照。
+     *
+     * tick 判定（[shouldRedrawThisTick]）与紧随其后的绘制（[drawPreparedSource]）
+     * 原本各取一次 snapshot —— 30fps 下间隔只有几毫秒，等于每秒白算 30 次。
+     * 快照里的量（电量、天气、步数、传感器）本身变化周期都远大于一次 tick，
+     * 所以同一 tick 时间窗内直接复用上一份；窗口只覆盖 tick→draw 的间隔、
+     * 不跨 tick，除了毫秒级的取值时刻外行为与逐帧取快照完全一致。
+     */
+    private fun refreshFrameDataSnapshot(nowMs: Long) {
+        if (nowMs - frameDataSnapshotAtMs < SNAPSHOT_REUSE_WINDOW_MS) return
+        frameDataSnapshotAtMs = nowMs
+        frameDataSnapshot = runCatching { dataProvider.snapshot(nowMs) }
+            .getOrDefault(WatchDataSnapshot())
+    }
     /**
      * External-data writes arrive through a process-wide receiver, while this View may be
      * rendering a static face with only a one-second tick. Subscribe once per render segment
@@ -811,8 +830,6 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
     private val ringCapRadii = FloatArray(8)
     /** [composeLayerMatrix] 的逐帧复用缓冲；concat 会立即读走内容。 */
     private val layerMatrixScratch = Matrix()
-    /** [ringGradient] 的扫描渐变矩阵；setLocalMatrix 会立即拷走，可安全复用。 */
-    private val ringGradientMatrix = Matrix()
     /** 视频图层几何计算专用，不与 [layerMatrixScratch] 争用。 */
     private val videoMatrixScratch = Matrix()
     /** 设计空间 → View 空间的画布变换，每帧在 [drawPreparedSource] 里重算。 */
@@ -1642,8 +1659,7 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
             canvas.clipPath(pathScratch)
         }
         calendar.timeInMillis = System.currentTimeMillis()
-        frameDataSnapshot = runCatching { dataProvider.snapshot(calendar.timeInMillis) }
-            .getOrDefault(WatchDataSnapshot())
+        refreshFrameDataSnapshot(calendar.timeInMillis)
         // 分段渲染时 tapTargets 必须只在首段清空，否则后面的段会把前面段
         // 已经登记的可点区域抹掉，整块表盘只有最后一段能响应点击。
         if (renderRange?.first?.let { it <= 0 } != false) tapTargets.clear()
@@ -2514,8 +2530,45 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
             ?.endsWith("n", ignoreCase = true) == true
     }
 
-    private fun drawText(canvas: Canvas, attrs: Map<String, String>, alpha: Float, source: PreparedSource) {
-        val raw = attrs["text"].orEmpty()
+    // 文字布局缓存：文本/字号/字体不变时（时钟文字每秒才变一次）行分割与
+    // measureText 都是重复劳动。measureText 要过 JNI + shaping，比一次 map
+    // 查找贵一个量级。键里带 size 与 typeface 身份，命中路径零分配。
+    private class TextLayoutEntry(
+        val typefaceIdentity: Int,
+        val size: Float,
+        val lines: List<String>,
+        val widths: List<Float>,
+    )
+
+    private val textLayoutCache = HashMap<String, TextLayoutEntry>()
+
+    private fun cachedTextLayout(text: String, size: Float, typeface: Typeface): TextLayoutEntry {
+        val typefaceIdentity = System.identityHashCode(typeface)
+        val key = StringBuilder(text.length + 24)
+            .append(typefaceIdentity)
+            .append('\u0000')
+            .append(size)
+            .append('\u0000')
+            .append(text)
+            .toString()
+        textLayoutCache[key]?.let { entry ->
+            // identityHashCode 理论上会撞；再比对一次实例兜底。
+            if (entry.typefaceIdentity == typefaceIdentity && entry.size == size) return entry
+        }
+        val lines = WatchTextLayout.lines(text)
+        val widths = lines.map(textPaint::measureText)
+        val entry = TextLayoutEntry(
+            typefaceIdentity = typefaceIdentity,
+            size = size,
+            lines = lines,
+            widths = widths,
+        )
+        if (textLayoutCache.size >= TEXT_LAYOUT_CACHE_LIMIT) textLayoutCache.clear()
+        textLayoutCache[key] = entry
+        return entry
+    }
+
+    private fun drawText(canvas: Canvas, attrs: Map<String, String>, alpha: Float, source: PreparedSource) {        val raw = attrs["text"].orEmpty()
         if (raw.isBlank()) return
         val value = evaluateText(raw, source)
         val designSize = dynamicNumber(attrs["text_size"] ?: attrs["size"], 24f, source)
@@ -2550,8 +2603,9 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         // own width turns an authored paragraph into a ragged centered stack.
         textPaint.textAlign = Paint.Align.LEFT
         val metrics = textPaint.fontMetrics
-        val lines = WatchTextLayout.lines(text)
-        val lineWidths = lines.map(textPaint::measureText)
+        val layout = cachedTextLayout(text, size, textPaint.typeface)
+        val lines = layout.lines
+        val lineWidths = layout.widths
         val lineStartXs = WatchTextLayout.lineStartXs(lineWidths, align)
         val lineHeight = (metrics.descent - metrics.ascent + metrics.leading).coerceAtLeast(0f)
         val baselines = WatchTextLayout.baselines(
@@ -2793,9 +2847,10 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         // 8 方向、透明度随环衰减。每帧成本上限 = 8 环 × 8 方向 = 64 次
         // 整串重绘，由环数封顶 + o_size 全局封顶（120）双重兜底。
         resolveOutline(attrs, source)?.let { outline ->
-            bitmapOutlinePaint.colorFilter = android.graphics.PorterDuffColorFilter(
+            bitmapOutlinePaint.colorFilter = cachedTintFilter(
                 outline.color,
                 android.graphics.PorterDuff.Mode.SRC_IN,
+                srcInTintFilters,
             )
             val rings = if (outline.mode == WatchOutlineMode.GLOW) watchGlowRingCount(outline.size) else 1
             for (ring in rings downTo 1) {
@@ -2830,9 +2885,10 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         // 位图字阴影：整串字形按偏移重绘成阴影色剪影，在描边之上、本体之下。
         // 成本上限 = Flat 的 floor(w_distance) 份，由 MAX_WATCH_SHADOW_DISTANCE 收口。
         resolveShadow(attrs, source)?.let { shadow ->
-            bitmapShadowPaint.colorFilter = android.graphics.PorterDuffColorFilter(
+            bitmapShadowPaint.colorFilter = cachedTintFilter(
                 shadow.color,
                 android.graphics.PorterDuff.Mode.SRC_IN,
+                srcInTintFilters,
             )
             bitmapShadowPaint.alpha = paintAlpha(alpha * shadow.opacity)
             for (copy in shadow.copies downTo 1) {
@@ -3328,6 +3384,84 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
      * alpha 直接烘进 stop 色而不依赖 `Paint.alpha`，避免「着色器输出再乘一次 paint
      * alpha」的实现差异。
      */
+    // ring 渐变按参数小缓存：秒针环的跨度（total）与圆心每帧都一样，颜色只在
+    // alpha 变化时才重烘。线性扫小数组比较字段，命中路径零分配； miss 时才建
+    // SweepGradient（含 colors/positions 数组与专属 Matrix）。绘制只在主线程。
+    private class RingGradientCacheEntry {
+        var centerX: Float = 0f
+        var centerY: Float = 0f
+        var startColor: Int = 0
+        var endColor: Int = 0
+        var total: Float = 0f
+        var clockwise: Boolean = false
+        var gradient: android.graphics.SweepGradient? = null
+    }
+
+    private val ringGradientCache = Array(SMALL_GRADIENT_CACHE_SIZE) { RingGradientCacheEntry() }
+    private var ringGradientCacheCursor = 0
+
+    /**
+     * 线性渐变小缓存。进度条/进度环静止时几何与颜色逐帧不变，命中零分配；
+     * 数值动画期间退化为每帧新建（与原行为一致）加一次字段比较。
+     * 绘制只在主线程，无需同步。
+     */
+    private class LinearGradientCacheEntry {
+        var x0: Float = 0f
+        var y0: Float = 0f
+        var x1: Float = 0f
+        var y1: Float = 0f
+        var startColor: Int = 0
+        var endColor: Int = 0
+        var gradient: android.graphics.LinearGradient? = null
+    }
+
+    private class SmallLinearGradientCache {
+        private val entries = Array(SMALL_GRADIENT_CACHE_SIZE) { LinearGradientCacheEntry() }
+        private var cursor = 0
+
+        fun get(
+            x0: Float,
+            y0: Float,
+            x1: Float,
+            y1: Float,
+            startColor: Int,
+            endColor: Int,
+        ): android.graphics.LinearGradient? {
+            for (index in 0 until SMALL_GRADIENT_CACHE_SIZE) {
+                val entry = entries[index]
+                val cached = entry.gradient ?: continue
+                if (entry.x0 == x0 && entry.y0 == y0 && entry.x1 == x1 && entry.y1 == y1 &&
+                    entry.startColor == startColor && entry.endColor == endColor
+                ) {
+                    return cached
+                }
+            }
+            return null
+        }
+
+        fun put(
+            x0: Float,
+            y0: Float,
+            x1: Float,
+            y1: Float,
+            startColor: Int,
+            endColor: Int,
+            gradient: android.graphics.LinearGradient,
+        ) {
+            val entry = entries[cursor]
+            cursor = (cursor + 1) % SMALL_GRADIENT_CACHE_SIZE
+            entry.x0 = x0
+            entry.y0 = y0
+            entry.x1 = x1
+            entry.y1 = y1
+            entry.startColor = startColor
+            entry.endColor = endColor
+            entry.gradient = gradient
+        }
+    }
+
+    private val progressFillGradients = SmallLinearGradientCache()
+    private val ringImageGradients = SmallLinearGradientCache()
     private fun ringGradient(
         centerX: Float,
         centerY: Float,
@@ -3338,23 +3472,42 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         alpha: Int,
     ): android.graphics.SweepGradient {
         val alphaBits = alpha shl 24
-        val colors = intArrayOf(
-            (startColor and 0x00FFFFFF) or alphaBits,
-            (endColor and 0x00FFFFFF) or alphaBits,
-        )
+        val bakedStart = (startColor and 0x00FFFFFF) or alphaBits
+        val bakedEnd = (endColor and 0x00FFFFFF) or alphaBits
         // angle_total > 360 的环，渐变在绕满一圈时就走到 color2 并保持。
-        val positions = floatArrayOf(0f, (total / 360f).coerceIn(0.001f, 1f))
-        val matrix = ringGradientMatrix
-        matrix.reset()
+        val position = (total / 360f).coerceIn(0.001f, 1f)
+        for (index in 0 until SMALL_GRADIENT_CACHE_SIZE) {
+            val entry = ringGradientCache[index]
+            val cached = entry.gradient ?: continue
+            if (entry.centerX == centerX && entry.centerY == centerY &&
+                entry.startColor == bakedStart && entry.endColor == bakedEnd &&
+                entry.total == position && entry.clockwise == clockwise
+            ) {
+                return cached
+            }
+        }
+        val colors = intArrayOf(bakedStart, bakedEnd)
+        val positions = floatArrayOf(0f, position)
+        val matrix = android.graphics.Matrix()
         if (clockwise) {
             matrix.setRotate(-90f, centerX, centerY)
         } else {
             matrix.setScale(1f, -1f, centerX, centerY)
             matrix.postRotate(-90f, centerX, centerY)
         }
-        return android.graphics.SweepGradient(centerX, centerY, colors, positions).apply {
+        val gradient = android.graphics.SweepGradient(centerX, centerY, colors, positions).apply {
             setLocalMatrix(matrix)
         }
+        val entry = ringGradientCache[ringGradientCacheCursor]
+        ringGradientCacheCursor = (ringGradientCacheCursor + 1) % SMALL_GRADIENT_CACHE_SIZE
+        entry.centerX = centerX
+        entry.centerY = centerY
+        entry.startColor = bakedStart
+        entry.endColor = bakedEnd
+        entry.total = position
+        entry.clockwise = clockwise
+        entry.gradient = gradient
+        return gradient
     }
 
     /**
@@ -3476,15 +3629,22 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         shapePaint.alpha = paintAlpha(alpha)
         shapePaint.shader = if (endColor != startColor) {
             // 渐变只跨**已填充**那一段（规范：gradient spans the filled portion）。
-            android.graphics.LinearGradient(
-                if (vertical) 0f else left,
-                if (vertical) bottom else 0f,
-                if (vertical) 0f else right,
-                if (vertical) top else 0f,
-                startColor,
-                endColor,
-                android.graphics.Shader.TileMode.CLAMP,
-            )
+            val gx0 = if (vertical) 0f else left
+            val gy0 = if (vertical) bottom else 0f
+            val gx1 = if (vertical) 0f else right
+            val gy1 = if (vertical) top else 0f
+            progressFillGradients.get(gx0, gy0, gx1, gy1, startColor, endColor)
+                ?: android.graphics.LinearGradient(
+                    gx0,
+                    gy0,
+                    gx1,
+                    gy1,
+                    startColor,
+                    endColor,
+                    android.graphics.Shader.TileMode.CLAMP,
+                ).also {
+                    progressFillGradients.put(gx0, gy0, gx1, gy1, startColor, endColor, it)
+                }
         } else {
             null
         }
@@ -3979,7 +4139,14 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
             return
         }
         strokePaint.shader = if (color == endColor) null else {
-            android.graphics.LinearGradient(
+            ringImageGradients.get(
+                rectScratch.left,
+                rectScratch.top,
+                rectScratch.right,
+                rectScratch.bottom,
+                color,
+                endColor,
+            ) ?: android.graphics.LinearGradient(
                 rectScratch.left,
                 rectScratch.top,
                 rectScratch.right,
@@ -3987,7 +4154,17 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
                 color,
                 endColor,
                 android.graphics.Shader.TileMode.CLAMP,
-            )
+            ).also {
+                ringImageGradients.put(
+                    rectScratch.left,
+                    rectScratch.top,
+                    rectScratch.right,
+                    rectScratch.bottom,
+                    color,
+                    endColor,
+                    it,
+                )
+            }
         }
         strokePaint.color = color
         strokePaint.alpha = paintAlpha(alpha)
@@ -5468,8 +5645,7 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         if (editorAnimationPlaybackLimited || editorAnimatedImageLayerIndex != null) return true
         // 慢桶取值比对要用到当帧的 snapshot（电量、天气、步数都在里面）。
         calendar.timeInMillis = System.currentTimeMillis()
-        frameDataSnapshot = runCatching { dataProvider.snapshot(calendar.timeInMillis) }
-            .getOrDefault(WatchDataSnapshot())
+        refreshFrameDataSnapshot(calendar.timeInMillis)
         // ⚠️ [WatchTagChangeTracker.poll] 必须无条件先跑，**不能被快桶判定短路掉**。
         //
         // 它是慢桶失效信号（`hasPendingSlowTagInvalidation`）的唯一来源，而烘焙路径
@@ -6110,12 +6286,29 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
      * 调用点只有 [drawImage]（普通图片 / image_cond / GIF）。**文字不要用这个** ——
      * 文字的 `color` 是「字是什么颜色」，走 [textTintFilter]。
      */
+    // 每帧每染色层 new 一个 PorterDuffColorFilter 是纯 GC 压力：一张表盘的
+    // 染色色值就那么几个，按不透明色值缓存。绘制只在主线程，无需同步。
+    private val multiplyTintFilters = HashMap<Int, android.graphics.PorterDuffColorFilter>()
+    private val srcInTintFilters = HashMap<Int, android.graphics.PorterDuffColorFilter>()
+
+    private fun cachedTintFilter(
+        opaque: Int,
+        mode: android.graphics.PorterDuff.Mode,
+        cache: HashMap<Int, android.graphics.PorterDuffColorFilter>,
+    ): android.graphics.PorterDuffColorFilter {
+        cache[opaque]?.let { return it }
+        val created = android.graphics.PorterDuffColorFilter(opaque, mode)
+        if (cache.size >= TINT_FILTER_CACHE_LIMIT) cache.clear()
+        cache[opaque] = created
+        return created
+    }
+
     private fun tintFilter(color: Int): android.graphics.ColorFilter? {
         val opaque = color or OPAQUE_ALPHA_MASK
         return if (opaque == Color.WHITE) {
             null
         } else {
-            android.graphics.PorterDuffColorFilter(opaque, android.graphics.PorterDuff.Mode.MULTIPLY)
+            cachedTintFilter(opaque, android.graphics.PorterDuff.Mode.MULTIPLY, multiplyTintFilters)
         }
     }
 
@@ -6145,7 +6338,7 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         return if (opaque == Color.WHITE) {
             null
         } else {
-            android.graphics.PorterDuffColorFilter(opaque, android.graphics.PorterDuff.Mode.SRC_IN)
+            cachedTintFilter(opaque, android.graphics.PorterDuff.Mode.SRC_IN, srcInTintFilters)
         }
     }
 
@@ -6618,6 +6811,18 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
          */
         private const val MAX_BITMAP_CACHE_ENTRIES = 128
         private const val MAX_BITMAP_CACHE_BYTES = 24L * 1024L * 1024L
+        /** 染色滤镜缓存上限；超过按整表清空（一张表盘的色值远到不了这个量）。 */
+        private const val TINT_FILTER_CACHE_LIMIT = 64
+        /** 渐变小缓存（环/进度条/进度环）的槽数；一张表盘的渐变层就那么几个。 */
+        private const val SMALL_GRADIENT_CACHE_SIZE = 8
+        /** 文字布局缓存上限；超过按整表清空（一张表盘的文字层远到不了这个量）。 */
+        private const val TEXT_LAYOUT_CACHE_LIMIT = 128
+        /**
+         * 同一 tick 内 tick 判定与绘制共用一份 [WatchDataSnapshot] 的时间窗
+         * （毫秒）。取值以覆盖 33ms tick→draw 间隔为准、不跨 tick：跨 tick
+         * 复用会让传感器类字段的取值时刻后移，重力景深的低通滤波手感会变。
+         */
+        private const val SNAPSHOT_REUSE_WINDOW_MS = 40L
         /**
          * 帧序列缓存的预算（见 [putAnimatedBitmapLocked]）。
          *
