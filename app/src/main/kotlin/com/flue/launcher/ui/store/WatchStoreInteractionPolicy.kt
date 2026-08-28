@@ -6,7 +6,6 @@ import com.flue.launcher.watchface.store.WatchStoreInstallState
 internal enum class WatchStoreAccountMenuAction {
     LOGIN_OR_REGISTER,
     MY_UPLOADS,
-    UPLOAD,
 }
 
 /**
@@ -22,7 +21,7 @@ internal enum class WatchStoreAccountMenuAction {
  */
 internal fun watchStoreAccountMenuActions(signedIn: Boolean): List<WatchStoreAccountMenuAction> =
     if (signedIn) {
-        listOf(WatchStoreAccountMenuAction.MY_UPLOADS, WatchStoreAccountMenuAction.UPLOAD)
+        listOf(WatchStoreAccountMenuAction.MY_UPLOADS)
     } else {
         listOf(WatchStoreAccountMenuAction.LOGIN_OR_REGISTER)
     }

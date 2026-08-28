@@ -131,6 +131,26 @@ class WatchStoreParsingTest {
     }
 
     @Test
+    fun `private market base requires explicit opt in while redirects remain strict`() {
+        assertThrows(IllegalArgumentException::class.java) {
+            WatchStoreUrlPolicy.normalizeBaseUrl("http://192.168.1.10:3000/api")
+        }
+        assertEquals(
+            "http://192.168.1.10:3000/api",
+            WatchStoreUrlPolicy.normalizeBaseUrl(
+                "http://192.168.1.10:3000/api",
+                allowPrivateNetworkBase = true,
+            ).toASCIIString(),
+        )
+        assertThrows(WatchStoreRedirectException::class.java) {
+            WatchStoreUrlPolicy.resolveRedirect(
+                URI("http://192.168.1.10:3000/api/watchfaces/1"),
+                "http://127.0.0.1/private",
+            )
+        }
+    }
+
+    @Test
     fun `url policy rejects hostnames resolving to private addresses or no addresses`() {
         val request = URI("https://watch.example/api")
         assertThrows(IllegalArgumentException::class.java) {

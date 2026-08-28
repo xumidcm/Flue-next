@@ -189,6 +189,8 @@ import com.flue.launcher.ui.store.isOwnWatchStoreComment
 import com.flue.launcher.ui.store.WatchStoreAccountMenuAction
 import com.flue.launcher.ui.store.commentsAfterWatchStoreCommentDeletion
 import com.flue.launcher.ui.store.mergeEditedWatchStoreComment
+import com.flue.launcher.ui.store.visibleWatchStoreReplies
+import com.flue.launcher.ui.store.flueWebViewUsable
 import com.flue.launcher.ui.store.watchStoreAccountMenuActions
 import com.flue.launcher.ui.store.watchStoreInstallStateShowsDownloadCount
 import androidx.compose.ui.zIndex
@@ -299,13 +301,16 @@ class WatchStoreActivity : FlueComponentActivity() {
     private val resumeGeneration = MutableStateFlow(0)
     private lateinit var storeUiPreferences: WatchStoreUiPreferences
     private var storeBaseUrl: String? = null
+    private var storeAllowLocalNetwork: Boolean = false
 
     override fun onResume() {
         super.onResume()
         if (::storeUiPreferences.isInitialized) {
             val latest = storeUiPreferences.readBaseUrl()
-            if (storeBaseUrl != null && latest != storeBaseUrl) {
+            val latestAllowLocalNetwork = storeUiPreferences.readAllowLocalNetwork()
+            if (storeBaseUrl != null && (latest != storeBaseUrl || latestAllowLocalNetwork != storeAllowLocalNetwork)) {
                 storeBaseUrl = latest
+                storeAllowLocalNetwork = latestAllowLocalNetwork
                 recreate()
                 return
             }
@@ -318,7 +323,8 @@ class WatchStoreActivity : FlueComponentActivity() {
         RecentsVisibility.apply(this)
         storeUiPreferences = WatchStoreUiPreferences(this)
         storeBaseUrl = storeUiPreferences.readBaseUrl()
-        val api = HttpWatchStoreApi(storeBaseUrl!!)
+        storeAllowLocalNetwork = storeUiPreferences.readAllowLocalNetwork()
+        val api = HttpWatchStoreApi(storeBaseUrl!!, allowPrivateNetworkBase = storeAllowLocalNetwork)
         val repository = WatchStoreRepository(this, api = api)
         val uiPreferences = storeUiPreferences
         setContent {
@@ -521,6 +527,7 @@ private fun WatchStoreScreen(
     // setResult 回来（自己**不装**），这里再走商店既有的下载/安装流程 —— 那条路带着
     // 安装事务日志、目录对账与失败回滚，复制一份到 WebView 侧迟早两边行为分叉。
     var pendingWebInstallId by remember { mutableStateOf<String?>(null) }
+    var pendingWebLogin by remember { mutableStateOf<Pair<String, String>?>(null) }
     val webHost = rememberLauncherForActivityResult(
         ActivityResultContracts.StartActivityForResult(),
     ) { result ->
@@ -531,6 +538,13 @@ private fun WatchStoreScreen(
                 selectedId = id
                 pendingWebInstallId = id
             }
+        result.data?.let { data ->
+            val token = data.getStringExtra(WatchStoreWebActivity.EXTRA_LOGIN_TOKEN)
+            val username = data.getStringExtra(WatchStoreWebActivity.EXTRA_LOGIN_USERNAME)
+            if (!token.isNullOrBlank() && !username.isNullOrBlank()) {
+                pendingWebLogin = token to username
+            }
+        }
     }
     val openWebPage: (WatchStoreWebPage) -> Unit = { page ->
         storeWebPageIntent(context, uiPreferences.readBaseUrl(), page)?.let(webHost::launch)
@@ -602,6 +616,14 @@ private fun WatchStoreScreen(
     val notificationAuthStore = remember { WatchStoreAuthStore(context) }
     val unreadCounter = remember(notificationApi) { WatchStoreUnreadCounter.of(notificationApi) }
     var notificationSession by remember { mutableStateOf(notificationAuthStore.read()) }
+    LaunchedEffect(pendingWebLogin) {
+        val login = pendingWebLogin ?: return@LaunchedEffect
+        pendingWebLogin = null
+        withContext(Dispatchers.IO) {
+            notificationAuthStore.write(login.first, login.second)
+        }
+        notificationSession = withContext(Dispatchers.IO) { notificationAuthStore.read() }
+    }
     /**
      * 自己的 `user.id`。
      *
@@ -1374,7 +1396,6 @@ private fun WatchStoreScreen(
                                     viewMode = next
                                     uiPreferences.writeViewMode(next)
                                 },
-                                onUpload = { uploadVisible = true },
                                 onMyUploads = { myUploadsVisible = true },
                                 onOpenCustomMarketUrl = { marketUrlDialogVisible = true },
                                 onBack = onBack,
@@ -1512,7 +1533,6 @@ private fun WatchStoreScreen(
                                     viewMode = next
                                     uiPreferences.writeViewMode(next)
                                 },
-                                onUpload = { uploadVisible = true },
                                 onMyUploads = { myUploadsVisible = true },
                                 onOpenCustomMarketUrl = { marketUrlDialogVisible = true },
                                 onBack = onBack,
@@ -1599,7 +1619,6 @@ private fun WatchStoreScreen(
                             viewMode = next
                             uiPreferences.writeViewMode(next)
                         },
-                        onUpload = { uploadVisible = true },
                         onMyUploads = { myUploadsVisible = true },
                         onOpenCustomMarketUrl = { marketUrlDialogVisible = true },
                         showManagement = marketLoadSucceeded,
@@ -1690,6 +1709,7 @@ private fun WatchStoreScreen(
                     onUse = { record -> record.activeLauncherIdOrNull()?.let(useInstalled) },
                     onEdit = { record -> record.activeLauncherIdOrNull()?.let(editInstalled) },
                     onRename = { record, name -> renameInstalled(overlayId, record, name) },
+                    onReinstall = { download(overlayId, selectedDetail?.screenType ?: WatchStoreScreenType.UNKNOWN) },
                     onDelete = { record -> removeInstalled(overlayId, record) },
                     onExport = { record -> record.activeLauncherIdOrNull()?.let(exportInstalled) },
                     onOpenWeb = { openWebWatchFace(overlayId) },
@@ -1719,6 +1739,7 @@ private fun WatchStoreScreen(
         ) {
             StoreUploadOverlay(
                 repository = repository,
+                api = api,
                 installedFaces = installedFaces,
                 registrationEnabled = featureFlags.registrationEnabled,
                 onUploaded = { reloadToken++ },
@@ -1741,14 +1762,20 @@ private fun WatchStoreScreen(
         ) {
             MyUploadsOverlay(
                 repository = repository,
+                api = api,
                 installedFaces = installedFaces,
                 registrationEnabled = featureFlags.registrationEnabled,
                 // 从菜单的「登录 / 注册」或详情页的「去登录」进来时直接落在表单上，
                 // 不经过中间那页「登录后查看我的上传」（老师原话：点击直接跳转登录）。
                 startInLoginForm = loginFormRequested,
+                onOpenUpload = {
+                    myUploadsVisible = false
+                    uploadVisible = true
+                },
                 onDismiss = { myUploadsVisible = false },
                 onOpenWeb = { openWebPage(WatchStoreWebPage.DASHBOARD) },
                 onOpenWebExternal = { openExternalPage(WatchStoreWebPage.DASHBOARD) },
+                onOpenWebLogin = { openWebPage(WatchStoreWebPage.LOGIN) },
             )
         }
 
@@ -1829,6 +1856,11 @@ private fun WatchStoreScreen(
                     token = token,
                     onOpenWeb = { openWebPage(WatchStoreWebPage.PROFILE) },
                     onOpenWebExternal = { openExternalPage(WatchStoreWebPage.PROFILE) },
+                    onLogout = {
+                        notificationAuthStore.clear()
+                        notificationSession = null
+                        profileVisible = false
+                    },
                     onTokenExpired = {
                         notificationAuthStore.clear()
                         notificationSession = null
@@ -1942,7 +1974,6 @@ private fun WatchStoreBrowseControls(
     isLoggedIn: Boolean,
     onLogin: () -> Unit,
     onToggleViewMode: () -> Unit,
-    onUpload: () -> Unit,
     onMyUploads: () -> Unit,
     onOpenCustomMarketUrl: () -> Unit,
     onBack: () -> Unit,
@@ -1967,7 +1998,6 @@ private fun WatchStoreBrowseControls(
                 onBack = onBack,
                 viewMode = viewMode,
                 onToggleViewMode = onToggleViewMode,
-                onUpload = onUpload,
                 onMyUploads = onMyUploads,
                 onOpenCustomMarketUrl = onOpenCustomMarketUrl,
                 showManagement = showManagement,
@@ -2105,7 +2135,6 @@ private fun StoreHeader(
     onBack: () -> Unit,
     viewMode: WatchStoreViewMode,
     onToggleViewMode: () -> Unit,
-    onUpload: () -> Unit,
     onMyUploads: () -> Unit,
     onOpenCustomMarketUrl: () -> Unit,
     showManagement: Boolean,
@@ -2201,7 +2230,6 @@ private fun StoreHeader(
             showManagement = showManagement,
             isLoggedIn = isLoggedIn,
             onLogin = onLogin,
-            onUpload = onUpload,
             onMyUploads = onMyUploads,
             onOpenCustomMarketUrl = onOpenCustomMarketUrl,
             onMyFavorites = onMyFavorites,
@@ -2244,7 +2272,6 @@ private fun StoreFloatingActions(
     onBack: () -> Unit,
     viewMode: WatchStoreViewMode,
     onToggleViewMode: () -> Unit,
-    onUpload: () -> Unit,
     onMyUploads: () -> Unit,
     onOpenCustomMarketUrl: () -> Unit,
     showManagement: Boolean,
@@ -2303,7 +2330,6 @@ private fun StoreFloatingActions(
             showManagement = showManagement,
             isLoggedIn = isLoggedIn,
             onLogin = onLogin,
-            onUpload = onUpload,
             onMyUploads = onMyUploads,
             onOpenCustomMarketUrl = onOpenCustomMarketUrl,
             onMyFavorites = onMyFavorites,
@@ -2335,7 +2361,6 @@ private fun StoreOverflowMenu(
     showManagement: Boolean,
     isLoggedIn: Boolean,
     onLogin: () -> Unit,
-    onUpload: () -> Unit,
     onMyUploads: () -> Unit,
     onOpenCustomMarketUrl: () -> Unit,
     onMyFavorites: (() -> Unit)?,
@@ -2444,13 +2469,6 @@ private fun StoreOverflowMenu(
                                     ) {
                                         expanded = false
                                         onMyUploads()
-                                    }
-                                    WatchStoreAccountMenuAction.UPLOAD -> StoreOverflowItem(
-                                        icon = MiuixIcons.UploadCloud,
-                                        label = stringResource(R.string.watch_store_upload_face),
-                                    ) {
-                                        expanded = false
-                                        onUpload()
                                     }
                                 }
                             }
@@ -3021,14 +3039,21 @@ private fun WatchFaceGridCard(
                 onClick = onOpen,
             ),
     ) {
-        WatchPreview(
-            repository = repository,
-            id = item.id,
-            modifier = Modifier
-                .fillMaxWidth()
-                .aspectRatio(1f),
-            targetSize = 256,
-        )
+        Box {
+            WatchPreview(
+                repository = repository,
+                id = item.id,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .aspectRatio(1f),
+                targetSize = 256,
+            )
+            if (item.wmProtected) {
+                Box(Modifier.padding(7.dp)) {
+                    WatchStoreProtectedBadge()
+                }
+            }
+        }
         Column(
             Modifier
                 .fillMaxWidth()
@@ -3043,9 +3068,6 @@ private fun WatchFaceGridCard(
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
-            if (item.wmProtected) {
-                WatchStoreProtectedBadge()
-            }
             InstallStateLine(
                 downloadState = downloadState,
                 compact = true,
@@ -3084,6 +3106,7 @@ private fun WatchFaceDetailPage(
     onUse: (WatchFaceRecord) -> Unit,
     onEdit: (WatchFaceRecord) -> Unit,
     onRename: (WatchFaceRecord, String) -> Unit,
+    onReinstall: () -> Unit,
     onDelete: (WatchFaceRecord) -> Unit,
     onExport: (WatchFaceRecord) -> Unit,
     /** H4：底部「在网页版查看」。为 null 时不渲染（市场地址算不出网页地址时）。 */
@@ -3102,6 +3125,7 @@ private fun WatchFaceDetailPage(
     val style = LauncherTheme.style
     val isScreenRound = isFlueScreenRound()
     val installedRecord = (downloadState as? WatchStoreInstallState.Installed)?.record
+    val canReinstall = installedRecord?.source is WatchFaceInstallSource.Market
     val fallbackName = detail?.name ?: summary?.name ?: localDescriptor?.displayName
     val displayName = installedRecord?.resolvedDisplayName(fallbackName)
         ?: fallbackName
@@ -3463,14 +3487,31 @@ private fun WatchFaceDetailPage(
                                         fontSize = 11.sp,
                                     )
                                 }
-                                 Text(
-                                     stringResource(
-                                         R.string.watch_store_name_fmt,
-                                         record.resolvedDisplayName(fallbackName) ?: displayName,
-                                     ),
-                                     color = style.secondaryTextColor,
-                                     fontSize = 11.sp,
-                                 )
+                                 Row(verticalAlignment = Alignment.CenterVertically) {
+                                     Text(
+                                         stringResource(
+                                             R.string.watch_store_name_fmt,
+                                             record.resolvedDisplayName(fallbackName) ?: displayName,
+                                         ),
+                                         color = style.secondaryTextColor,
+                                         fontSize = 11.sp,
+                                         modifier = Modifier.weight(1f),
+                                     )
+                                     IconButton(
+                                         onClick = {
+                                             nameText = record.resolvedDisplayName(fallbackName) ?: displayName
+                                             editingName = true
+                                         },
+                                         modifier = Modifier.size(30.dp),
+                                     ) {
+                                         Icon(
+                                             MiuixIcons.Edit,
+                                             contentDescription = stringResource(R.string.watch_editor_rename),
+                                             tint = style.accentColor,
+                                             modifier = Modifier.size(15.dp),
+                                         )
+                                     }
+                                 }
                                 // 点击后立刻反馈「已应用」并置灰，避免用户反复点。
                                 var appliedThisVisit by remember(record.logicalId) { mutableStateOf(false) }
                                 StorePrimaryButton(
@@ -3546,16 +3587,14 @@ private fun WatchFaceDetailPage(
                                     }
                                 } else {
                                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                        StoreSecondaryButton(
-                                            label = stringResource(R.string.watch_editor_rename),
-                                            onClick = {
-                                                nameText = record.resolvedDisplayName(fallbackName)
-                                                    ?: displayName
-                                                editingName = true
-                                            },
-                                            icon = MiuixIcons.Rename,
-                                            modifier = Modifier.weight(1f),
-                                        )
+                                        if (canReinstall) {
+                                            StoreSecondaryButton(
+                                                label = stringResource(R.string.watch_store_reinstall),
+                                                onClick = onReinstall,
+                                                icon = MiuixIcons.Refresh,
+                                                modifier = Modifier.weight(1f),
+                                            )
+                                        }
                                         StoreDangerButton(
                                             label = stringResource(R.string.watch_store_delete_installed),
                                             onClick = { onDelete(record) },
@@ -3691,6 +3730,7 @@ private fun WatchStoreSocialDetailSection(
     // 详情页只放一条评论，其余进「查看更多评论」的二级页（老师要的）。
     // 手表屏幕上一条长评论就占掉半屏，全列在详情里等于把下面的卡都挤出屏幕。
     var allCommentsVisible by remember(remoteId) { mutableStateOf(false) }
+    val expandedCommentThreads = remember(remoteId) { mutableStateMapOf<String, Boolean>() }
     var rating by remember(remoteId) { mutableStateOf<WatchStoreRatingSummary?>(null) }
     var favorite by remember(remoteId) { mutableStateOf(false) }
     var favoriteCount by remember(remoteId, detail?.favoriteCount, summary?.favoriteCount) {
@@ -4117,15 +4157,20 @@ private fun WatchStoreSocialDetailSection(
             val threads = remember(comments) { threadWatchStoreComments(comments) }
             // 一份线程渲染逻辑，详情卡与「全部评论」二级页共用 —— 复制两遍必然漂移出
             // 两套交互（回复框在一边能开、另一边不能）。
-            val renderThread: @Composable (com.flue.launcher.ui.store.WatchStoreCommentThread) -> Unit =
-                { thread ->
+            val renderThread: @Composable (com.flue.launcher.ui.store.WatchStoreCommentThread, Boolean, Boolean) -> Unit =
+                { thread, showReplies, expanded ->
                     WatchStoreCommentThreadRow(
                         repository = repository,
                         thread = thread,
                         signedInAuthorId = sessionAuthorId,
                         avatarRevision = authorAvatarRevision,
                         onOpenCreator = onOpenCreator,
-                        onReply = { replyTo = it; draft = "" },
+                        onReply = {
+                            if (ensureSignedIn()) {
+                                replyTo = it
+                                draft = ""
+                            }
+                        },
                         replyTo = replyTo,
                         replyDraft = draft,
                         onReplyDraftChange = { draft = it.take(2_000) },
@@ -4149,6 +4194,10 @@ private fun WatchStoreSocialDetailSection(
                                     .onFailure { failure -> error = failure.userFacingMessage(context) }
                             }
                         },
+                        showReplies = showReplies,
+                        expanded = expanded,
+                        onToggleReplies = { expandedCommentThreads[thread.root.id] = !expanded },
+                        onOpenReplies = { allCommentsVisible = true },
                     )
                 }
             FlueCard(
@@ -4187,7 +4236,7 @@ private fun WatchStoreSocialDetailSection(
                         else -> {
                             // 详情页只留第一条：一条长评论在 230dp 圆屏上就占掉半屏，
                             // 全列出来会把下面的卡整个挤出屏幕。
-                            threads.take(DETAIL_COMMENT_PREVIEW_COUNT).forEach { renderThread(it) }
+                            threads.take(DETAIL_COMMENT_PREVIEW_COUNT).forEach { renderThread(it, false, false) }
                             if (threads.size > DETAIL_COMMENT_PREVIEW_COUNT) {
                                 StoreSecondaryButton(
                                     label = stringResource(
@@ -4292,9 +4341,13 @@ private fun WatchStoreSocialDetailSection(
                                 )
                             }
                             // StoreRoundList：圆屏弦宽 + 回弹 + 首尾能拉到圆心，一处给全。
-                            StoreRoundList(modifier = Modifier.weight(1f)) {
-                                items(threads, key = { it.root.id }, contentType = { "comment_thread" }) { thread ->
-                                    renderThread(thread)
+                                StoreRoundList(modifier = Modifier.weight(1f)) {
+                                    items(threads, key = { it.root.id }, contentType = { "comment_thread" }) { thread ->
+                                    renderThread(
+                                        thread,
+                                        true,
+                                        expandedCommentThreads[thread.root.id] == true,
+                                    )
                                 }
                             }
                         }
@@ -4515,13 +4568,17 @@ private fun WatchStoreCommentThreadRow(
     onSaveEdit: () -> Unit,
     onCancelEdit: () -> Unit,
     onDelete: (String) -> Unit,
+    showReplies: Boolean,
+    expanded: Boolean,
+    onToggleReplies: () -> Unit,
+    onOpenReplies: (() -> Unit)?,
 ) {
     val style = LauncherTheme.style
+    val visibleReplies = visibleWatchStoreReplies(thread, showReplies, expanded)
     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
         WatchStoreCommentRow(
             repository = repository,
             comment = thread.root,
-            isThreadRoot = true,
             replyToUsername = null,
             signedInAuthorId = signedInAuthorId,
             avatarRevision = avatarRevision,
@@ -4535,14 +4592,32 @@ private fun WatchStoreCommentThreadRow(
             onCancelEdit = onCancelEdit,
             onDelete = onDelete,
         )
+        if (!showReplies && thread.replies.isNotEmpty()) {
+            Row(
+                modifier = Modifier
+                    .padding(start = 22.dp)
+                    .clip(style.compactShape)
+                    .clickable { onOpenReplies?.invoke() }
+                    .padding(horizontal = 6.dp, vertical = 3.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(
+                    MiuixIcons.Messages,
+                    contentDescription = null,
+                    tint = style.secondaryTextColor,
+                    modifier = Modifier.size(14.dp),
+                )
+                Spacer(Modifier.width(4.dp))
+                Text(thread.replies.size.toString(), color = style.secondaryTextColor, fontSize = 10.sp)
+            }
+        }
         // 缩进只有一档（22dp）：thread.replies 已经把任意深度摊平了，层级靠每行的
         // 「@某人」标签表达（见 threadWatchStoreComments 的注释）。手表屏宽撑不住多档缩进。
-        thread.replies.forEach { reply ->
+        visibleReplies.forEach { reply ->
             Row(Modifier.padding(start = 22.dp)) {
                 WatchStoreCommentRow(
                     repository = repository,
                     comment = reply.comment,
-                    isThreadRoot = false,
                     replyToUsername = reply.replyToUsername,
                     signedInAuthorId = signedInAuthorId,
                     avatarRevision = avatarRevision,
@@ -4558,8 +4633,23 @@ private fun WatchStoreCommentThreadRow(
                 )
             }
         }
+        if (showReplies && !expanded && thread.replies.size > visibleReplies.size) {
+            TextButton(
+                onClick = onToggleReplies,
+                modifier = Modifier.padding(start = 22.dp),
+            ) {
+                Text(
+                    stringResource(
+                        R.string.watch_store_expand_replies_fmt,
+                        thread.replies.size - visibleReplies.size,
+                    ),
+                    color = style.accentColor,
+                    fontSize = 10.sp,
+                )
+            }
+        }
         AnimatedVisibility(
-            visible = replyTo == thread.root.id,
+            visible = replyTo != null && (replyTo == thread.root.id || thread.replies.any { it.comment.id == replyTo }),
             enter = expandVertically(expandFrom = Alignment.Top),
             exit = shrinkVertically(shrinkTowards = Alignment.Top),
         ) {
@@ -4603,8 +4693,6 @@ private fun WatchStoreCommentThreadRow(
 private fun WatchStoreCommentRow(
     repository: WatchStoreRepository,
     comment: WatchStoreComment,
-    /** 是不是这条 thread 的顶级评论。回复入口只挂在顶级上，见下面那段注释。 */
-    isThreadRoot: Boolean,
     /** 这条在回复谁（父评论的作者名）。顶级评论与父评论已消失时给 null。 */
     replyToUsername: String?,
     signedInAuthorId: String?,
@@ -4710,23 +4798,15 @@ private fun WatchStoreCommentRow(
         } else {
             Text(comment.content, color = style.bodyColor, fontSize = 11.sp, lineHeight = 15.sp)
         }
-        if (isThreadRoot) {
-            // 回复做成带文字的入口：一个光秃秃的图标按钮说明不了它是「回复」。
-            //
-            // 只有顶级评论摆这个入口：thread 里的回复框是挂在 thread.root.id 上的一个，
-            // 回复的回复要挂在哪一行还没定（留给 T-38/T-39 的评论区改造）。判据用
-            // isThreadRoot 而不是 parentCommentId == null —— parent 被隐藏的孤儿评论也是
-            // 一条顶级 thread，它照样该能被回复。
-            Text(
-                stringResource(R.string.watch_store_reply_a11y),
-                color = style.secondaryTextColor,
-                fontSize = 10.sp,
-                modifier = Modifier
-                    .clip(style.compactShape)
-                    .clickable { onReply(comment.id) }
-                    .padding(horizontal = 6.dp, vertical = 3.dp),
-            )
-        }
+        Text(
+            stringResource(R.string.watch_store_reply_a11y),
+            color = style.secondaryTextColor,
+            fontSize = 10.sp,
+            modifier = Modifier
+                .clip(style.compactShape)
+                .clickable { onReply(comment.id) }
+                .padding(horizontal = 6.dp, vertical = 3.dp),
+        )
         }
     }
 }
@@ -5003,6 +5083,7 @@ private fun NotificationRow(
 @Composable
 private fun MyUploadsOverlay(
     repository: WatchStoreRepository,
+    api: HttpWatchStoreApi,
     installedFaces: List<WatchFaceDescriptor>,
     registrationEnabled: Boolean = true,
     /**
@@ -5012,15 +5093,16 @@ private fun MyUploadsOverlay(
      * 已登录时这个值无意义：`session != null` 的分支根本不看 `loginFormVisible`。
      */
     startInLoginForm: Boolean = false,
+    onOpenUpload: () -> Unit,
     onDismiss: () -> Unit,
     /** G5 / H1：底部「打开网页版」→ `/dashboard`（未登录时的登录表单底下也是这一条）。 */
     onOpenWeb: (() -> Unit)? = null,
     onOpenWebExternal: (() -> Unit)? = null,
+    onOpenWebLogin: (() -> Unit)? = null,
 ) {
     val context = LocalContext.current
     val style = LauncherTheme.style
     val scope = rememberCoroutineScope()
-    val api = remember { HttpWatchStoreApi() }
     val authStore = remember { WatchStoreAuthStore(context) }
     val credentialStore = remember { WatchStoreCredentialStore(context) }
     var session by remember { mutableStateOf(authStore.read()) }
@@ -5186,6 +5268,13 @@ private fun MyUploadsOverlay(
                         subtitle = session?.username,
                     )
                 }
+                IconButton(onClick = onOpenUpload, modifier = Modifier.size(40.dp)) {
+                    Icon(
+                        MiuixIcons.UploadCloud,
+                        contentDescription = stringResource(R.string.watch_store_upload_face),
+                        tint = style.accentColor,
+                    )
+                }
             }
             Spacer(Modifier.height(4.dp))
 
@@ -5194,6 +5283,7 @@ private fun MyUploadsOverlay(
                     label = stringResource(R.string.watch_store_web_open),
                     onOpenInApp = onOpenWeb,
                     onOpenExternal = onOpenWebExternal,
+                    inline = true,
                 )
                 Spacer(Modifier.height(8.dp))
             }
@@ -5292,6 +5382,14 @@ private fun MyUploadsOverlay(
                             onLogin = { authenticate(register = false) },
                             onRegister = { authenticate(register = true) },
                         )
+                        if (onOpenWebLogin != null && flueWebViewUsable(context)) {
+                            StoreSecondaryButton(
+                                label = stringResource(R.string.watch_store_login_web),
+                                onClick = onOpenWebLogin,
+                                icon = MiuixIcons.Link,
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                        }
                     }
 
                     MyUploadsContentState.LOADING -> Box(
@@ -5332,11 +5430,19 @@ private fun MyUploadsOverlay(
                         Modifier.fillMaxSize(),
                         contentAlignment = Alignment.Center,
                     ) {
-                        Text(
-                            stringResource(R.string.watch_store_no_uploads),
-                            color = style.secondaryTextColor,
-                            fontSize = 14.sp,
-                        )
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Text(
+                                stringResource(R.string.watch_store_no_uploads),
+                                color = style.secondaryTextColor,
+                                fontSize = 14.sp,
+                            )
+                            Spacer(Modifier.height(12.dp))
+                            StorePrimaryButton(
+                                label = stringResource(R.string.watch_store_upload_face),
+                                onClick = onOpenUpload,
+                                icon = MiuixIcons.UploadCloud,
+                            )
+                        }
                     }
 
                     MyUploadsContentState.LIST -> {
@@ -5413,6 +5519,7 @@ private fun MyUploadsOverlay(
             if (entry != null) {
                 MyUploadEditOverlay(
                     repository = repository,
+                    api = api,
                     installedFaces = installedFaces,
                     entry = entry,
                     token = session?.token.orEmpty(),
@@ -5693,6 +5800,7 @@ private fun MyUploadEntryRow(
 @Composable
 private fun MyUploadEditOverlay(
     repository: WatchStoreRepository,
+    api: HttpWatchStoreApi,
     installedFaces: List<WatchFaceDescriptor>,
     entry: MyWatchFaceEntry,
     token: String,
@@ -5705,7 +5813,6 @@ private fun MyUploadEditOverlay(
     val scope = rememberCoroutineScope()
     val style = LauncherTheme.style
     val isScreenRound = isFlueScreenRound()
-    val api = remember { HttpWatchStoreApi() }
     var name by remember(entry.id) { mutableStateOf(entry.name) }
     var description by remember(entry.id) { mutableStateOf(entry.description) }
     var screenType by remember(entry.id) { mutableStateOf(entry.screenType) }
@@ -6156,6 +6263,7 @@ private fun MyUploadEditOverlay(
 @Composable
 private fun StoreUploadOverlay(
     repository: WatchStoreRepository,
+    api: HttpWatchStoreApi,
     installedFaces: List<WatchFaceDescriptor>,
     registrationEnabled: Boolean = true,
     onUploaded: () -> Unit,
@@ -6175,7 +6283,6 @@ private fun StoreUploadOverlay(
     val style = LauncherTheme.style
     val authStore = remember { WatchStoreAuthStore(context) }
     val credentialStore = remember { WatchStoreCredentialStore(context) }
-    val api = remember { HttpWatchStoreApi() }
 
     var auth by remember { mutableStateOf<WatchStoreAuthSession?>(null) }
     var authChecked by remember { mutableStateOf(false) }

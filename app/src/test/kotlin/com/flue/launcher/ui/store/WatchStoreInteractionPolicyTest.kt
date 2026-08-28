@@ -18,7 +18,6 @@ class WatchStoreInteractionPolicyTest {
         assertEquals(
             listOf(
                 WatchStoreAccountMenuAction.MY_UPLOADS,
-                WatchStoreAccountMenuAction.UPLOAD,
             ),
             watchStoreAccountMenuActions(signedIn = true),
         )

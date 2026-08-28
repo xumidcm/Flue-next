@@ -17,6 +17,7 @@ import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
 import android.webkit.WebSettings
 import android.webkit.WebView
+import android.util.Base64
 import android.webkit.WebViewClient
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
@@ -82,6 +83,8 @@ import java.net.HttpURLConnection
 import java.net.URI
 import java.net.URL
 import java.util.Locale
+import org.json.JSONObject
+import org.json.JSONTokener
 
 /**
  * C1 — 网页版兜底的 WebView 宿主。
@@ -164,8 +167,11 @@ class WatchStoreWebActivity : FlueComponentActivity() {
         super.onCreate(savedInstanceState)
         RecentsVisibility.apply(this)
         val preferences = WatchStoreUiPreferences(this)
-        siteBase = runCatching { URI(preferences.readBaseUrl()) }.getOrDefault(URI(DEFAULT_FALLBACK_BASE))
+        siteBase = intent.getStringExtra(EXTRA_TRUSTED_SITE_BASE)
+            ?.let { raw -> runCatching { URI(raw) }.getOrNull() }
+            ?: runCatching { URI(preferences.readBaseUrl()) }.getOrDefault(URI(DEFAULT_FALLBACK_BASE))
         val target = WatchStoreUrlPolicy.webUrlOrSiteRoot(siteBase, intent.getStringExtra(EXTRA_URL))
+        val loginMode = intent.getBooleanExtra(EXTRA_LOGIN_MODE, false)
 
         // SAF 的 launcher 必须在 STARTED 之前注册。
         systemPicker = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
@@ -240,6 +246,7 @@ class WatchStoreWebActivity : FlueComponentActivity() {
                         if (openExternally(created.url ?: target.toASCIIString())) finish()
                     },
                     onBack = { goBackOrFinish() },
+                    onImportLogin = if (loginMode) ::captureWebLogin else null,
                 )
                 if (chooserVisible) {
                     WebUploadChooserDialog(
@@ -287,6 +294,42 @@ class WatchStoreWebActivity : FlueComponentActivity() {
                     },
                 )
               }
+            }
+        }
+    }
+
+    private fun captureWebLogin() {
+        val view = webView ?: return
+        view.evaluateJavascript(
+            "localStorage.getItem('token')",
+        ) { raw ->
+            runCatching {
+                val currentUrl = view.url?.let(::URI)
+                    ?: error("网页登录页面地址缺失")
+                require(WatchStoreUrlPolicy.isSameWebSite(siteBase, currentUrl)) {
+                    "网页登录页面不属于当前市场"
+                }
+                val token = (JSONTokener(raw).nextValue() as? String).orEmpty().trim()
+                require(token.split('.').size == 3) { "网页登录令牌无效" }
+                val encodedPayload = token.split('.')[1]
+                val decoded = String(
+                    Base64.decode(encodedPayload, Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING),
+                    Charsets.UTF_8,
+                )
+                val tokenPayload = JSONObject(decoded)
+                val exp = tokenPayload.optLong("exp", 0L)
+                require(exp > System.currentTimeMillis() / 1_000L) { "网页登录令牌已过期" }
+                val username = tokenPayload.optString("username").trim()
+                require(username.isNotEmpty()) { "网页登录用户信息缺失" }
+                setResult(
+                    RESULT_OK,
+                    Intent()
+                        .putExtra(EXTRA_LOGIN_TOKEN, token)
+                        .putExtra(EXTRA_LOGIN_USERNAME, username),
+                )
+                finish()
+            }.onFailure {
+                Toast.makeText(this, R.string.watch_store_login_web_missing, Toast.LENGTH_LONG).show()
             }
         }
     }
@@ -801,6 +844,10 @@ class WatchStoreWebActivity : FlueComponentActivity() {
 
         /** C3：命中表盘下载链接时交回调用方的表盘 id，由商店走既有安装流程。 */
         const val EXTRA_INSTALL_ID: String = "com.flue.launcher.extra.WEB_INSTALL_ID"
+        const val EXTRA_LOGIN_MODE: String = "com.flue.launcher.extra.WEB_LOGIN_MODE"
+        const val EXTRA_LOGIN_TOKEN: String = "com.flue.launcher.extra.WEB_LOGIN_TOKEN"
+        const val EXTRA_LOGIN_USERNAME: String = "com.flue.launcher.extra.WEB_LOGIN_USERNAME"
+        const val EXTRA_TRUSTED_SITE_BASE: String = "com.flue.launcher.extra.WEB_TRUSTED_SITE_BASE"
 
         private const val LOG_TAG = "FlueStoreWeb"
 
@@ -844,7 +891,9 @@ class WatchStoreWebActivity : FlueComponentActivity() {
         )
 
         fun intent(context: Context, url: String): Intent =
-            Intent(context, WatchStoreWebActivity::class.java).putExtra(EXTRA_URL, url)
+            Intent(context, WatchStoreWebActivity::class.java)
+                .putExtra(EXTRA_URL, url)
+                .putExtra(EXTRA_LOGIN_MODE, url.trimEnd('/').endsWith("/login"))
     }
 }
 
@@ -857,6 +906,7 @@ private fun WebHostScreen(
     onRetry: () -> Unit,
     onOpenExternal: () -> Unit,
     onBack: () -> Unit,
+    onImportLogin: (() -> Unit)?,
 ) {
     BackHandler(onBack = onBack)
     Box(modifier = Modifier.fillMaxSize().background(Color.Black)) {
@@ -893,6 +943,15 @@ private fun WebHostScreen(
                     Spacer(Modifier.height(10.dp))
                     Text(busyMessage, color = Color.White, fontSize = 13.sp)
                 }
+            }
+        }
+        if (onImportLogin != null && error == null) {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(10.dp),
+            ) {
+                WebErrorAction(stringResource(R.string.watch_store_login_web_import), onImportLogin)
             }
         }
     }

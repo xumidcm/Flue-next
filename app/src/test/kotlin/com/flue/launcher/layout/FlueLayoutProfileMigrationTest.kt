@@ -35,6 +35,8 @@ class FlueLayoutProfileMigrationTest {
             fisheyeRangeRows = 7,
             fisheyeStrengthPercent = 35,
             leftSafeInsetPercent = 20,
+            narrowColumns = 4,
+            appListScalePercent = 125,
         )
         assertEquals(LayoutMode.entries.size, migrated.size)
         migrated.forEach { profile ->
@@ -44,6 +46,8 @@ class FlueLayoutProfileMigrationTest {
             assertEquals(7, profile.fisheyeRangeRows)
             assertEquals(35, profile.fisheyeStrengthPercent)
             assertEquals(20, profile.leftSafeInsetPercent)
+            assertEquals(4, profile.narrowColumns)
+            assertEquals(125, profile.appListScalePercent)
         }
         // 布局绑定与 id 不能被迁移改掉，否则 resolve 找不到档案。
         assertEquals(

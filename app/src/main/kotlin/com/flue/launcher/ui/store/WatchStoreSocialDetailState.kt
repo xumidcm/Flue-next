@@ -64,6 +64,33 @@ internal data class WatchStoreCommentReply(
     val replyToUsername: String?,
 )
 
+internal data class WatchStoreCommentActions(
+    val canReply: Boolean,
+    val canEdit: Boolean,
+    val canDelete: Boolean,
+)
+
+internal fun watchStoreCommentActions(
+    comment: WatchStoreComment,
+    signedInAuthorId: String?,
+): WatchStoreCommentActions = WatchStoreCommentActions(
+    canReply = true,
+    canEdit = isOwnWatchStoreComment(comment, signedInAuthorId),
+    canDelete = isOwnWatchStoreComment(comment, signedInAuthorId),
+)
+
+internal fun visibleWatchStoreReplies(
+    thread: WatchStoreCommentThread,
+    showReplies: Boolean,
+    expanded: Boolean,
+): List<WatchStoreCommentReply> = when {
+    !showReplies -> emptyList()
+    expanded -> thread.replies
+    else -> thread.replies.take(1)
+}
+
+internal fun watchStoreReplyCount(thread: WatchStoreCommentThread): Int = thread.replies.size
+
 /**
  * 建树时最多往上走这么多跳。
  *

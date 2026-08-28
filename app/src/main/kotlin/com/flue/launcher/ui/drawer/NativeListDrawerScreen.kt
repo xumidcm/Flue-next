@@ -36,6 +36,7 @@ import com.flue.launcher.applist.nativeview.NativeAppListPalette
 import com.flue.launcher.applist.nativeview.NativeAppListIconShape
 import com.flue.launcher.applist.nativeview.NativeAppListPresentation
 import com.flue.launcher.util.FlowCrescentDirection
+import com.flue.launcher.util.FlowShapeCurve
 import com.flue.launcher.applist.nativeview.HoneycombNativeAppListLayoutStrategy
 import com.flue.launcher.applist.nativeview.DenseGridNativeAppListLayoutStrategy
 import com.flue.launcher.applist.nativeview.FlowNativeAppListLayoutStrategy
@@ -43,6 +44,7 @@ import com.flue.launcher.applist.nativeview.RingNativeAppListLayoutStrategy
 import com.flue.launcher.applist.nativeview.LinearNativeAppListLayoutStrategy
 import com.flue.launcher.applist.nativeview.nativeRingCellSizePx
 import com.flue.launcher.applist.nativeview.nativeRingIconSizePx
+import com.flue.launcher.applist.nativeview.nativeScrollIndicatorReservedWidthPx
 import com.flue.launcher.applist.nativeview.NativeAppListRowBorder
 import com.flue.launcher.applist.nativeview.NativeAppListTheme
 import com.flue.launcher.applist.nativeview.NativeDeviceShape
@@ -181,6 +183,7 @@ fun NativeListDrawerScreen(
     flowCrescentBulgePercent: Int = 0,
     /** 心流月牙朝右（true）还是朝左。 */
     flowCrescentToRight: Boolean = true,
+    flowShapeCurve: FlowShapeCurve = FlowShapeCurve.Crescent,
     onAppClick: (AppInfo, Offset) -> Unit,
     onLongClick: (AppInfo) -> Unit = {},
     onReorder: (AppListCommand.Move) -> Boolean = { false },
@@ -264,6 +267,7 @@ fun NativeListDrawerScreen(
                 honeycombTopFisheyeEnabled = honeycombTopFisheyeEnabled,
                 flowCrescentBulgePercent = flowCrescentBulgePercent,
                 flowCrescentToRight = flowCrescentToRight,
+                flowShapeCurve = flowShapeCurve,
                 edgeSpacingCompressionEnabled = edgeSpacingCompressionEnabled,
                 topFadeRangeDp = topFadeRangeDp,
                 bottomFadeRangeDp = bottomFadeRangeDp,
@@ -412,6 +416,7 @@ internal data class NativeListDrawerConfigRequest(
     val flowCrescentBulgePercent: Int = 0,
     /** 心流月牙朝右（true）还是朝左。 */
     val flowCrescentToRight: Boolean = true,
+    val flowShapeCurve: FlowShapeCurve = FlowShapeCurve.Crescent,
     val edgeSpacingCompressionEnabled: Boolean,
     val topFadeRangeDp: Int,
     val bottomFadeRangeDp: Int,
@@ -470,6 +475,15 @@ internal fun nativeListDrawerConfig(request: NativeListDrawerConfigRequest): Nat
         request.viewportWidthPx.coerceAtLeast(0) *
             request.leftSafeInsetPercent.coerceIn(0, 50) / 100f
         ).roundToInt()
+    // 滚动指示器要占掉的右侧宽度。开关关掉时为 0（不能留白边）。
+    //
+    // 这条 inset 让五个布局的可用宽度都缩一点，心流的基准 X 因此自然左移 ——
+    // 它的基准被刻意定成「月牙峰值贴住可用区右边界」，所以不减掉指示器就永远压在上面
+    // （老师报的「在流心布局开启滚动指示器后，应用列表应该向左移动一点」）。
+    val rightSafeInsetPx = nativeScrollIndicatorReservedWidthPx(
+        enabled = request.scrollIndicatorEnabled,
+        density = density,
+    ).roundToInt()
     val honeycombNarrowColumns = request.honeycombNarrowColumns.coerceIn(1, 10)
     // 网格是均匀网格，没有蜂窝那种「窄行 / 宽行」之分，所以列数就是设置里的值，
     // 不能再 +1。以前沿用了蜂窝的 narrow+1 并把下限钳在 2，于是「网格列数」调到
@@ -492,7 +506,7 @@ internal fun nativeListDrawerConfig(request: NativeListDrawerConfigRequest): Nat
         request.presentation == NativeAppListPresentation.FLOW
     ) {
         val viewportWidth = request.viewportWidthPx.coerceAtLeast(1)
-        val contentWidth = (viewportWidth - leftSafeInsetPx).toFloat()
+        val contentWidth = (viewportWidth - leftSafeInsetPx - rightSafeInsetPx).toFloat()
             .coerceAtLeast(viewportWidth * 0.55f)
         val availableWidth = (contentWidth - 20f * density).coerceAtLeast(1f)
         val maxColumns = honeycombNarrowColumns + 1
@@ -512,6 +526,7 @@ internal fun nativeListDrawerConfig(request: NativeListDrawerConfigRequest): Nat
         nativeRingCellSizePx(
             viewportWidthPx = request.viewportWidthPx,
             leftSafeInsetPx = leftSafeInsetPx,
+            rightSafeInsetPx = rightSafeInsetPx,
             columns = honeycombNarrowColumns,
         )
     } else {
@@ -587,6 +602,7 @@ internal fun nativeListDrawerConfig(request: NativeListDrawerConfigRequest): Nat
         entryAnimationToken = request.entryAnimationToken,
         presentation = request.presentation,
         leftSafeInsetPx = leftSafeInsetPx,
+        rightSafeInsetPx = rightSafeInsetPx,
         rowHeightPx = rowHeightPx,
         iconSizePx = iconSizePx,
         rowPaddingStartPx = horizontalPaddingPx + (12f * density).roundToInt(),
@@ -617,6 +633,7 @@ internal fun nativeListDrawerConfig(request: NativeListDrawerConfigRequest): Nat
         } else {
             FlowCrescentDirection.Left
         },
+        flowShapeCurve = request.flowShapeCurve.sanitized(),
         // 星环也沿用同一个「每行列数」设置（honeycombNarrowColumns），等列不加一。
         ringCellSizePx = ringCellSizePx,
         denseGridColumns = denseGridColumns,

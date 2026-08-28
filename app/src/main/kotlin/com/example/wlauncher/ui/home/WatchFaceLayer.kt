@@ -260,7 +260,8 @@ fun WatchFaceLayer(
         onLongPress = onLongPress,
         onDoubleTap = onDoubleTap,
         showClock = true,
-        keepVideoAliveWhenHidden = true,
+        // 视频是高耗能资源，桌面离开表盘时交给 isFaceVisible 统一暂停，并保留静态首帧。
+        keepVideoAliveWhenHidden = false,
         modifier = modifier
     )
 }

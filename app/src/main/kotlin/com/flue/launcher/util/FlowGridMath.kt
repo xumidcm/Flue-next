@@ -12,6 +12,43 @@ enum class FlowCrescentDirection(val signum: Float) {
     Right(1f),
 }
 
+data class FlowShapeCurve(
+    val x1: Float = 1f / 3f,
+    val y1: Float = 0f,
+    val x2: Float = 2f / 3f,
+    val y2: Float = 1f / 3f,
+) {
+    fun sanitized(): FlowShapeCurve = copy(
+        x1 = x1.coerceIn(0f, 1f),
+        y1 = y1.coerceIn(0f, 1f),
+        x2 = x2.coerceIn(0f, 1f),
+        y2 = y2.coerceIn(0f, 1f),
+    )
+
+    companion object {
+        val Crescent = FlowShapeCurve()
+    }
+}
+
+fun flowShapeCurveProgress(progress: Float, curve: FlowShapeCurve): Float {
+    val target = progress.takeIf(Float::isFinite)?.coerceIn(0f, 1f) ?: return 0f
+    if (target <= 0f) return 0f
+    if (target >= 1f) return 1f
+    val safe = curve.sanitized()
+    if (safe == FlowShapeCurve.Crescent) return target * target
+    fun cubic(t: Float, p1: Float, p2: Float): Float {
+        val oneMinus = 1f - t
+        return 3f * oneMinus * oneMinus * t * p1 + 3f * oneMinus * t * t * p2 + t * t * t
+    }
+    var low = 0f
+    var high = 1f
+    repeat(12) {
+        val middle = (low + high) / 2f
+        if (cubic(middle, safe.x1, safe.x2) < target) low = middle else high = middle
+    }
+    return cubic((low + high) / 2f, safe.y1, safe.y2).coerceIn(0f, 1f)
+}
+
 /**
  * 「心流」布局的规则网格。
  *
@@ -70,6 +107,7 @@ fun flowCrescentOffsetPx(
     viewportHeight: Float,
     bulgePx: Float,
     direction: FlowCrescentDirection,
+    curve: FlowShapeCurve = FlowShapeCurve.Crescent,
 ): Float {
     if (
         !rowCenterY.isFinite() || !viewportCenterY.isFinite() ||
@@ -78,6 +116,8 @@ fun flowCrescentOffsetPx(
     ) {
         return 0f
     }
-    val t = ((rowCenterY - viewportCenterY) / (viewportHeight / 2f)).coerceIn(-1f, 1f)
-    return direction.signum * bulgePx * (1f - t * t)
+    val distance = kotlin.math.abs(
+        (rowCenterY - viewportCenterY) / (viewportHeight / 2f),
+    ).coerceIn(0f, 1f)
+    return direction.signum * bulgePx * (1f - flowShapeCurveProgress(distance, curve))
 }

@@ -21,6 +21,7 @@ internal class NativeRingLayoutManager(
     private val convergenceScratch = NativeRingOffset()
     private val safeGeometryAdapter = NativeDrawerGeometryAdapter()
     private var geometryLeftInset = Int.MIN_VALUE
+    private var geometryRightInset = Int.MIN_VALUE
     private var geometryColumns = Int.MIN_VALUE
     private var geometryCellSize = Float.NaN
 
@@ -28,11 +29,13 @@ internal class NativeRingLayoutManager(
         config: NativeAppListConfig,
     ): Boolean =
         geometryLeftInset == config.leftSafeInsetPx &&
+        geometryRightInset == config.rightSafeInsetPx &&
             geometryColumns == config.honeycombNarrowColumns &&
             geometryCellSize == config.ringCellSizePx
 
     override fun rememberGeometryConfig(config: NativeAppListConfig) {
         geometryLeftInset = config.leftSafeInsetPx
+        geometryRightInset = config.rightSafeInsetPx
         geometryColumns = config.honeycombNarrowColumns
         geometryCellSize = config.ringCellSizePx
     }
@@ -47,11 +50,13 @@ internal class NativeRingLayoutManager(
         viewportWidthPx = viewportWidthPx,
         viewportHeightPx = viewportHeightPx,
         leftSafeInsetPx = config.leftSafeInsetPx,
+        rightSafeInsetPx = config.rightSafeInsetPx,
         columns = config.honeycombNarrowColumns,
         cellSizePx = config.ringCellSizePx.takeIf { it.isFinite() && it > 0f }
             ?: nativeRingCellSizePx(
                 viewportWidthPx = viewportWidthPx,
                 leftSafeInsetPx = config.leftSafeInsetPx,
+                rightSafeInsetPx = config.rightSafeInsetPx,
                 columns = config.honeycombNarrowColumns,
             ),
     )
@@ -111,19 +116,15 @@ internal class NativeRingLayoutManager(
                 config = config,
                 output = childVisualScratch,
             )
-            // 方屏：收拢恒为 0，网格平铺（老师指定）。
-            val convergence = if (round) {
-                nativeRingConvergenceOffset(
-                    centerX = centerX,
-                    centerY = centerY,
-                    viewportWidth = width.toFloat(),
-                    viewportHeight = height.toFloat(),
-                    config = config,
-                    output = convergenceScratch,
-                )
-            } else {
-                convergenceScratch.set(0f, 0f)
-            }
+            // 形状分支收口在纯函数里：直屏只让触发行收拢，圆屏继续走径向收拢。
+            val convergence = nativeRingConvergenceOffset(
+                centerX = centerX,
+                centerY = centerY,
+                viewportWidth = width.toFloat(),
+                viewportHeight = height.toFloat(),
+                config = config,
+                output = convergenceScratch,
+            )
             // 圆屏那条安全轮廓拿到的是**收拢之后**的期望格心，而不是原始格心。
             //
             // 顺序很关键：适配器整体替换 translation，把收拢先加进 visual 会被它吃掉

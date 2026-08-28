@@ -583,11 +583,10 @@ class WatchEditorSession private constructor(
     }
 
     /**
-     * 把源视频原样导入为 1.0 的 `video` 图层（直通路径，无重编码）。
+     * 把已完成 H.264 MP4 重编码的视频导入为 1.0 的 `video` 图层。
      *
      * 与 [importVideoFrameSequence] 是同一位置的两条路：那条把视频烘焙成
-     * `image_gif` + 反引号帧路径，这条直接引用 `videos/` 下的源文件。调用方
-     * 先用 `canPassThroughVideo` 判定走哪条。
+     * `image_gif` + 反引号帧路径，这条引用 `videos/` 下经过标准化的 MP4 文件。
      *
      * 仍然复用相同的资源预算与回滚约定 —— 旧素材先解引用再入库，异常时把已
      * 搬入草稿的孤儿文件清掉，剩下的交给 `mutate` 回滚。

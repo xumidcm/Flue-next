@@ -56,6 +56,7 @@ import com.flue.launcher.watchStoreSocialErrorMessage
 import com.flue.launcher.watchface.store.HttpWatchStoreApi
 import com.flue.launcher.watchface.store.WatchStoreAccount
 import com.flue.launcher.watchface.store.WatchStoreAuthStore
+import com.flue.launcher.watchface.store.WatchStoreCredentialStore
 import com.flue.launcher.watchface.store.WatchStoreProfileUpdate
 import com.flue.launcher.watchface.store.WatchStoreRepository
 import kotlinx.coroutines.Dispatchers
@@ -92,12 +93,14 @@ fun WatchStoreProfileOverlay(
     token: String,
     onOpenWeb: () -> Unit,
     onOpenWebExternal: () -> Unit,
+    onLogout: () -> Unit,
     onTokenExpired: () -> Unit,
     onDismiss: () -> Unit,
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val authStore = remember(context) { WatchStoreAuthStore(context) }
+    val credentialStore = remember(context) { WatchStoreCredentialStore(context) }
     val cached = remember(authStore) { authStore.read() }
 
     var account by remember(cached) { mutableStateOf(cached?.toProfileAccountSnapshot()) }
@@ -107,6 +110,7 @@ fun WatchStoreProfileOverlay(
     /** 非空时盖一层转圈 + 文案（上传头像 / 提交资料）。 */
     var busyMessage by remember { mutableStateOf<String?>(null) }
     var notice by remember { mutableStateOf<String?>(null) }
+    var logoutConfirmVisible by remember { mutableStateOf(false) }
 
     var editing by remember { mutableStateOf<ProfileEdit?>(null) }
     var passwordVisible by remember { mutableStateOf(false) }
@@ -267,7 +271,36 @@ fun WatchStoreProfileOverlay(
                 onOpenExternal = onOpenWebExternal,
             )
             Spacer(Modifier.height(6.dp))
+            TextButton(
+                onClick = { logoutConfirmVisible = true },
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text(
+                    stringResource(R.string.watch_store_logout),
+                    color = LauncherTheme.style.secondaryTextColor,
+                )
+            }
         }
+    }
+
+    if (logoutConfirmVisible) {
+        FlueAlertDialog(
+            onDismissRequest = { logoutConfirmVisible = false },
+            title = stringResource(R.string.watch_store_logout),
+            text = stringResource(R.string.watch_store_logout_confirm),
+            confirmText = stringResource(R.string.watch_editor_confirm),
+            onConfirm = {
+                logoutConfirmVisible = false
+                scope.launch {
+                    withContext(Dispatchers.IO) {
+                        authStore.clear()
+                        credentialStore.clear()
+                    }
+                    onLogout()
+                }
+            },
+            dismissText = stringResource(R.string.action_cancel),
+        )
     }
 
     // ── 各项编辑弹窗 ────────────────────────────────────────────────────────

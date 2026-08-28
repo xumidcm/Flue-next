@@ -170,14 +170,11 @@ internal class NativeDrawerGeometryAdapter {
         itemHeight: Float,
         config: NativeAppListConfig,
     ) {
-        val viewportWidthInt = viewportWidth.toInt().coerceAtLeast(1)
-        val viewportHeightInt = viewportHeight.toInt().coerceAtLeast(1)
-        val safeLeft = config.leftSafeInsetPx.coerceIn(0, viewportWidthInt - 1)
-        val safeRight = config.rightSafeInsetPx.coerceIn(0, viewportWidthInt - safeLeft - 1)
-        val safeTop = config.topSafeInsetPx.coerceIn(0, viewportHeightInt - 1)
-        val safeBottom = config.bottomSafeInsetPx.coerceIn(0, viewportHeightInt - safeTop - 1)
-        val availableWidth = (viewportWidth - safeLeft - safeRight).coerceAtLeast(1f)
-        val availableHeight = (viewportHeight - safeTop - safeBottom).coerceAtLeast(1f)
+        // 与 safeInsetsForViewport 走同一个夹取：两份实现各自演化的话，会给
+        // SafeOutline.create 送进互相冲突的 safeBounds，圆屏布局期直接 require 失败。
+        val safe = config.safeInsetsForViewport(viewportWidth, viewportHeight)
+        val availableWidth = (viewportWidth - safe.left - safe.right).coerceAtLeast(1f)
+        val availableHeight = (viewportHeight - safe.top - safe.bottom).coerceAtLeast(1f)
         var width = itemWidth.coerceAtMost(availableWidth)
         var height = itemHeight.coerceAtMost(availableHeight)
         if (config.deviceShape == NativeDeviceShape.ROUND) {
@@ -201,6 +198,14 @@ private data class ViewportSafeInsets(
     val bottom: Float,
 )
 
+/**
+ * 四条安全内缩夹到视口内的**唯一**实现。
+ *
+ * 原先这套夹取在本文件里有两份（`resolveSafeHitSize` 手写一遍、这里再写一遍）。
+ * 两份在 `rightSafeInsetPx` 恒为 0 的年代恰好等价，一旦它变成非零就会分叉 ——
+ * 内切尺寸按一套算、安全轮廓按另一套算，`DrawerLayoutEngine` 的
+ * `require(safeBounds.width > 0f && ...)` 就会在圆屏布局期抛异常。
+ */
 private fun NativeAppListConfig.safeInsetsForViewport(
     viewportWidth: Float,
     viewportHeight: Float,

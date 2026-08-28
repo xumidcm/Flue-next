@@ -159,6 +159,8 @@ import com.flue.launcher.ui.common.WatchBatteryPill
 import com.flue.launcher.ui.common.fluePressScale
 import com.flue.launcher.ui.common.rememberFluePressScale
 import com.flue.launcher.ui.common.rememberFlueElasticScrollState
+import com.flue.launcher.ui.common.flueOverlayOvershootPx
+import com.flue.launcher.motion.LocalFlueMotionProfile
 import com.flue.launcher.ui.style.flueOverscroll
 import com.flue.launcher.ui.controlcenter.SideScreenControlCenterMusicCard
 import com.flue.launcher.ui.controlcenter.sideScreenContentAllowsVerticalScroll
@@ -199,8 +201,6 @@ private const val SIDE_SCREEN_NOTIFICATION_FLING_VELOCITY = 1350f
 private const val STACKED_PREVIEW_TRANSLATION_DP = 14
 private const val STACKED_PREVIEW_HORIZONTAL_INSET_DP = 5
 private const val SIDE_SCREEN_SHORTCUT_MENU_TRIGGER_MS = 410L
-private const val SIDE_SCREEN_OVERSCROLL_LIMIT = 140f
-private const val SIDE_SCREEN_OVERSCROLL_RESISTANCE = 0.35f
 private const val WIDGET_CARD_MIN_HEIGHT_DP = 64
 private const val WIDGET_CARD_MAX_HEIGHT_DP = 360
 
@@ -221,14 +221,6 @@ private data class ShortcutPickerItem(
     val icon: ImageBitmap,
     val source: AppInfo
 )
-
-@Composable
-private fun rememberPickerOverscrollConnection(
-    listState: androidx.compose.foundation.lazy.LazyListState
-): Pair<Float, NestedScrollConnection> {
-    val state = com.flue.launcher.ui.common.rememberFlueElasticScrollState(listState)
-    return state.offsetPx to state.connection
-}
 
 private data class SideScreenWidgetCardItem(
     val widgetIndex: Int,
@@ -516,6 +508,8 @@ fun SmartStackLayer(
     apps: List<AppInfo>,
     sideScreenShortcuts: List<String?>,
     previewGroups: List<NotificationGroupUi>,
+    shortcutRows: Int = 2,
+    shortcutColumns: Int = 4,
     showMusicCard: Boolean = false,
     showMediaCustomActions: Boolean = true,
     musicTextSwitchAnimation: String = MusicTextSwitchAnimations.DEFAULT_ID,
@@ -541,12 +535,22 @@ fun SmartStackLayer(
     onDismissNotification: (String) -> Unit,
     onDismissProgressChange: (Float) -> Unit,
     onDismissRelease: (Float, Float, Boolean) -> Unit,
+    /**
+     * 负一屏已经打开、手指继续**向右**拉时的越界位移（像素，正数 = 内容往右）。
+     *
+     * 与 [onDismissProgressChange] 分成两条通道：dismiss 进度必须留在 0..1，越界是叠在
+     * 开态之上的额外位移，宿主用 graphicsLayer 的 translationX 承接。松手仍走
+     * [onDismissRelease]（cancelled = true），由宿主把越界弹回 0。
+     */
+    onOvershootChange: (Float) -> Unit = {},
     showSteps: Boolean,
     modifier: Modifier = Modifier
 ) {
     val clock = rememberClockSnapshot()
     val currentOnDismissProgressChange by rememberUpdatedState(onDismissProgressChange)
     val currentOnDismissRelease by rememberUpdatedState(onDismissRelease)
+    val currentOnOvershootChange by rememberUpdatedState(onOvershootChange)
+    val motionProfile = LocalFlueMotionProfile.current
     val battery = rememberBatterySnapshot()
     val density = LocalDensity.current
     val configuration = LocalConfiguration.current
@@ -555,10 +559,16 @@ fun SmartStackLayer(
     val stepSnapshot = rememberStepSnapshot(showSteps, stepPermissionGranted)
     val slotCenters = remember { mutableStateMapOf<Int, Offset>() }
     val showNotificationPreview = notificationsEnabled && !showMusicCard
-    val usesElasticOverscroll = sideScreenContentUsesElasticOverscroll(showMusicCard)
+    val usesElasticOverscroll = sideScreenContentUsesElasticOverscroll(
+        showMusicCard = showMusicCard,
+        showNotificationPreview = showNotificationPreview,
+    )
     val canOpenNotificationsFromSide = showNotificationPreview
-    // 快捷启动 dock 固定 2 行 × 4 列（设计蓝本 §9）。
-    val visibleShortcutCount = 8
+    // 通知横幅占一行时保留 4x2；关闭通知后利用空出的高度扩成 4x3。
+    val effectiveShortcutRows = if (showNotificationPreview) 2 else 3
+    val effectiveShortcutColumns = 4
+    val visibleShortcutCount = effectiveShortcutRows * effectiveShortcutColumns
+    LaunchedEffect(visibleShortcutCount) { slotCenters.clear() }
     val context = LocalContext.current
 
     val shortcutItems = remember(apps, sideScreenShortcuts, visibleShortcutCount) {
@@ -583,45 +593,19 @@ fun SmartStackLayer(
     var dragVelocityX by remember { mutableFloatStateOf(0f) }
     var dragVelocityY by remember { mutableFloatStateOf(0f) }
     var dismissGestureActive by remember { mutableStateOf(false) }
+    // 「已经打开、手指还在继续往右拉」的越界通道，与 dismiss 互斥。
+    var overshootGestureActive by remember { mutableStateOf(false) }
     var lastDragEventUptime by remember { mutableStateOf(0L) }
     var transitionInFlight by remember { mutableStateOf(false) }
-    val sideOverscroll = remember { Animatable(0f) }
     val scope = rememberCoroutineScope()
-    val contentTranslationY = if (
-        usesElasticOverscroll || notificationsSceneActive || transitionInFlight
-    ) 0f else sideOverscroll.value
-
-    fun releaseSideOverscroll() {
-        scope.launch {
-            if (sideOverscroll.value != 0f) {
-                sideOverscroll.animateTo(0f, spring(dampingRatio = 0.78f, stiffness = 420f))
-            }
-        }
-    }
-
-    fun applySideOverscroll(delta: Float) {
-        val next = when {
-            sideOverscroll.value > 0f && delta < 0f -> (sideOverscroll.value + delta).coerceAtLeast(0f)
-            sideOverscroll.value < 0f && delta > 0f -> (sideOverscroll.value + delta).coerceAtMost(0f)
-            delta > 0f -> (sideOverscroll.value + delta * SIDE_SCREEN_OVERSCROLL_RESISTANCE)
-                .coerceIn(0f, SIDE_SCREEN_OVERSCROLL_LIMIT)
-            delta < 0f -> (sideOverscroll.value + delta * SIDE_SCREEN_OVERSCROLL_RESISTANCE)
-                .coerceIn(-SIDE_SCREEN_OVERSCROLL_LIMIT, 0f)
-            else -> sideOverscroll.value
-        }
-        scope.launch {
-            sideOverscroll.stop()
-            sideOverscroll.snapTo(next)
-        }
-    }
 
     LaunchedEffect(notificationsSceneActive, usesElasticOverscroll) {
-        sideOverscroll.snapTo(0f)
         dragDx = 0f
         dragDy = 0f
         dragVelocityX = 0f
         dragVelocityY = 0f
         dismissGestureActive = false
+        overshootGestureActive = false
         lastDragEventUptime = 0L
         transitionInFlight = false
     }
@@ -650,11 +634,10 @@ fun SmartStackLayer(
                         dragVelocityX = 0f
                         dragVelocityY = 0f
                         dismissGestureActive = false
+                        overshootGestureActive = false
                         lastDragEventUptime = 0L
                     },
                     onDrag = { change, dragAmount ->
-                        val listAtTop = contentScrollState.value <= 0
-                        val listAtBottom = contentScrollState.value >= contentScrollState.maxValue
                         if (lastDragEventUptime != 0L) {
                             val deltaMs = (change.uptimeMillis - lastDragEventUptime).coerceAtLeast(1L)
                             val instantVelocityX = dragAmount.x / deltaMs * 1000f
@@ -683,31 +666,38 @@ fun SmartStackLayer(
                                 (1f + dragDx / (size.width.coerceAtLeast(1) * 0.8f))
                                     .coerceIn(0f, 1f)
                             )
+                        } else if (
+                            overshootGestureActive ||
+                            (dragDx > 18f && abs(dragDx) > abs(dragDy))
+                        ) {
+                            // 这里原先是一条空语句（`Unit`）：负一屏已经打开、手指继续
+                            // 向右拉时什么都不做，于是到边界硬停。现在换成越界回弹 ——
+                            // 拉得越远阻力越大（flueOverlayOvershootPx 的闭式解），
+                            // 有硬上限防止拉过头，松手交给宿主弹回。
+                            overshootGestureActive = true
+                            change.consume()
+                            currentOnOvershootChange(
+                                flueOverlayOvershootPx(
+                                    outwardTravelPx = dragDx,
+                                    viewportPx = size.width,
+                                    density = density.density,
+                                    motionProfile = motionProfile,
+                                )
+                            )
                         } else if (abs(dragDx) > abs(dragDy)) {
                             Unit
-                        } else if (!usesElasticOverscroll && sideOverscroll.value != 0f) {
-                            change.consume()
-                            applySideOverscroll(dragAmount.y)
-                        } else if (
-                            !usesElasticOverscroll &&
-                            !canOpenNotificationsFromSide &&
-                            ((dragAmount.y > 0f && listAtTop) || (dragAmount.y < 0f && listAtBottom))
-                        ) {
-                            change.consume()
-                            applySideOverscroll(dragAmount.y)
                         } else if (canOpenNotificationsFromSide && (dragDy < 0f || notificationTransitionProgress > 0f)) {
                             change.consume()
                             onNotificationTransitionProgressChange(
                                 (-dragDy / notificationDragRangePx).coerceIn(0f, 1f)
                             )
-                        } else if (
-                            canOpenNotificationsFromSide &&
-                            dragDy > 0f &&
-                            listAtTop
-                        ) {
-                            change.consume()
-                            applySideOverscroll(dragAmount.y)
                         }
+                        // 这里原先还有三条手写橡皮筋分支（`applySideOverscroll`）。它们挂在
+                        // verticalScroll 的**父级** pointerInput 上，子级先消费之后
+                        // awaitTouchSlopOrCancellation 会让整场手势放弃，所以一行都执行不到 ——
+                        // 是死代码。内容能滚时的回弹已经由 Modifier.flueOverscroll 负责（见
+                        // sideScreenContentUsesElasticOverscroll）；内容不可滚时本来就不该有
+                        // 假回弹，所以直接删掉而不是搬位置。
                     },
                     onDragEnd = {
                         val verticalIntent = abs(dragDy) > abs(dragDx) ||
@@ -735,8 +725,19 @@ fun SmartStackLayer(
                                 lastDragEventUptime = 0L
                                 onNotificationTransitionRelease(false)
                                 onRevealTargetChange(null)
-                                releaseSideOverscroll()
                                 currentOnDismissRelease(progress, velocity, false)
+                            }
+                            overshootGestureActive -> {
+                                dragDx = 0f
+                                dragDy = 0f
+                                dragVelocityX = 0f
+                                dragVelocityY = 0f
+                                overshootGestureActive = false
+                                lastDragEventUptime = 0L
+                                onNotificationTransitionRelease(false)
+                                // cancelled = true：越界只回弹，不改开/关状态。
+                                // 宿主在同一条 release 上把越界位移弹回 0。
+                                currentOnDismissRelease(1f, 0f, true)
                             }
                             openNotifications -> {
                                 dragDx = 0f
@@ -745,7 +746,6 @@ fun SmartStackLayer(
                                 dragVelocityY = 0f
                                 lastDragEventUptime = 0L
                                 onRevealTargetChange(null)
-                                releaseSideOverscroll()
                                 onNotificationTransitionRelease(true)
                             }
                             else -> {
@@ -754,7 +754,6 @@ fun SmartStackLayer(
                                 dragVelocityX = 0f
                                 dragVelocityY = 0f
                                 lastDragEventUptime = 0L
-                                releaseSideOverscroll()
                                 onNotificationTransitionRelease(false)
                             }
                         }
@@ -765,14 +764,16 @@ fun SmartStackLayer(
                                 (1f + dragDx / (size.width.coerceAtLeast(1) * 0.8f))
                                     .coerceIn(0f, 1f)
                             currentOnDismissRelease(progress, 0f, true)
+                        } else if (overshootGestureActive) {
+                            currentOnDismissRelease(1f, 0f, true)
                         }
                         dragDx = 0f
                         dragDy = 0f
                         dragVelocityX = 0f
                         dragVelocityY = 0f
                         dismissGestureActive = false
+                        overshootGestureActive = false
                         lastDragEventUptime = 0L
-                        releaseSideOverscroll()
                         onNotificationTransitionRelease(false)
                     }
                 )
@@ -792,19 +793,17 @@ fun SmartStackLayer(
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .graphicsLayer { translationY = contentTranslationY }
+                // 这里原先挂着一个常驻 graphicsLayer（translationY = 手写橡皮筋位移）。
+                // 手写橡皮筋删掉之后位移恒为 0，而常驻图层在负一屏这种全屏尺寸上每次
+                // 失效都要透过它重绘 —— 正是 FlueScrollBehavior 里写明的反模式。
                 .padding(start = leftSafeInset)
                 .padding(top = 10.dp, bottom = bottomSafePadding)
                 .then(
                     if (verticalScrollEnabled) {
+                        // usesElasticOverscroll 与 verticalScrollEnabled 现在是同一个判据，
+                        // 所以能滚就一定挂得上回弹，不再有「能滚却没有橡皮筋」的差集。
                         Modifier
-                            .then(
-                                if (usesElasticOverscroll) {
-                                    Modifier.flueOverscroll(contentScrollState)
-                                } else {
-                                    Modifier
-                                }
-                            )
+                            .flueOverscroll(contentScrollState)
                             .verticalScroll(contentScrollState)
                     } else {
                         Modifier
@@ -862,7 +861,9 @@ fun SmartStackLayer(
                     val center = slotCenters[slot] ?: Offset(widthPx / 2f, heightPx / 2f)
                     onRevealTargetChange(null)
                     onLaunchApp(app, Offset(center.x / widthPx, center.y / heightPx))
-                }
+                },
+                rows = effectiveShortcutRows,
+                columns = effectiveShortcutColumns,
             )
             if (showMusicCard) {
                 Spacer(Modifier.height(16.dp))
@@ -1487,11 +1488,11 @@ fun WidgetPageLayer(
                                 // 编辑态与普通态共用同一层 MIUIX 玻璃壳，不能在
                                 // 退出编辑后退回纯白/透明塑料底。
                                 .then(
-                                    if (launcherStyle.uiStyle == UiStyle.MIUIX) {
+                                    if (effectiveWidgetGlassHighlightEnabled) {
                                         Modifier.glassSurface(
                                             shellShape,
                                             launcherStyle.glass,
-                                            highlightEnabled = effectiveWidgetGlassHighlightEnabled,
+                                            highlightEnabled = true,
                                         )
                                     } else {
                                         Modifier.background(
@@ -2118,23 +2119,14 @@ private fun WidgetDragPreviewCard(
                 scaleY = 1.035f
             }
             .then(
-                if (launcherStyle.uiStyle == UiStyle.MIUIX) {
-                    if (glassHighlightEnabled) {
-                        Modifier.glassSurface(
-                            shape,
-                            launcherStyle.glassThick,
-                            highlightEnabled = true,
-                        )
-                    } else {
-                        // Turning glass highlight off restores the old opaque
-                        // MIUIX card instead of leaving a borderless translucent
-                        // sheet floating over the watch face.
-                        Modifier.clip(shape).background(launcherStyle.cardColor)
-                    }
+                if (glassHighlightEnabled) {
+                    Modifier.glassSurface(
+                        shape,
+                        launcherStyle.glassThick,
+                        highlightEnabled = true,
+                    )
                 } else {
-                    Modifier
-                        .clip(shape)
-                        .border(1.dp, Color.White.copy(alpha = 0.38f), shape)
+                    Modifier.clip(shape).background(launcherStyle.cardColor)
                 },
             )
     ) {
@@ -2184,7 +2176,9 @@ private val QUICK_DOCK_PADDING_VERTICAL = 18.dp
     onOpenActions: (Int, AppInfo) -> Unit,
     onCloseActions: () -> Unit,
     onSwap: (Int, Int) -> Unit,
-    onClickApp: (Int, AppInfo) -> Unit
+    onClickApp: (Int, AppInfo) -> Unit,
+    rows: Int,
+    columns: Int,
 ) {
     val context = LocalContext.current
     val density = LocalDensity.current
@@ -2219,8 +2213,8 @@ private val QUICK_DOCK_PADDING_VERTICAL = 18.dp
     // 铺满可用宽度，多余空白归零，同时纵向内边距把 dock 撑高。
     run {
         val usable = dockWidth - QUICK_DOCK_PADDING_HORIZONTAL * 2 -
-            iconSpacing * (QUICK_DOCK_COLUMNS - 1)
-        val iconSize = (usable / QUICK_DOCK_COLUMNS).coerceAtMost(QUICK_DOCK_MAX_ICON)
+            iconSpacing * (columns - 1)
+        val iconSize = (usable / columns).coerceAtMost(QUICK_DOCK_MAX_ICON)
         Column(
             Modifier
                 .width(dockWidth)
@@ -2238,10 +2232,10 @@ private val QUICK_DOCK_PADDING_VERTICAL = 18.dp
             verticalArrangement = Arrangement.spacedBy(iconSpacing),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            items.chunked(QUICK_DOCK_COLUMNS).forEachIndexed { rowIndex, row ->
+            items.chunked(columns).forEachIndexed { rowIndex, row ->
                 Row(horizontalArrangement = Arrangement.spacedBy(iconSpacing)) {
                     row.forEachIndexed { colIndex, item ->
-                        val slot = rowIndex * QUICK_DOCK_COLUMNS + colIndex
+                        val slot = rowIndex * columns + colIndex
                         // 避让位移：正在被拖过来的那一格，朝**被拖图标的原位**挪过去。
                         //
                         // 直接演示交换结果，而不是含糊地推一小段 —— 这个 dock 的落手动作
@@ -2368,7 +2362,7 @@ private val QUICK_DOCK_PADDING_VERTICAL = 18.dp
                             }
                         }
                     }
-                    repeat(QUICK_DOCK_COLUMNS - row.size) { Spacer(Modifier.size(iconSize)) }
+                    repeat(columns - row.size) { Spacer(Modifier.size(iconSize)) }
                 }
             }
         }
@@ -2412,6 +2406,28 @@ private fun WidgetCard(
         .coerceAtLeast(minWidgetHeight)
     val cardShape = launcherStyle.cardShape
     val density = LocalDensity.current
+
+    fun updateMeasuredWidgetSize(container: View, hostView: AppWidgetHostView) {
+        // AndroidView.update can run before the first measure. Never publish a
+        // 1dp fallback to the provider: updateAppWidgetSize persists the value
+        // in widget options and can make a widget choose an undersized layout.
+        val widthPx = container.width
+        val heightPx = container.height
+        if (widthPx <= 0 || heightPx <= 0) return
+        val widthDp = with(density) { widthPx.toDp().value.roundToInt() }
+        val heightDp = with(density) { heightPx.toDp().value.roundToInt() }
+        if (widthDp <= 0 || heightDp <= 0) return
+        val resolvedProviderInfo = providerInfo ?: return
+        @Suppress("DEPRECATION")
+        hostView.updateAppWidgetSize(
+            buildWidgetBindOptions(resolvedProviderInfo),
+            widthDp,
+            heightDp,
+            widthDp,
+            heightDp,
+        )
+    }
+
     Box(
         modifier = Modifier
             .fillMaxWidth()
@@ -2422,18 +2438,14 @@ private fun WidgetCard(
                 clip = true
             }
             .then(
-                if (launcherStyle.uiStyle == UiStyle.MIUIX) {
-                    if (glassHighlightEnabled) {
-                        Modifier.glassSurface(
-                            cardShape,
-                            launcherStyle.glass,
-                            highlightEnabled = true,
-                        )
-                    } else {
-                        Modifier.clip(cardShape).background(launcherStyle.cardColor)
-                    }
+                if (glassHighlightEnabled) {
+                    Modifier.glassSurface(
+                        cardShape,
+                        launcherStyle.glass,
+                        highlightEnabled = true,
+                    )
                 } else {
-                    Modifier.background(launcherStyle.cardColor, cardShape)
+                    Modifier.clip(cardShape).background(launcherStyle.cardColor)
                 },
             )
     ) {
@@ -2499,6 +2511,10 @@ private fun WidgetCard(
                         }
                     }
                     container.tag = WidgetHostTag(widgetBindTag, hostView)
+                    container.addOnLayoutChangeListener { view, _, _, _, _, _, _, _, _ ->
+                        view.invalidateOutline()
+                        updateMeasuredWidgetSize(view, hostView)
+                    }
                     container.addView(hostView)
                     container
                 },
@@ -2515,18 +2531,6 @@ private fun WidgetCard(
                     hostView?.let { view ->
                         view.setPadding(0, 0, 0, 0)
                         view.invalidateOutline()
-                        val widthDp = with(density) { container.width.toDp().value.roundToInt() }
-                            .coerceAtLeast(1)
-                        val heightDp = with(density) { container.height.toDp().value.roundToInt() }
-                            .coerceAtLeast(1)
-                        @Suppress("DEPRECATION")
-                        view.updateAppWidgetSize(
-                            buildWidgetBindOptions(providerInfo),
-                            widthDp,
-                            heightDp,
-                            widthDp,
-                            heightDp
-                        )
                         if (onLongPress != null) {
                             view.setOnLongClickListener {
                                 vibrateHaptic(context)
@@ -2546,9 +2550,7 @@ private fun WidgetCard(
                         clip = true
                         // 第三方 RemoteViews 常直接画不透明白底。MIUIX 下让
                         // 宿主内容轻微透出后面的玻璃层，普通态与编辑态一致。
-                        alpha = if (
-                            launcherStyle.uiStyle == UiStyle.MIUIX && glassHighlightEnabled
-                        ) 0.84f else 1f
+                        alpha = if (glassHighlightEnabled) 0.84f else 1f
                     }
                     .clip(cardShape)
             )
@@ -2570,18 +2572,14 @@ private fun WidgetCard(
                     }
                     .clip(cardShape)
                     .then(
-                        if (launcherStyle.uiStyle == UiStyle.MIUIX) {
-                            if (glassHighlightEnabled) {
-                                Modifier.glassSurface(
-                                    cardShape,
-                                    launcherStyle.glass,
-                                    highlightEnabled = true,
-                                )
-                            } else {
-                                Modifier.clip(cardShape).background(launcherStyle.cardColor)
-                            }
+                        if (glassHighlightEnabled) {
+                            Modifier.glassSurface(
+                                cardShape,
+                                launcherStyle.glass,
+                                highlightEnabled = true,
+                            )
                         } else {
-                            Modifier.background(launcherStyle.cardColor, cardShape)
+                            Modifier.clip(cardShape).background(launcherStyle.cardColor)
                         },
                     )
                     .combinedClickable(
@@ -2796,7 +2794,6 @@ private fun ShortcutPickerOverlay(
             .toList()
     }
     val listState = rememberLazyListState()
-    val (pickerOverscroll, pickerNestedScroll) = rememberPickerOverscrollConnection(listState)
     ModalShell(onDismiss) { dismiss ->
         Column(Modifier.fillMaxWidth(0.82f).heightIn(max = 420.dp).clip(LauncherTheme.style.panelShape).background(Color(0xFF1E1E1E)).padding(vertical = 12.dp)) {
             Text(
@@ -2811,8 +2808,7 @@ private fun ShortcutPickerOverlay(
                 modifier = Modifier
                     .fillMaxWidth()
                     .weight(1f, fill = false)
-                    .nestedScroll(pickerNestedScroll)
-                    .graphicsLayer { translationY = pickerOverscroll },
+                    .flueOverscroll(listState),
                 contentPadding = PaddingValues(horizontal = 8.dp),
                 verticalArrangement = Arrangement.spacedBy(4.dp)
             ) {
@@ -2869,7 +2865,6 @@ private fun WidgetPickerOverlay(
         pickerApps.firstOrNull { it.packageName == selected }
     }
     val listState = rememberLazyListState()
-    val (pickerOverscroll, pickerNestedScroll) = rememberPickerOverscrollConnection(listState)
     LaunchedEffect(selectedPackage) {
         if (selectedPackage == null) {
             listState.scrollToItem(appListReturnIndex, appListReturnOffset)
@@ -2910,8 +2905,7 @@ private fun WidgetPickerOverlay(
                     state = listState,
                     modifier = Modifier
                         .fillMaxWidth()
-                        .nestedScroll(pickerNestedScroll)
-                        .graphicsLayer { translationY = pickerOverscroll },
+                        .flueOverscroll(listState),
                     contentPadding = PaddingValues(horizontal = 8.dp),
                     verticalArrangement = Arrangement.spacedBy(4.dp)
                 ) {

@@ -23,6 +23,7 @@ internal class NativeFlowLayoutManager(
 ) : NativeAppGridLayoutManager(configProvider) {
     private val childVisualScratch = NativeSpatialChildVisual()
     private var geometryLeftInset = Int.MIN_VALUE
+    private var geometryRightInset = Int.MIN_VALUE
     private var geometryColumns = Int.MIN_VALUE
     private var geometryIconSize = Int.MIN_VALUE
     private var geometryCellSize = Float.NaN
@@ -33,6 +34,7 @@ internal class NativeFlowLayoutManager(
         config: NativeAppListConfig,
     ): Boolean =
         geometryLeftInset == config.leftSafeInsetPx &&
+        geometryRightInset == config.rightSafeInsetPx &&
             geometryColumns == config.flowColumns &&
             geometryIconSize == config.iconSizePx &&
             geometryCellSize == config.flowCellSizePx &&
@@ -44,6 +46,7 @@ internal class NativeFlowLayoutManager(
 
     override fun rememberGeometryConfig(config: NativeAppListConfig) {
         geometryLeftInset = config.leftSafeInsetPx
+        geometryRightInset = config.rightSafeInsetPx
         geometryColumns = config.flowColumns
         geometryIconSize = config.iconSizePx
         geometryCellSize = config.flowCellSizePx
@@ -61,6 +64,7 @@ internal class NativeFlowLayoutManager(
         viewportWidthPx = viewportWidthPx,
         viewportHeightPx = viewportHeightPx,
         leftSafeInsetPx = config.leftSafeInsetPx,
+        rightSafeInsetPx = config.rightSafeInsetPx,
         columns = config.flowColumns,
         iconSizePx = config.iconSizePx.toFloat(),
         cellSizePx = config.flowCellSizePx.takeIf { it > 0f }
@@ -137,6 +141,7 @@ internal class NativeFlowLayoutManager(
                 toRight = flow.crescentToRight,
                 childCenterY = centerY,
                 viewportHeight = height.toFloat(),
+                curve = config.flowShapeCurve,
             )
             val flowTranslationX = visual.translationX + crescentX
             val flowTranslationY = visual.translationY

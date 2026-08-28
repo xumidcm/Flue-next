@@ -65,8 +65,47 @@ class NativeScrollIndicatorFadeTest {
         )
     }
 
-    // ---------- alpha 推进 ----------
+    /**
+     * 手指按着就必须显示，哪怕列表一动没动。
+     *
+     * 这条是老师报的第一半：「应该在手指滑动的时候淡入」。已经到顶/到底再继续拖时
+     * 内容不移动、`scrolling` 也为假，只有 `pointerDown` 能撑住。
+     */
+    @Test
+    fun `a finger on the list keeps it opaque even with nothing moving`() {
+        assertEquals(
+            1f,
+            nativeScrollIndicatorTargetAlpha(
+                scrolling = false,
+                millisSinceScrollActivity = NATIVE_SCROLL_INDICATOR_HOLD_MS * 10,
+                pointerDown = true,
+            ),
+            0f,
+        )
+    }
 
+    /**
+     * 松手之后一定要能淡出 —— 即便滚动状态是脏的。
+     *
+     * 这条是老师报的第二半：「星环圆屏显示异常，滑动指示器不会消失」。根源是拖图标
+     * 那条链路吞掉了 UP 事件，`scrollState` 永久停在 DRAGGING。所以这里的入参组合
+     * 刻意是「手指已经抬起、保持窗口已过、但 scrolling 还没被清干净」，调用点必须靠
+     * `pointerDown` 把 DRAGGING 判成假才能过。
+     */
+    @Test
+    fun `releasing the finger fades out even when the scroll state is stale`() {
+        assertEquals(
+            0f,
+            nativeScrollIndicatorTargetAlpha(
+                scrolling = false,
+                millisSinceScrollActivity = NATIVE_SCROLL_INDICATOR_HOLD_MS,
+                pointerDown = false,
+            ),
+            0f,
+        )
+    }
+
+    // ---------- alpha 推进 ----------
     /** 淡入必须比淡出快:慢淡入会被读成「卡了一下才反应」。 */
     @Test
     fun `fading in is faster than fading out`() {

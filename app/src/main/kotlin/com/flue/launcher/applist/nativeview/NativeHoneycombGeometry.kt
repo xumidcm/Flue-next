@@ -109,6 +109,8 @@ internal class NativeHoneycombGeometry private constructor(
             viewportWidthPx: Int,
             viewportHeightPx: Int,
             leftSafeInsetPx: Int,
+            /** 右侧安全内缩（滚动指示器占位）。0 = 指示器关掉，不留白边。 */
+            rightSafeInsetPx: Int = 0,
             narrowColumns: Int,
             iconSizePx: Float,
             cellSizePx: Float = iconSizePx * 1.02f,
@@ -117,8 +119,12 @@ internal class NativeHoneycombGeometry private constructor(
             require(viewportWidthPx > 0 && viewportHeightPx > 0)
             require(iconSizePx.isFinite() && iconSizePx > 0f)
             require(cellSizePx.isFinite() && cellSizePx > 0f)
-            val safeLeft = leftSafeInsetPx.coerceIn(0, viewportWidthPx - 1)
-            val contentCenterX = safeLeft + (viewportWidthPx - safeLeft) / 2f
+            val safeLeft = nativeSafeLeftPx(leftSafeInsetPx, viewportWidthPx.toFloat())
+            val contentCenterX = safeLeft + nativeSafeContentWidthPx(
+                leftSafeInsetPx = leftSafeInsetPx,
+                rightSafeInsetPx = rightSafeInsetPx,
+                viewportWidthPx = viewportWidthPx,
+            ) / 2f
             val narrow = narrowColumns.coerceAtLeast(1)
             val wide = narrow + 1
             val rowHeight = cellSizePx * sqrt(3f) / 2f

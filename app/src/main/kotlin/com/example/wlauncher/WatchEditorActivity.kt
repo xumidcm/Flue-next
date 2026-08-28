@@ -90,6 +90,8 @@ import com.flue.launcher.ui.style.FlueOutlinedButton
 import androidx.compose.material3.Button
 import androidx.compose.material3.Checkbox
 import com.flue.launcher.ui.style.FlueLoadingIndicator
+import com.flue.launcher.ui.style.FlueDeterminateProgressIndicator
+import com.flue.launcher.ui.style.FlueLoadingIndicatorUsage
 import com.flue.launcher.ui.style.FlueExpressiveFloatingToolbar
 import com.flue.launcher.ui.settings.miuix.MiuixIcons as FlueMiuixIcons
 import com.flue.launcher.ui.settings.WatchAppPickerDialog
@@ -100,7 +102,6 @@ import top.yukonga.miuix.kmp.icon.MiuixIcons as OfficialMiuixIcons
 import top.yukonga.miuix.kmp.icon.extended.Clear as OfficialClear
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -219,11 +220,11 @@ import com.flue.launcher.watchface.editor.WatchEditorSourceRect
 import com.flue.launcher.watchface.editor.WatchEditorSnapping
 import com.flue.launcher.watchface.editor.WatchEditorTransform
 import com.flue.launcher.watchface.editor.WatchEditorVideoFrames
+import com.flue.launcher.watchface.editor.WatchEditorVideoFile
 import com.flue.launcher.watchface.editor.WatchEditorVideoImportOptions
 import com.flue.launcher.watchface.editor.WatchEditorVideoImporter
 import com.flue.launcher.watchface.editor.WatchEditorVideoInfo
-import com.flue.launcher.watchface.editor.WatchEditorVideoPassThrough
-import com.flue.launcher.watchface.editor.canPassThroughVideo
+import com.flue.launcher.watchface.editor.WatchEditorFfmpegUnsupportedException
 import com.flue.launcher.watchface.editor.resolveVideoTransform
 import com.flue.launcher.watchface.editor.WatchFormatVersion
 import com.flue.launcher.watchface.editor.applyWatchEditorHandleDrag
@@ -289,6 +290,8 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import org.luaj.vm2.Globals
+import org.luaj.vm2.compiler.LuaC
 import kotlin.coroutines.EmptyCoroutineContext
 import kotlin.math.hypot
 import kotlin.math.roundToInt
@@ -886,104 +889,65 @@ private fun WatchEditorRoute(
                 }
             }.onFailure { error ->
                 if (error is CancellationException) throw error
-            errorMessage = context.localizedEditorError(R.string.watch_editor_error_read_video, error)
+                errorMessage = context.localizedEditorError(
+                    R.string.watch_editor_error_read_video,
+                    error,
+                    includeDetails = true,
+                )
             }
             busyMessage = null
         }
     }
     val videoPicker = rememberLauncherForActivityResult(OpenDocument()) { handleVideoUri(it) }
 
+    fun openVideoPicker() {
+        if (!WatchEditorVideoImporter.isRuntimeSupported()) {
+            errorMessage = context.getString(R.string.watch_editor_error_ffmpeg_unsupported)
+            return
+        }
+        videoPicker.launch(arrayOf("video/*"))
+    }
+
     fun beginVideoImport(request: EditorVideoImportRequest, options: WatchEditorVideoImportOptions) {
         if (videoConversionJob != null || session !== request.session) return
         videoRequest = null
         videoConversionProgress = 0f
-        // 终点由目标图层类型决定，不看文档格式版本：
-        //   video 图层  + 参数未改 → 直通（拷字节，不需要 FFmpeg，32 位设备也能用）
-        //   video 图层  + 参数改过 → 重编码成 mp4
-        //   其它（含 image_gif 循环背景）→ 一律转帧序列，绝不改写成 video
-        // 之前这里按 formatVersion == V1 判定，于是往循环背景导入未改参的视频会
-        // 把图层悄悄改写成 video。
+        // video 图层统一重编码为 H.264 MP4；image_gif 等其它图层仍转为序列帧，
+        // 不改变目标图层类型。
         val targetsVideoLayer = request.layerType.equals("video", ignoreCase = true)
-        val allowPassThrough = targetsVideoLayer && canPassThroughVideo(request.info, options)
-        val needsReencode = targetsVideoLayer && !allowPassThrough
-        videoConversionKind = when {
-            allowPassThrough -> EditorVideoConversionKind.PASS_THROUGH
-            needsReencode -> EditorVideoConversionKind.REENCODE
-            else -> EditorVideoConversionKind.FRAMES
-        }
-        // 32 位设备没有 FFmpeg。直通不需要它，另两条路都需要 —— 在这里拦，而不是
-        // 在选文件那一步拦，否则 32 位设备连视频都选不了。
-        if (!allowPassThrough && !WatchEditorVideoImporter.isRuntimeSupported()) {
-            errorMessage = context.getString(
-                if (needsReencode) {
-                    R.string.watch_editor_error_reencode_need_ffmpeg
-                } else {
-                    R.string.watch_editor_error_frames_need_ffmpeg
-                },
-            )
-            return
+        videoConversionKind = if (targetsVideoLayer) {
+            EditorVideoConversionKind.REENCODE
+        } else {
+            EditorVideoConversionKind.FRAMES
         }
         videoConversionJob = scope.launch {
-            busyMessage = context.getString(
-                if (allowPassThrough) {
-                    R.string.watch_editor_status_copying_video_fmt
-                } else {
-                    R.string.watch_editor_status_converting_video_fmt
-                },
-                0,
-            )
+            busyMessage = context.getString(R.string.watch_editor_status_converting_video_fmt, 0)
             errorMessage = null
             var converted: WatchEditorVideoFrames? = null
-            var passedThrough: WatchEditorVideoPassThrough? = null
+            var videoFile: WatchEditorVideoFile? = null
             try {
-                val next = if (allowPassThrough || needsReencode) {
-                    val copied = if (allowPassThrough) {
-                        // 原文件拷贝：不启 FFmpeg，进度按字节走。
-                        WatchEditorVideoImporter.passThrough(
-                            context = context,
-                            uri = request.uri,
-                            durationMs = options.durationMs,
-                            onProgress = { progress ->
-                                val visibleProgress = progress.fraction.coerceAtMost(0.99f)
-                                videoConversionProgress = visibleProgress
-                                busyMessage = context.getString(
-                                    R.string.watch_editor_status_copying_video_fmt,
-                                    (visibleProgress * 100f).roundToInt(),
-                                )
-                            },
-                        )
-                    } else {
-                        // 裁剪/剪辑/改参后的视频：重编码成 mp4，仍然落在 video 图层。
-                        WatchEditorVideoImporter.reencodeToVideo(
-                            context = context,
-                            uri = request.uri,
-                            options = options,
-                            onProgress = { progress ->
-                                val visibleProgress = progress.fraction.coerceAtMost(0.99f)
-                                videoConversionProgress = visibleProgress
-                                busyMessage = context.getString(
-                                    R.string.watch_editor_status_converting_video_fmt,
-                                    (visibleProgress * 100f).roundToInt(),
-                                )
-                            },
-                        )
-                    }
-                    passedThrough = copied
-                    // 落进图层的实际像素尺寸两条路不同：直通是源尺寸（info 已按
-                    // 容器 rotation 换算成显示朝向），重编码是 transform 算出的
-                    // 输出尺寸。拿错会让 contain 盒子按错误比例写。
-                    val importedSize = if (allowPassThrough) {
-                        request.info.width to request.info.height
-                    } else {
-                        val transform = resolveVideoTransform(request.info, options)
-                        transform.outputWidth to transform.outputHeight
-                    }
+                val next = if (targetsVideoLayer) {
+                    val encodedVideo = WatchEditorVideoImporter.reencodeToVideo(
+                        context = context,
+                        uri = request.uri,
+                        options = options,
+                        onProgress = { progress ->
+                            val visibleProgress = progress.fraction.coerceAtMost(0.99f)
+                            videoConversionProgress = visibleProgress
+                            busyMessage = context.getString(
+                                R.string.watch_editor_status_converting_video_fmt,
+                                (visibleProgress * 100f).roundToInt(),
+                            )
+                        },
+                    )
+                    videoFile = encodedVideo
+                    val transform = resolveVideoTransform(request.info, options)
                     withContext(Dispatchers.IO) {
                         request.session.importVideoFile(
                             key = request.layerKey,
-                            videoFile = copied.videoFile,
-                            videoWidth = importedSize.first,
-                            videoHeight = importedSize.second,
+                            videoFile = encodedVideo.videoFile,
+                            videoWidth = transform.outputWidth,
+                            videoHeight = transform.outputHeight,
                         )
                         request.session.flushDraftForPreview()
                         request.session.snapshot()
@@ -1023,6 +987,8 @@ private fun WatchEditorRoute(
                 }
             } catch (cancelled: CancellationException) {
                 // User cancellation leaves both the draft and selected layer untouched.
+            } catch (error: WatchEditorFfmpegUnsupportedException) {
+                errorMessage = context.getString(R.string.watch_editor_error_ffmpeg_unsupported)
             } catch (error: Throwable) {
                 errorMessage = context.localizedEditorError(
                     R.string.watch_editor_error_video_import,
@@ -1036,7 +1002,7 @@ private fun WatchEditorRoute(
                 // delete the potentially large cache off the UI path.
                 withContext(Dispatchers.IO + NonCancellable) {
                     converted?.deleteTemporaryFiles()
-                    passedThrough?.deleteTemporaryFiles()
+                    videoFile?.deleteTemporaryFiles()
                 }
             }
         }
@@ -1192,9 +1158,12 @@ private fun WatchEditorRoute(
     }
 
     fun openInternalFileBrowser(kind: EditorInternalImportKind) {
-        // 视频这里不查 FFmpeg 可用性：32 位设备没有 FFmpeg，但直通不需要它。
-        // 能不能走到终点由 beginVideoImport 按目标图层类型判定，在选文件这一步
-        // 拦死会让 32 位设备连 video 图层的直通导入都做不了。
+        if (kind == EditorInternalImportKind.VIDEO &&
+            !WatchEditorVideoImporter.isRuntimeSupported()
+        ) {
+            errorMessage = context.getString(R.string.watch_editor_error_ffmpeg_unsupported)
+            return
+        }
         val title = context.getString(
             when (kind) {
                 EditorInternalImportKind.IMAGE -> R.string.internal_file_browser_pick_image
@@ -1833,9 +1802,7 @@ private fun WatchEditorRoute(
                             openInternalFileBrowser(EditorInternalImportKind.IMAGE_SEQUENCE)
                         },
                         onImportVideo = {
-                            // 不在这里查 FFmpeg：直通不需要它，终点在 beginVideoImport
-                            // 里按目标图层类型判定。
-                            videoPicker.launch(arrayOf("video/*"))
+                            openVideoPicker()
                         },
                         onImportVideoLong = {
                             openInternalFileBrowser(EditorInternalImportKind.VIDEO)
@@ -3385,6 +3352,18 @@ internal fun watchEditorScriptByteCount(script: String): Int =
 internal fun canSaveWatchEditorScript(script: String): Boolean =
     watchEditorScriptByteCount(script) <= WatchEditorSession.MAX_WATCH_SCRIPT_BYTES
 
+internal fun validateWatchEditorLua(script: String): String? {
+    if (script.isBlank()) return null
+    return runCatching {
+        val globals = Globals()
+        LuaC.install(globals)
+        globals.load(script, "global_script")
+        null
+    }.getOrElse { error ->
+        error.message?.takeIf(String::isNotBlank) ?: error.javaClass.simpleName
+    }
+}
+
 @Composable
 private fun EditorGlobalScriptOverlay(
     initialScript: String,
@@ -3400,8 +3379,23 @@ private fun EditorGlobalScriptOverlay(
             ),
         )
     }
+    var syntaxError by remember(initialScript) { mutableStateOf<String?>(null) }
+    LaunchedEffect(script.text) {
+        delay(300)
+        syntaxError = withContext(Dispatchers.Default) { validateWatchEditorLua(script.text) }
+    }
     val byteCount = remember(script.text) { watchEditorScriptByteCount(script.text) }
     val withinLimit = byteCount <= WatchEditorSession.MAX_WATCH_SCRIPT_BYTES
+    val completionQuery = remember(script.text, script.selection) {
+        val beforeCursor = script.text.take(script.selection.start.coerceIn(0, script.text.length))
+        beforeCursor.substringAfterLast('{', "").takeIf { '{' in beforeCursor && '}' !in it }
+    }
+    val completionEntries = remember(completionQuery) {
+        WATCH_EDITOR_EXPRESSION_GROUPS
+            .flatMap { it.entries }
+            .filter { completionQuery == null || it.tag.startsWith("{$completionQuery") }
+            .take(12)
+    }
     val scriptScrollState = rememberScrollState()
     BackHandler(onBack = onCancel)
 
@@ -3433,7 +3427,7 @@ private fun EditorGlobalScriptOverlay(
                     modifier = Modifier.weight(1f),
                 )
                 TextButton(
-                    enabled = withinLimit,
+                    enabled = withinLimit && syntaxError == null,
                     onClick = { onSave(script.text) },
                 ) {
                     Text(stringResource(R.string.watch_editor_save))
@@ -3453,6 +3447,31 @@ private fun EditorGlobalScriptOverlay(
                     .flueOverscroll(scriptScrollState)
                     .verticalScroll(scriptScrollState),
             )
+            if (completionQuery != null && completionEntries.isNotEmpty()) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(MaterialTheme.colorScheme.surfaceVariant, LauncherTheme.style.rowShape)
+                        .padding(horizontal = 6.dp, vertical = 4.dp),
+                ) {
+                    completionEntries.forEach { entry ->
+                        TextButton(
+                            onClick = {
+                                val (updated, cursor) = insertWatchEditorExpression(
+                                    text = script.text,
+                                    selectionStart = script.selection.start,
+                                    selectionEnd = script.selection.end,
+                                    tag = entry.tag,
+                                )
+                                script = TextFieldValue(updated, TextRange(cursor))
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Text(entry.tag, fontFamily = FontFamily.Monospace, modifier = Modifier.fillMaxWidth())
+                        }
+                    }
+                }
+            }
             Text(
                 text = stringResource(
                     R.string.watch_editor_script_bytes_fmt,
@@ -3470,6 +3489,12 @@ private fun EditorGlobalScriptOverlay(
             if (!withinLimit) {
                 Text(
                     text = stringResource(R.string.watch_editor_script_too_large),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                )
+            } else if (!syntaxError.isNullOrBlank()) {
+                Text(
+                    text = syntaxError.orEmpty(),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.error,
                 )
@@ -4525,7 +4550,10 @@ private fun EditorImageCropOverlay(
                     color = MaterialTheme.colorScheme.error,
                     style = MaterialTheme.typography.bodySmall,
                 )
-                bitmap == null -> FlueLoadingIndicator(Modifier.align(Alignment.Center))
+                bitmap == null -> FlueLoadingIndicator(
+                    modifier = Modifier.align(Alignment.Center),
+                    usage = FlueLoadingIndicatorUsage.WATCH_FACE_LOADING,
+                )
                 else -> {
                     Image(
                         bitmap = bitmap.asImageBitmap(),
@@ -4700,12 +4728,11 @@ private fun EditorImageCropOverlay(
 }
 
 /**
- * 视频导入的三条终点，决定进度对话框的标题与说明文案。
+ * 视频导入的两条终点，决定进度对话框的说明文案。
  *
- * 三条路的动作完全不同：帧序列是烘焙成图片序列、重编码是转成 mp4、
- * 直通只是拷字节。以前三条共用一句「转换成表盘循环帧」，后两条都是错的。
+ * 帧序列用于 image_gif 等图层，视频图层则固定重编码为 H.264 MP4。
  */
-private enum class EditorVideoConversionKind { FRAMES, REENCODE, PASS_THROUGH }
+private enum class EditorVideoConversionKind { FRAMES, REENCODE }
 
 @Composable
 private fun EditorVideoConversionProgressDialog(
@@ -4720,7 +4747,6 @@ private fun EditorVideoConversionProgressDialog(
             Text(
                 stringResource(
                     when (kind) {
-                        EditorVideoConversionKind.PASS_THROUGH -> R.string.watch_editor_copying_video
                         else -> R.string.watch_editor_converting_video
                     },
                 ),
@@ -4728,9 +4754,10 @@ private fun EditorVideoConversionProgressDialog(
         },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                LinearProgressIndicator(
-                    progress = { safeProgress },
+                FlueDeterminateProgressIndicator(
+                    progress = safeProgress,
                     modifier = Modifier.fillMaxWidth(),
+                    usage = FlueLoadingIndicatorUsage.WATCH_FACE_LOADING,
                 )
                 Text("${(safeProgress * 100f).roundToInt()}%")
                 Text(
@@ -4740,8 +4767,6 @@ private fun EditorVideoConversionProgressDialog(
                                 R.string.watch_editor_video_conversion_message
                             EditorVideoConversionKind.REENCODE ->
                                 R.string.watch_editor_video_reencode_message
-                            EditorVideoConversionKind.PASS_THROUGH ->
-                                R.string.watch_editor_video_passthrough_message
                         },
                     ),
                     style = MaterialTheme.typography.bodySmall,

@@ -9,6 +9,7 @@ internal class NativeDenseGridLayoutManager(
 ) : NativeAppGridLayoutManager(configProvider) {
     private val childVisualScratch = NativeSpatialChildVisual()
     private var geometryLeftInset = Int.MIN_VALUE
+    private var geometryRightInset = Int.MIN_VALUE
     private var geometryColumns = Int.MIN_VALUE
     private var geometryHorizontalPadding = Float.NaN
     private var geometrySpacing = Float.NaN
@@ -26,6 +27,7 @@ internal class NativeDenseGridLayoutManager(
         config: NativeAppListConfig,
     ): Boolean =
         geometryLeftInset == config.leftSafeInsetPx &&
+        geometryRightInset == config.rightSafeInsetPx &&
             geometryColumns == config.denseGridColumns &&
             geometryHorizontalPadding == config.denseGridHorizontalPaddingPx &&
             geometrySpacing == config.denseGridItemSpacingPx &&
@@ -36,6 +38,7 @@ internal class NativeDenseGridLayoutManager(
 
     override fun rememberGeometryConfig(config: NativeAppListConfig) {
         geometryLeftInset = config.leftSafeInsetPx
+        geometryRightInset = config.rightSafeInsetPx
         geometryColumns = config.denseGridColumns
         geometryHorizontalPadding = config.denseGridHorizontalPaddingPx
         geometrySpacing = config.denseGridItemSpacingPx
@@ -55,6 +58,7 @@ internal class NativeDenseGridLayoutManager(
         viewportWidthPx = viewportWidthPx,
         viewportHeightPx = viewportHeightPx,
         leftSafeInsetPx = config.leftSafeInsetPx,
+        rightSafeInsetPx = config.rightSafeInsetPx,
         columns = config.denseGridColumns,
         horizontalPaddingPx = config.denseGridHorizontalPaddingPx,
         itemSpacingPx = config.denseGridItemSpacingPx,

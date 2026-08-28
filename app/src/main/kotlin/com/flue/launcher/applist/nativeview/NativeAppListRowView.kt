@@ -284,6 +284,7 @@ internal class NativeAppListRowView(
                 this.config.rowPaddingStartPx != next.rowPaddingStartPx ||
                 this.config.rowPaddingTopPx != next.rowPaddingTopPx ||
                 this.config.rowPaddingEndPx != next.rowPaddingEndPx ||
+                this.config.rightSafeInsetPx != next.rightSafeInsetPx ||
                 this.config.rowPaddingBottomPx != next.rowPaddingBottomPx ||
                 this.config.iconLabelGapPx != next.iconLabelGapPx ||
                 this.config.iconShape != next.iconShape ||
@@ -670,7 +671,8 @@ internal class NativeAppListRowView(
                     config.rowPaddingStartPx.toLong() +
                     config.iconSizePx.toLong() +
                     config.iconLabelGapPx.toLong() +
-                    config.rowPaddingEndPx.toLong()
+                    config.rowPaddingEndPx.toLong() +
+                    config.rightSafeInsetPx.toLong()
                 ).coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
         }
         val desiredHeight = when (config.presentation) {
@@ -766,7 +768,9 @@ internal class NativeAppListRowView(
         }
 
         val labelLeft = iconBounds.right + config.iconLabelGapPx
-        val labelRight = width.toFloat() - config.rowPaddingEndPx
+        // 右侧安全内缩（滚动指示器占位）要从标签可用宽度里让出去，否则长名字会一直
+        // 压到指示器底下。指示器关掉时 rightSafeInsetPx 为 0，观感与改动前完全一致。
+        val labelRight = width.toFloat() - config.rowPaddingEndPx - config.rightSafeInsetPx
         if (
             config.presentation == NativeAppListPresentation.LINEAR &&
             label.isNotEmpty() &&
@@ -876,14 +880,16 @@ internal class NativeAppListRowView(
 
     private fun ensureGeometry() {
         if (!geometryDirty) return
+        val rowLeft = if (config.presentation == NativeAppListPresentation.LINEAR) {
+            config.leftSafeInsetPx.toFloat().coerceAtMost(width.toFloat())
+        } else {
+            0f
+        }
         rowBounds.set(
-            if (config.presentation == NativeAppListPresentation.LINEAR) {
-                config.leftSafeInsetPx.toFloat().coerceAtMost(width.toFloat())
-            } else {
-                0f
-            },
+            rowLeft,
             0f,
-            width.toFloat(),
+            // 行底色 / 描边同样退到指示器左边：底色画到屏幕最右会从指示器底下透出来一角。
+            (width.toFloat() - config.rightSafeInsetPx).coerceAtLeast(rowLeft),
             height.toFloat(),
         )
 

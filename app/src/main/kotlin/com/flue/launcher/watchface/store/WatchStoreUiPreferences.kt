@@ -33,18 +33,24 @@ class WatchStoreUiPreferences(context: Context) {
     fun readBaseUrl(): String = runCatching {
         WatchStoreUrlPolicy.normalizeBaseUrl(
             preferences.getString(KEY_BASE_URL, null) ?: DEFAULT_WATCH_STORE_BASE_URL,
+            allowPrivateNetworkBase = readAllowLocalNetwork(),
         ).toASCIIString()
     }.getOrDefault(DEFAULT_WATCH_STORE_BASE_URL)
 
     /** Saves a normalized HTTP or HTTPS market base URL and returns it. */
-    fun writeBaseUrl(raw: String): String {
-        val normalized = WatchStoreUrlPolicy.normalizeBaseUrl(raw).toASCIIString()
-        preferences.edit().putString(KEY_BASE_URL, normalized).apply()
+    fun writeBaseUrl(raw: String, allowPrivateNetworkBase: Boolean = readAllowLocalNetwork()): String {
+        val normalized = WatchStoreUrlPolicy.normalizeBaseUrl(raw, allowPrivateNetworkBase).toASCIIString()
+        preferences.edit()
+            .putString(KEY_BASE_URL, normalized)
+            .putBoolean(KEY_ALLOW_LOCAL_NETWORK, allowPrivateNetworkBase)
+            .apply()
         return normalized
     }
 
+    fun readAllowLocalNetwork(): Boolean = preferences.getBoolean(KEY_ALLOW_LOCAL_NETWORK, false)
+
     fun resetBaseUrl() {
-        preferences.edit().remove(KEY_BASE_URL).apply()
+        preferences.edit().remove(KEY_BASE_URL).remove(KEY_ALLOW_LOCAL_NETWORK).apply()
     }
 
     /**
@@ -66,6 +72,7 @@ class WatchStoreUiPreferences(context: Context) {
         const val PREFERENCES_NAME = "flue_watch_store_ui"
         const val KEY_VIEW_MODE = "view_mode"
         const val KEY_BASE_URL = "base_url"
+        const val KEY_ALLOW_LOCAL_NETWORK = "allow_local_network"
         const val KEY_WEB_ZOOM = "web_zoom_percent"
     }
 }

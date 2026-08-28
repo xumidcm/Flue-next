@@ -43,6 +43,40 @@ class WatchStoreSocialDetailStateTest {
     }
 
     @Test
+    fun `every comment can be replied to while only owned comments can be edited or deleted`() {
+        val mine = comment("mine", parentId = "root", author = "alice", authorId = "user-42")
+        val theirs = comment("theirs", parentId = "mine", author = "bob", authorId = "user-7")
+
+        assertEquals(
+            WatchStoreCommentActions(canReply = true, canEdit = true, canDelete = true),
+            watchStoreCommentActions(mine, signedInAuthorId = "user-42"),
+        )
+        assertEquals(
+            WatchStoreCommentActions(canReply = true, canEdit = false, canDelete = false),
+            watchStoreCommentActions(theirs, signedInAuthorId = "user-42"),
+        )
+    }
+
+    @Test
+    fun `detail preview hides replies while secondary page collapses to the first reply`() {
+        val root = comment("root", parentId = null, author = "alice")
+        val first = WatchStoreCommentReply(
+            comment("first", parentId = "root", author = "bob"),
+            replyToUsername = "alice",
+        )
+        val second = WatchStoreCommentReply(
+            comment("second", parentId = "first", author = "carol"),
+            replyToUsername = "bob",
+        )
+        val thread = WatchStoreCommentThread(root, listOf(first, second))
+
+        assertEquals(emptyList<WatchStoreCommentReply>(), visibleWatchStoreReplies(thread, showReplies = false, expanded = false))
+        assertEquals(listOf(first), visibleWatchStoreReplies(thread, showReplies = true, expanded = false))
+        assertEquals(listOf(first, second), visibleWatchStoreReplies(thread, showReplies = true, expanded = true))
+        assertEquals(2, watchStoreReplyCount(thread))
+    }
+
+    @Test
     fun `editing a reply only replaces content and keeps its parent and author`() {
         val original = comment("reply", parentId = "root", author = "alice", authorId = "user-1")
         val sparseResponse = WatchStoreComment(

@@ -97,10 +97,13 @@ internal class NativeRingGeometry private constructor(
             viewportWidthPx: Int,
             viewportHeightPx: Int,
             leftSafeInsetPx: Int,
+            /** 右侧安全内缩（滚动指示器占位）。0 = 指示器关掉，不留白边。 */
+            rightSafeInsetPx: Int = 0,
             columns: Int,
             cellSizePx: Float = nativeRingCellSizePx(
                 viewportWidthPx = viewportWidthPx,
                 leftSafeInsetPx = leftSafeInsetPx,
+                rightSafeInsetPx = rightSafeInsetPx,
                 columns = columns,
             ),
         ): NativeRingGeometry {
@@ -108,8 +111,12 @@ internal class NativeRingGeometry private constructor(
             require(viewportWidthPx > 0 && viewportHeightPx > 0)
             require(cellSizePx.isFinite() && cellSizePx > 0f)
             val effectiveColumns = columns.coerceIn(1, NATIVE_RING_MAX_COLUMNS)
-            val safeLeft = leftSafeInsetPx.coerceIn(0, viewportWidthPx - 1)
-            val availableWidth = (viewportWidthPx - safeLeft).toFloat().coerceAtLeast(1f)
+            val safeLeft = nativeSafeLeftPx(leftSafeInsetPx, viewportWidthPx.toFloat())
+            val availableWidth = nativeSafeContentWidthPx(
+                leftSafeInsetPx = leftSafeInsetPx,
+                rightSafeInsetPx = rightSafeInsetPx,
+                viewportWidthPx = viewportWidthPx,
+            )
             val rowWidth = effectiveColumns * cellSizePx
             // 整块网格按可用区居中。传进来的格边长通常正好铺满（差值为 0），但调用方
             // 可以给一个更小的值（例如为了让格子不至于比图标还小），那时剩下的余量要
@@ -164,10 +171,14 @@ internal fun nativeRingCellSizePx(
     viewportWidthPx: Int,
     leftSafeInsetPx: Int,
     columns: Int,
+    rightSafeInsetPx: Int = 0,
 ): Float {
     if (viewportWidthPx <= 0) return 0f
-    val safeLeft = leftSafeInsetPx.coerceIn(0, viewportWidthPx - 1)
-    val availableWidth = (viewportWidthPx - safeLeft).toFloat().coerceAtLeast(1f)
+    val availableWidth = nativeSafeContentWidthPx(
+        leftSafeInsetPx = leftSafeInsetPx,
+        rightSafeInsetPx = rightSafeInsetPx,
+        viewportWidthPx = viewportWidthPx,
+    )
     return availableWidth / columns.coerceIn(1, NATIVE_RING_MAX_COLUMNS)
 }
 

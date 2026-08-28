@@ -115,28 +115,66 @@ class NativeRingGeometryTest {
         assertEquals(geometry.centerX(1), geometry.centerX(5), 0.001f)
     }
 
-    // ---------- 验收点 2：方屏平铺 ----------
+    // ---------- 验收点 2：直屏按触发行鱼眼 ----------
 
-    /**
-     * 方屏恒不收拢 —— 老师明确指定「方屏上面下面左边右边都平铺」。
-     *
-     * 连四个角这种收拢量最大的位置都必须是 0，否则四角会空出一片无用留白。
-     */
+    /** 直屏中心和触发带之外的行保持平铺，只有边缘触发行应用鱼眼和收拢。 */
     @Test
-    fun `a rectangular screen never converges anywhere`() {
-        val square = config(round = false)
-        listOf(
-            0f to 0f,
-            400f to 0f,
-            0f to 400f,
-            400f to 400f,
-            50f to 120f,
-            380f to 390f,
-        ).forEach { (x, y) ->
-            val offset = offsetAt(x, y, square)
-            assertEquals("x at ($x,$y)", 0f, offset.x, 0f)
-            assertEquals("y at ($x,$y)", 0f, offset.y, 0f)
-        }
+    fun `a rectangular ring keeps interior rows flat and transforms edge rows`() {
+        val rectangular = config(round = false, fisheyeRangeRows = 1).copy(
+            ringCellSizePx = 100f,
+        )
+
+        assertEquals(0f, nativeRingFisheyeProgress(200f, 400f, rectangular), 0.001f)
+        assertEquals(0f, nativeRingFisheyeProgress(150f, 400f, rectangular), 0.001f)
+        assertTrue(nativeRingFisheyeProgress(50f, 400f, rectangular) > 0f)
+        assertTrue(nativeRingFisheyeProgress(350f, 400f, rectangular) > 0f)
+        // The shared honeycomb setting must not make the whole straight screen
+        // a lens. Only the edge row enters the rectangular trigger band.
+        val sharedWideSetting = rectangular.copy(honeycombFisheyeRangeRows = 4)
+        assertEquals(0f, nativeRingFisheyeProgress(150f, 400f, sharedWideSetting), 0.001f)
+        assertTrue(nativeRingFisheyeProgress(50f, 400f, sharedWideSetting) > 0f)
+        // On a tall rectangular screen, the fallback cell size comes from the
+        // width, otherwise height/columns would make several rows fish-eyed.
+        assertEquals(
+            0f,
+            nativeRingFisheyeProgress(
+                centerY = 500f,
+                viewportHeight = 1_600f,
+                config = sharedWideSetting.copy(ringCellSizePx = 0f),
+                viewportWidth = 400f,
+            ),
+            0.001f,
+        )
+        assertEquals(0f, nativeRingFisheyeProgress(150f, 400f, config()), 0.001f)
+        assertEquals(
+            0f,
+            nativeRingFisheyeProgress(
+                50f,
+                400f,
+                rectangular.copy(fisheyeEnabled = false),
+            ),
+            0.001f,
+        )
+
+        val interior = visualAt(200f, 150f, rectangular, 400f, 400f)
+        val horizontallyDistantInterior = visualAt(20f, 150f, rectangular, 400f, 400f)
+        val topEdge = visualAt(200f, 50f, rectangular, 400f, 400f)
+        assertEquals(1f, interior.scale, 0.001f)
+        assertEquals(1f, interior.alpha, 0.001f)
+        assertEquals(1f, horizontallyDistantInterior.scale, 0.001f)
+        assertTrue("顶部触发行应缩小", topEdge.scale < 1f)
+        assertEquals(0f, interior.translationX, 0.001f)
+
+        // Even a fish-eyed edge row keeps its grid centers flat and equally
+        // spaced. Only scale/alpha changes on rectangular screens.
+        val edgeOffset = offsetAt(340f, 50f, rectangular)
+        assertEquals(0f, edgeOffset.x, 0.001f)
+        assertEquals(0f, edgeOffset.y, 0.001f)
+        val bottomEdgeOffset = offsetAt(340f, 350f, rectangular)
+        assertEquals(0f, bottomEdgeOffset.x, 0.001f)
+        assertEquals(0f, bottomEdgeOffset.y, 0.001f)
+        assertEquals(0f, offsetAt(340f, 150f, rectangular).x, 0.001f)
+        assertEquals(0f, offsetAt(340f, 150f, rectangular).y, 0.001f)
     }
 
     // ---------- 验收点 1：圆屏四向收拢 ----------
@@ -319,13 +357,22 @@ class NativeRingGeometryTest {
         )
     }
 
-    private fun scaleAt(x: Float, y: Float, cfg: NativeAppListConfig) = nativeRingChildVisual(
+    private fun visualAt(
+        x: Float,
+        y: Float,
+        cfg: NativeAppListConfig,
+        viewportWidth: Float = 400f,
+        viewportHeight: Float = 400f,
+    ) = nativeRingChildVisual(
         centerX = x,
         centerY = y,
-        viewportWidth = 400f,
-        viewportHeight = 400f,
+        viewportWidth = viewportWidth,
+        viewportHeight = viewportHeight,
         config = cfg,
-    ).scale
+    )
+
+    private fun scaleAt(x: Float, y: Float, cfg: NativeAppListConfig) =
+        visualAt(x, y, cfg).scale
 
     /**
      * 缩放恒在 (0, 1] 内，圆屏内切圆之外的角落也不例外。

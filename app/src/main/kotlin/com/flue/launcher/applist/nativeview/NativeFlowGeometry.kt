@@ -94,6 +94,13 @@ internal class NativeFlowGeometry private constructor(
             viewportWidthPx: Int,
             viewportHeightPx: Int,
             leftSafeInsetPx: Int,
+            /**
+             * 右侧安全内缩（滚动指示器占位）。
+             *
+             * 心流的基准 X 刻意定成「月牙峰值贴住可用区右边界」，所以可用区不减掉指示器
+             * 的话它永远压在指示器上 —— 老师报的「开启滚动指示器后应该向左移动一点」。
+             */
+            rightSafeInsetPx: Int = 0,
             columns: Int,
             iconSizePx: Float,
             cellSizePx: Float = iconSizePx * 1.02f,
@@ -116,8 +123,12 @@ internal class NativeFlowGeometry private constructor(
             require(viewportWidthPx > 0 && viewportHeightPx > 0)
             require(iconSizePx.isFinite() && iconSizePx > 0f)
             require(cellSizePx.isFinite() && cellSizePx > 0f)
-            val safeLeft = leftSafeInsetPx.coerceIn(0, viewportWidthPx - 1)
-            val availableWidth = (viewportWidthPx - safeLeft).toFloat().coerceAtLeast(1f)
+            val safeLeft = nativeSafeLeftPx(leftSafeInsetPx, viewportWidthPx.toFloat())
+            val availableWidth = nativeSafeContentWidthPx(
+                leftSafeInsetPx = leftSafeInsetPx,
+                rightSafeInsetPx = rightSafeInsetPx,
+                viewportWidthPx = viewportWidthPx,
+            )
             val effectiveColumns = columns.coerceAtLeast(1)
             val offsets = generateFlowRows(
                 count = itemCount,

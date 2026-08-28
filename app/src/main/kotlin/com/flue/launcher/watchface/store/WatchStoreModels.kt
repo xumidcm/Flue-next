@@ -365,6 +365,7 @@ enum class WatchStoreReportReason(val apiValue: String) {
 /** 网页版固定页面（决策 9）。带参数的详情页 / 创作者页各有专门的构造函数。 */
 enum class WatchStoreWebPage(val path: String) {
     HOME("/"),
+    LOGIN("/login"),
     DASHBOARD("/dashboard"),
     PROFILE("/profile"),
     CREATORS("/creators"),

@@ -55,7 +55,12 @@ import com.flue.launcher.layout.FlueLayoutProfileJson
 import com.flue.launcher.layout.FlueLayoutProfiles
 import com.flue.launcher.layout.flueUniqueProfileName
 import com.flue.launcher.layout.migratedLayoutProfiles
+import com.flue.launcher.layout.FLUE_LAYOUT_APP_LIST_SCALE_MAX
+import com.flue.launcher.layout.FLUE_LAYOUT_APP_LIST_SCALE_MIN
+import com.flue.launcher.layout.FLUE_LAYOUT_NARROW_COLUMNS_MAX
+import com.flue.launcher.layout.FLUE_LAYOUT_NARROW_COLUMNS_MIN
 import com.flue.launcher.util.FlowCrescentDirection
+import com.flue.launcher.util.FlowShapeCurve
 import com.flue.launcher.ui.common.FlueScreenShape
 import com.flue.launcher.ui.common.DEFAULT_OVERLAY_MASK_CORNER_RADIUS_DP
 import com.flue.launcher.ui.common.normalizeOverlayMaskCornerRadiusDp
@@ -352,7 +357,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     val sideScreenEnabled: StateFlow<Boolean> = _sideScreenEnabled.asStateFlow()
     private val _sideScreenShortcutRows = MutableStateFlow(2)
     val sideScreenShortcutRows: StateFlow<Int> = _sideScreenShortcutRows.asStateFlow()
-    private val _sideScreenShortcutCols = MutableStateFlow(3)
+    private val _sideScreenShortcutCols = MutableStateFlow(4)
     val sideScreenShortcutCols: StateFlow<Int> = _sideScreenShortcutCols.asStateFlow()
     private val _sideScreenShortcuts = MutableStateFlow(List(SIDE_SCREEN_SHORTCUT_SLOT_CAPACITY) { null as String? })
     val sideScreenShortcuts: StateFlow<List<String?>> = _sideScreenShortcuts.asStateFlow()
@@ -907,7 +912,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                     _sideScreenShortcutRows.value = loadedShortcutRows
                 }
 
-                val loadedShortcutCols = (prefs[KEY_SIDE_SCREEN_SHORTCUT_COLS] ?: 3).coerceIn(2, 4)
+                val loadedShortcutCols = (prefs[KEY_SIDE_SCREEN_SHORTCUT_COLS] ?: 4).coerceIn(2, 4)
                 if (_sideScreenShortcutCols.value != loadedShortcutCols) {
                     _sideScreenShortcutCols.value = loadedShortcutCols
                 }
@@ -982,6 +987,10 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
 
                 val loadedHoneycombCols = (prefs[KEY_HONEYCOMB_COLS] ?: honeycombColsDefault).coerceIn(1, 5)
                 if (_honeycombCols.value != loadedHoneycombCols) _honeycombCols.value = loadedHoneycombCols
+                val loadedAppListScale = normalizeAppListScalePercent(prefs[KEY_APP_LIST_SCALE_PERCENT] ?: 100)
+                if (_appListScalePercent.value != loadedAppListScale) {
+                    _appListScalePercent.value = loadedAppListScale
+                }
 
                 val loadedTopBlur = (prefs[KEY_HONEYCOMB_TOP_BLUR] ?: 4).coerceIn(0, 48)
                 if (_honeycombTopBlur.value != loadedTopBlur) _honeycombTopBlur.value = loadedTopBlur
@@ -1031,6 +1040,8 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                         fisheyeStrengthPercent = prefs[KEY_APP_LIST_FISHEYE_STRENGTH_PERCENT],
                         leftSafeInsetPercent =
                             flatLeftSafeInsetPercent?.let(::normalizeLeftSafeInsetPercent),
+                        narrowColumns = loadedHoneycombCols,
+                        appListScalePercent = loadedAppListScale,
                     ),
                 )
                 if (_layoutProfiles.value != loadedLayoutProfiles) {
@@ -1048,11 +1059,6 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                     AppListBackgroundJson.decodeOrDefault(prefs[KEY_APP_LIST_BACKGROUND])
                 if (_appListBackground.value != loadedAppListBackground) {
                     _appListBackground.value = loadedAppListBackground
-                }
-
-                val loadedAppListScale = normalizeAppListScalePercent(prefs[KEY_APP_LIST_SCALE_PERCENT] ?: 100)
-                if (_appListScalePercent.value != loadedAppListScale) {
-                    _appListScalePercent.value = loadedAppListScale
                 }
 
                 val loadedGlobalUiScale = normalizeGlobalUiScalePercent(prefs[KEY_GLOBAL_UI_SCALE_PERCENT] ?: 100)
@@ -2212,9 +2218,9 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     }
 
     fun setHoneycombCols(cols: Int) {
-        _honeycombCols.value = cols.coerceIn(1, 5)
-        val savedValue = _honeycombCols.value
-        persistDebounced("key_honeycomb_cols") { store.edit { it[KEY_HONEYCOMB_COLS] = savedValue } }
+        updateActiveLayoutProfile {
+            it.copy(narrowColumns = cols.coerceIn(FLUE_LAYOUT_NARROW_COLUMNS_MIN, FLUE_LAYOUT_NARROW_COLUMNS_MAX))
+        }
     }
 
     fun setHoneycombTopBlur(value: Int) {
@@ -2294,10 +2300,8 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     }
 
     fun setAppListScalePercent(value: Int) {
-        _appListScalePercent.value = normalizeAppListScalePercent(value)
-        val savedValue = _appListScalePercent.value
-        persistDebounced("key_app_list_scale_percent") {
-            store.edit { it[KEY_APP_LIST_SCALE_PERCENT] = savedValue }
+        updateActiveLayoutProfile {
+            it.copy(appListScalePercent = value.coerceIn(FLUE_LAYOUT_APP_LIST_SCALE_MIN, FLUE_LAYOUT_APP_LIST_SCALE_MAX))
         }
     }
 
@@ -2554,6 +2558,12 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         if (_appListLeftSafeInsetPercent.value != profile.leftSafeInsetPercent) {
             _appListLeftSafeInsetPercent.value = profile.leftSafeInsetPercent
         }
+        if (_honeycombCols.value != profile.narrowColumns) {
+            _honeycombCols.value = profile.narrowColumns
+        }
+        if (_appListScalePercent.value != profile.appListScalePercent) {
+            _appListScalePercent.value = profile.appListScalePercent
+        }
         if (_appListFlowCrescentBulgePercent.value != profile.crescentBulgePercent) {
             _appListFlowCrescentBulgePercent.value = profile.crescentBulgePercent
         }
@@ -2658,6 +2668,19 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
 
     fun setAppListBackgroundScrimPercent(percent: Int) {
         updateAppListBackground { it.copy(scrimPercent = percent) }
+    }
+
+    fun setAppListFlowShapeCurve(curve: FlowShapeCurve) {
+        updateActiveLayoutProfile { it.copy(flowShapeCurve = curve) }
+    }
+
+    fun resetAppListBackgroundEffects() {
+        updateAppListBackground {
+            it.copy(
+                blurPercent = AppListBackgroundConfig.DEFAULT_BLUR_PERCENT,
+                scrimPercent = AppListBackgroundConfig.DEFAULT_SCRIM_PERCENT,
+            )
+        }
     }
 
     /**
@@ -3739,7 +3762,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         _motionProfiles.value = FlueMotionProfiles.builtIns
         _sideScreenEnabled.value = true
         _sideScreenShortcutRows.value = 2
-        _sideScreenShortcutCols.value = 3
+        _sideScreenShortcutCols.value = 4
         _sideScreenShortcuts.value = List(SIDE_SCREEN_SHORTCUT_SLOT_CAPACITY) { null }
         _sideScreenWidgetSlots.value = emptyList()
         _blurEnabled.value = defaultBlurEnabled
@@ -3867,7 +3890,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                 it[KEY_UI_STYLE] = DEFAULT_UI_STYLE.name
                 it[KEY_SIDE_SCREEN_ENABLED] = true
                 it[KEY_SIDE_SCREEN_SHORTCUT_ROWS] = 2
-                it[KEY_SIDE_SCREEN_SHORTCUT_COLS] = 3
+                it[KEY_SIDE_SCREEN_SHORTCUT_COLS] = 4
                 it[KEY_BLUR] = defaultBlurEnabled
                 it[KEY_EDGE_BLUR] = false
                 it[KEY_LOW_RES] = false

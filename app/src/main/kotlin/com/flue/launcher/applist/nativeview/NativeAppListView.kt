@@ -244,6 +244,22 @@ class NativeAppListView @JvmOverloads constructor(
     private var scrollIndicatorThumbBaseAlpha = 0
     private var scrollIndicatorActivityUptimeMs = 0L
     private var scrollIndicatorFrameUptimeMs = 0L
+    private val scrollIndicatorHoldEnd = Runnable {
+        if (!released) {
+            // The hold period is not part of the fade-out duration. Reset the
+            // animation clock before waking the first post-hold frame, then
+            // the normal frame loop advances the alpha over 320ms.
+            scrollIndicatorFrameUptimeMs = AnimationUtils.currentAnimationTimeMillis()
+            scheduleScrollIndicatorFrame()
+        }
+    }
+    /**
+     * 手指此刻是否按在列表上。
+     *
+     * 单独记一份而不是读 `scrollState`：那个状态在拖图标那条链路里会永久停在
+     * DRAGGING（UP 事件被自己吞掉，RecyclerView 从没收到），于是指示器再也不淡出。
+     */
+    private var scrollIndicatorPointerDown = false
     private var pullOffsetPx = 0f
     private val springEdgeEffects = FlueSpringEdgeEffectFactory(
         owner = this,
@@ -535,13 +551,18 @@ class NativeAppListView @JvmOverloads constructor(
         updateGesturePointer(event)
         prepareLegacyEdgePointer(event)
         when (event.actionMasked) {
-            MotionEvent.ACTION_DOWN ->
+            MotionEvent.ACTION_DOWN -> {
                 // The pointer window opens here — dispatchTouchEvent is the only
                 // funnel guaranteed to see every sample of every stream.
                 // onInterceptTouchEvent early-returns while inactive and
                 // onTouchEvent only runs for self-owned streams, so both used to
                 // drop terminal samples and leak the window forward.
                 springEdgeEffects.beginGesture()
+                // 指示器按下即淡入 —— 不再等「内容真的移动」。已经到顶/到底还在拖的
+                // 时候内容不动，原来那条 onScrolled 触发条件就一次都不成立。
+                scrollIndicatorPointerDown = true
+                markScrollIndicatorActivity()
+            }
             MotionEvent.ACTION_POINTER_DOWN ->
                 // A pointer-down can be delivered to the currently touched row
                 // without another parent interception pass. Cancel at the outer
@@ -562,6 +583,10 @@ class NativeAppListView @JvmOverloads constructor(
             if (springEdgeEffects.endGesture(terminalUp = canCommitFace)) {
                 onScrollToTop?.invoke()
             }
+            // 松手把指示器的保持窗口重新起算：延迟是「松手之后」的，不是「内容最后
+            // 一次移动之后」的。
+            scrollIndicatorPointerDown = false
+            markScrollIndicatorActivity()
             dragController.finishAdditionalPointer()
             resetLegacyEdgeGesture()
         }
@@ -836,6 +861,11 @@ class NativeAppListView @JvmOverloads constructor(
         withLegacyForwardedPointer(event) {
             super.onInterceptTouchEvent(event)
         }
+        // 这条链路里 RecyclerView 从没拿到过真正的 UP/CANCEL（拦截在上面就返回了），
+        // mScrollState 会一直停在 DRAGGING。强制回 IDLE，否则一切「按滚动状态判断」的
+        // 逻辑都会以为列表还在被拖着。此时不可能有惯性在跑 —— 拖拽被消费的那一帧
+        // 已经 stopScroll() 过了，所以这里不会掐掉正常的甩动。
+        stopScroll()
         recyclerGestureNeedsTerminal = false
     }
 
@@ -1185,6 +1215,8 @@ class NativeAppListView @JvmOverloads constructor(
         dragPreviewAnimator?.cancel()
         dragPreviewAnimator = null
         released = true
+        scrollIndicatorPointerDown = false
+        removeCallbacks(scrollIndicatorHoldEnd)
         removeCallbacks(restoreMotionBlur)
         stopScroll()
         removeOnScrollListener(childVisualScrollListener)
@@ -2367,6 +2399,11 @@ class NativeAppListView @JvmOverloads constructor(
 
     private fun markScrollIndicatorActivity() {
         scrollIndicatorActivityUptimeMs = AnimationUtils.currentAnimationTimeMillis()
+        removeCallbacks(scrollIndicatorHoldEnd)
+        // While the hold window is active, alpha already equals its target and
+        // the frame loop intentionally stops. Wake it after the hold expires
+        // so fade-out can begin even when no more scroll events arrive.
+        postDelayed(scrollIndicatorHoldEnd, NATIVE_SCROLL_INDICATOR_HOLD_MS + 1L)
         scheduleScrollIndicatorFrame()
     }
 
@@ -2415,8 +2452,15 @@ class NativeAppListView @JvmOverloads constructor(
         }
         scrollIndicatorFrameUptimeMs = now
         val target = nativeScrollIndicatorTargetAlpha(
-            scrolling = scrollState != SCROLL_STATE_IDLE,
+            // DRAGGING 只在手指确实还按着时才算「在动」：那个状态会被拖图标的链路
+            // 留成脏值。SETTLING（惯性）没有这个问题，照常认。
+            scrolling = when (scrollState) {
+                SCROLL_STATE_DRAGGING -> scrollIndicatorPointerDown
+                SCROLL_STATE_IDLE -> false
+                else -> true
+            },
             millisSinceScrollActivity = now - scrollIndicatorActivityUptimeMs,
+            pointerDown = scrollIndicatorPointerDown,
         )
         scrollIndicatorAlpha = nativeScrollIndicatorAdvanceAlpha(
             currentAlpha = scrollIndicatorAlpha,

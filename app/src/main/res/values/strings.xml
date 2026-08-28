@@ -67,6 +67,7 @@
     <string name="settings_flow_crescent_direction_left">弧线朝左鼓出</string>
     <string name="settings_flow_crescent_bulge">月牙弧度</string>
     <string name="settings_flow_crescent_bulge_sub">中间几行往外鼓出多少</string>
+    <string name="settings_flow_curve_parameter_fmt">形态曲线 %1$s</string>
     <string name="settings_rotary_haptics">表冠滚动震动</string>
     <string name="settings_rotary_haptics_on">表冠滚动时保留轻微震动反馈</string>
     <string name="settings_rotary_haptics_off">关闭表冠滚动震动反馈</string>
@@ -153,6 +154,7 @@
     <string name="settings_app_list_background_blur_sub">与控制中心同一套模糊；Android 12 以下为预烘焙</string>
     <string name="settings_app_list_background_scrim">遮罩强度</string>
     <string name="settings_app_list_background_scrim_sub">深色主题压暗、浅色主题提亮，让图标文字更清楚</string>
+    <string name="settings_app_list_background_reset">恢复背景效果默认值</string>
     <string name="app_list_background_crop_title">裁剪背景图</string>
     <string name="app_list_background_crop_hint">拖动移动，双指缩放；裁剪框已锁定屏幕比例</string>
     <string name="image_crop_failed">无法读取这张图片</string>
@@ -715,6 +717,7 @@
     <string name="settings_watch_store_market_url_title">自定义表盘市场 URL</string>
     <string name="settings_watch_store_market_url_hint">例如：https://example.com/api</string>
     <string name="settings_watch_store_market_url_http_warning">HTTP 会明文传输登录令牌，仅用于你信任的网络。</string>
+    <string name="settings_watch_store_market_url_allow_local">允许自建或局域网地址（有安全风险）</string>
     <string name="settings_watch_store_market_url_invalid">URL 无效：请输入带主机的 HTTP/HTTPS 地址</string>
     <string name="settings_watch_store_market_url_reset">恢复默认</string>
     <string name="settings_watch_store_market_url_saved">表盘市场 URL 已保存</string>
@@ -753,6 +756,7 @@
     <string name="backup_item_watch_files_sub">已导入的第三方 .watch 表盘文件</string>
     <string name="backup_summary_none">无</string>
     <string name="wf_tools_promo">欲获得更专业的表盘编辑能力，请下载「WFTools」</string>
+    <string name="wf_tools_watch_document">参阅 .watch 表盘文档</string>
     <string name="wf_tools_no_browser_fmt">未找到浏览器，请手动访问 %1$s</string>
     <string name="watch_face_tap_unavailable_fmt">表盘点击动作不可用：%1$s</string>
     <string name="watch_face_tap_missing_app_fmt">找不到应用 %1$s</string>
@@ -848,7 +852,6 @@
     <string name="watch_editor_error_ffmpeg_unsupported">当前设备为 32 位；现有 FFmpeg 不提供 32 位版本，暂不支持视频导入</string>
     <string name="watch_editor_error_read_video">无法读取所选视频</string>
     <string name="watch_editor_status_converting_video_fmt">正在转换视频 %1$d%%</string>
-    <string name="watch_editor_status_copying_video_fmt">正在导入原视频 %1$d%%</string>
     <string name="watch_editor_error_video_import">视频导入失败</string>
     <string name="watch_editor_status_importing_watch">正在导入 .watch</string>
     <string name="watch_editor_error_read_file">无法读取所选文件</string>
@@ -987,8 +990,6 @@
     <string name="watch_editor_converting_video">正在转换视频</string>
     <string name="watch_editor_video_conversion_message">FFmpeg 会把选定片段转换成表盘循环帧。</string>
     <string name="watch_editor_video_reencode_message">FFmpeg 会把选定片段重新编码成表盘视频。</string>
-    <string name="watch_editor_video_passthrough_message">正在把原视频拷贝进表盘，不重新编码。</string>
-    <string name="watch_editor_copying_video">正在导入原视频</string>
     <string name="watch_editor_cancel_conversion">取消转换</string>
     <string name="watch_editor_collapse_child_layers">折叠子图层</string>
     <string name="watch_editor_expand_child_layers">展开子图层</string>
@@ -1008,8 +1009,6 @@
     <string name="watch_editor_import_image_path">导入图片并写入 path</string>
     <string name="watch_editor_import_image_sequence">导入多张图片作为循环背景</string>
     <string name="watch_editor_import_video_frames">导入视频并转换为循环帧</string>
-    <string name="watch_editor_error_frames_need_ffmpeg">当前设备为 32 位，无法转换为循环帧；video 图层仍可直接导入视频原文件</string>
-    <string name="watch_editor_error_reencode_need_ffmpeg">当前设备为 32 位，无法裁剪或调整视频；请保持原参数直接导入</string>
     <string name="watch_editor_text_entry_animation">文字进入动画</string>
     <string name="watch_editor_text_exit_animation">文字退出动画</string>
     <string name="watch_editor_select_app_title">选择要启动的应用</string>
@@ -1203,6 +1202,10 @@
     <string name="watch_store_my_collections">我的合集</string>
     <string name="watch_store_no_favorites">还没有收藏过表盘</string>
     <string name="watch_store_profile">个人资料</string>
+    <string name="watch_store_logout_confirm">确定退出当前表盘商店账号吗？</string>
+    <string name="watch_store_login_web">在网页版登录</string>
+    <string name="watch_store_login_web_import">登录</string>
+    <string name="watch_store_login_web_missing">未检测到网页登录信息</string>
     <string name="watch_store_profile_saving">正在保存…</string>
     <string name="watch_store_profile_saved">已保存</string>
     <string name="watch_store_profile_not_set">未设置</string>
@@ -1393,6 +1396,7 @@
     <string name="watch_store_edit_comment_a11y">编辑评论</string>
     <string name="watch_store_delete_comment_a11y">删除评论</string>
     <string name="watch_store_reply_a11y">回复评论</string>
+    <string name="watch_store_expand_replies_fmt">展开 %1$d 条回复</string>
     <string name="watch_store_cancel_reply">取消回复</string>
     <string name="watch_store_stat_downloads">下载</string>
     <string name="watch_store_stat_favorites">喜欢</string>
@@ -1438,7 +1442,8 @@
     <string name="watch_store_select_replacement_file">选择新的 .watch 文件</string>
     <string name="watch_store_export">导出</string>
     <string name="watch_store_custom_name">自定义名称</string>
-    <string name="watch_store_delete_installed">删除已安装表盘</string>
+    <string name="watch_store_delete_installed">删除表盘</string>
+    <string name="watch_store_reinstall">重新安装表盘</string>
     <string name="watch_store_download_and_install">下载并安装</string>
     <string name="watch_store_status_loading_detail">正在加载详情…</string>
     <string name="watch_store_status_preparing_detail">正在准备详情…</string>

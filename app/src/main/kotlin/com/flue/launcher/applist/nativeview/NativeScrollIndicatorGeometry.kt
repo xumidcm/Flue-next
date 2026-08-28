@@ -62,6 +62,39 @@ internal const val NATIVE_SCROLL_INDICATOR_TRACK_ALPHA = 0.16f
 /** 滑块不透明度。 */
 internal const val NATIVE_SCROLL_INDICATOR_THUMB_ALPHA = 0.72f
 
+/**
+ * 指示器与图标之间的呼吸间距。
+ *
+ * 只把描边本身的宽度让出去还是会「贴着」，读起来仍像叠在一起。4dp 是描边宽度的
+ * 一个多，肉眼刚好能看出是两个东西。
+ */
+internal const val NATIVE_SCROLL_INDICATOR_CONTENT_GAP_DP = 4f
+
+/**
+ * 指示器在右侧要占掉多宽（像素）。
+ *
+ * 方屏轨道的描边中心在 `宽 − 边距 − 半描边`（见 [nativeScrollIndicatorBarCenterXPx]），
+ * 所以它的左沿在 `宽 − 边距 − 描边`，占用的条带就是「边距 + 描边」，再加一段
+ * [NATIVE_SCROLL_INDICATOR_CONTENT_GAP_DP] 的呼吸间距。
+ *
+ * 圆屏的弧沿内切圆走、往屏内鼓进来更多，但用同一个条带宽度：布局的可用宽度是矩形概念，
+ * 圆屏那侧真正把图标收进圆里的是 [NativeDrawerGeometryAdapter] 的安全轮廓，两者叠加即可。
+ *
+ * **[enabled] 为假时必须返回 0** —— 指示器关掉了还留一条内缩，就是右边一道说不出来由的白边。
+ */
+internal fun nativeScrollIndicatorReservedWidthPx(
+    enabled: Boolean,
+    density: Float,
+): Float {
+    if (!enabled) return 0f
+    val safeDensity = density.takeIf { it.isFinite() && it > 0f } ?: return 0f
+    return (
+        NATIVE_SCROLL_INDICATOR_EDGE_MARGIN_DP +
+            NATIVE_SCROLL_INDICATOR_THICKNESS_DP +
+            NATIVE_SCROLL_INDICATOR_CONTENT_GAP_DP
+        ) * safeDensity
+}
+
 /** 轨道 / 滑块共用的一维区间。单位由屏形决定：圆屏为角度（度），方屏为像素。 */
 internal data class NativeScrollIndicatorSpan(
     val start: Float,

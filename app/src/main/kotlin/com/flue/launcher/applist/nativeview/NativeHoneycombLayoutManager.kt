@@ -9,6 +9,7 @@ internal class NativeHoneycombLayoutManager(
 ) : NativeAppGridLayoutManager(configProvider) {
     private val childVisualScratch = NativeSpatialChildVisual()
     private var geometryLeftInset = Int.MIN_VALUE
+    private var geometryRightInset = Int.MIN_VALUE
     private var geometryNarrowColumns = Int.MIN_VALUE
     private var geometryIconSize = Int.MIN_VALUE
     private var geometryCellSize = Float.NaN
@@ -17,12 +18,14 @@ internal class NativeHoneycombLayoutManager(
         config: NativeAppListConfig,
     ): Boolean =
         geometryLeftInset == config.leftSafeInsetPx &&
+        geometryRightInset == config.rightSafeInsetPx &&
             geometryNarrowColumns == config.honeycombNarrowColumns &&
             geometryIconSize == config.iconSizePx &&
             geometryCellSize == config.honeycombCellSizePx
 
     override fun rememberGeometryConfig(config: NativeAppListConfig) {
         geometryLeftInset = config.leftSafeInsetPx
+        geometryRightInset = config.rightSafeInsetPx
         geometryNarrowColumns = config.honeycombNarrowColumns
         geometryIconSize = config.iconSizePx
         geometryCellSize = config.honeycombCellSizePx
@@ -38,6 +41,7 @@ internal class NativeHoneycombLayoutManager(
         viewportWidthPx = viewportWidthPx,
         viewportHeightPx = viewportHeightPx,
         leftSafeInsetPx = config.leftSafeInsetPx,
+        rightSafeInsetPx = config.rightSafeInsetPx,
         narrowColumns = config.honeycombNarrowColumns,
         iconSizePx = config.iconSizePx.toFloat(),
         cellSizePx = config.honeycombCellSizePx.takeIf { it > 0f }

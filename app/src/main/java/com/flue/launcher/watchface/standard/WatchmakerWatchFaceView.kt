@@ -606,7 +606,8 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         if (disposed || sizePx <= 0) return null
         val prepared = source ?: return null
         val layer = prepared.definition.layers.getOrNull(layerIndex) ?: return null
-        val normalizedType = layer.type.lowercase(Locale.ROOT)
+        val normalizedType = prepared.normalizedLayerTypes.getOrNull(layerIndex)
+            ?: layer.type.lowercase(Locale.ROOT)
         if (normalizedType !in setOf("text", "text_curved", "text_ring")) return null
         val raw = layer.attributes["text"].orEmpty()
             .ifBlank { layer.attributes["value"].orEmpty() }
@@ -960,6 +961,7 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         val enteringFace = isFaceVisible && !faceVisible
         val enablingAnimation = isFaceVisible && textEntryAnimationEnabled && !this.textEntryAnimationEnabled
         this.faceVisible = isFaceVisible
+        notifyVideoPlayback()
         this.textEntryAnimationEnabled = textEntryAnimationEnabled
         this.textExitAnimationEnabled = textExitAnimationEnabled
         if (textEntryAnimationEnabled && (enteringFace || enablingAnimation)) {
@@ -1104,8 +1106,12 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
 
     fun setFaceVisible(visible: Boolean) {
         if (disposed) return
-        if (faceVisible == visible) return
+        if (faceVisible == visible) {
+            notifyVideoPlayback()
+            return
+        }
         faceVisible = visible
+        notifyVideoPlayback()
         if (visible && textEntryAnimationEnabled) {
             textAnimationStartedAtUptimeMs = SystemClock.uptimeMillis()
         }
@@ -1118,8 +1124,15 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         if (textExitAnimationActive == effective) return
         textExitAnimationActive = effective
         if (effective) textExitAnimationStartedAtUptimeMs = SystemClock.uptimeMillis()
-        if (effective) scheduleTicks()
-        if (!disposed) requestFullRepaint()
+        if (effective) {
+            scheduleTicks()
+        } else if (!faceVisible) {
+            cancelTicks()
+        }
+        // The animation flag changes how existing layers are drawn; it must not
+        // invalidate baked static segments. A plain invalidate keeps the cache
+        // and starts/ends the fast tick cadence without rebuilding every bitmap.
+        if (!disposed) invalidate()
     }
 
     fun setWatchDataProvider(provider: WatchDataProvider?) {
@@ -1224,7 +1237,7 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
             editorPreviewPausedGyroY = smoothedGyroscopeY
         }
         editorPreviewPlaying = playing
-        editorVideoPlaybackListener?.invoke(playing)
+        notifyVideoPlayback()
         cancelTicks()
         if (!disposed) {
             scheduleTicks()
@@ -1235,6 +1248,12 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
     /** 视频图层的播放/暂停回调,由宿主(编辑器)接上真正的播放器。 */
     fun setEditorVideoPlaybackListener(listener: ((Boolean) -> Unit)?) {
         editorVideoPlaybackListener = listener
+        notifyVideoPlayback()
+    }
+
+    /** Propagates editor playback and real face visibility to video hosts. */
+    private fun notifyVideoPlayback() {
+        editorVideoPlaybackListener?.invoke(faceVisible && editorPreviewPlaying)
     }
 
     /**
@@ -2048,7 +2067,8 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         source: PreparedSource,
     ) {
         val attrs = layer.attributes
-        val normalizedType = layer.type.lowercase(Locale.ROOT)
+        val normalizedType = source.normalizedLayerTypes.getOrNull(layerIndex)
+            ?: layer.type.lowercase(Locale.ROOT)
         var animatedAlpha = alpha
         if (textExitAnimationActive && normalizedType.startsWith("text")) {
             val animation = watchTextExitAnimationFrame(
@@ -2083,11 +2103,9 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
             if (animation.rotation != 0f) canvas.rotate(animation.rotation)
             animatedAlpha *= animation.alpha
         }
-        val layerCacheKey = buildString {
-            append(source.rootCacheKey)
-            append('\u0000')
-            append(layer.id?.takeIf(String::isNotBlank) ?: layerIndex)
-        }
+        // PreparedSource caches this immutable key for the frame hot path.
+        val layerCacheKey = source.layerCacheKeys.getOrNull(layerIndex)
+            ?: source.layerCacheKey(layer, layerIndex)
         when (normalizedType) {
             "image", "gif", "image_gif" -> drawImage(
                 canvas = canvas,
@@ -2456,7 +2474,8 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
             } else {
                 // animatedFrame = false：这些是单帧静态图，归 bitmapCache 管，
                 // 不该占 animatedBitmapCache 给帧序列留的那份预算。
-                val layerType = layers[layerIndex].type.lowercase(Locale.ROOT)
+                val layerType = prepared.normalizedLayerTypes.getOrNull(layerIndex)
+                    ?: layers[layerIndex].type.lowercase(Locale.ROOT)
                 val spriteDecodeDimensionPx = if (layerType == "image_cond") {
                     val grid = parseWatchGrid(
                         attrs["cond_grid"]
@@ -6167,6 +6186,20 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
          */
         val usesLocationTags: Boolean = false,
     ) {
+        /** Immutable per-layer values used by every visible frame. */
+        val normalizedLayerTypes: List<String> = definition.layers.map { layer ->
+            layer.type.lowercase(Locale.ROOT)
+        }
+        val layerCacheKeys: List<String> = definition.layers.mapIndexed { index, layer ->
+            layerCacheKey(layer, index)
+        }
+
+        fun layerCacheKey(layer: WatchmakerLayer, layerIndex: Int): String = buildString {
+            append(rootCacheKey)
+            append('\u0000')
+            append(layer.id?.takeIf(String::isNotBlank) ?: layerIndex)
+        }
+
         /**
          * 声明画布换算出的设计空间尺寸，构造时算一次。
          *

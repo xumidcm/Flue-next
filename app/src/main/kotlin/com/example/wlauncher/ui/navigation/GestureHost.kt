@@ -8,6 +8,8 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.pointer.util.VelocityTracker
+import com.flue.launcher.motion.LocalFlueMotionProfile
+import com.flue.launcher.ui.common.flueOverlayOvershootPx
 import kotlin.math.abs
 
 /** 表盘上可跟手拉出的覆层。 */
@@ -61,6 +63,14 @@ fun GestureHost(
     controlCenterDismissHandledByContent: Boolean = false,
     onOverlayDrag: ((OverlayGestureTarget, Float) -> Unit)? = null,
     onOverlayRelease: ((OverlayGestureTarget, Float, Float, Boolean) -> Unit)? = null,
+    /**
+     * 覆层已经打开、手指继续「往外」拉时的越界位移（像素，正数 = 内容往右）。
+     *
+     * 刻意与 [onOverlayDrag] 分成两条通道：进度必须留在 0..1（三处 `coerceIn` 都靠它
+     * 表达「开/关」），越界是**叠在**开态之上的额外位移，交给 graphicsLayer 的
+     * translation 而不是布局，避免重排。
+     */
+    onOverlayOvershoot: ((Float) -> Unit)? = null,
     onAppListDrag: ((Float) -> Unit)? = null,
     onAppListRelease: ((Float, Float, Boolean) -> Unit)? = null,
     onBackdropCaptureRequested: (() -> Unit)? = null,
@@ -78,8 +88,11 @@ fun GestureHost(
     var totalDy by remember { mutableFloatStateOf(0f) }
     var consumed by remember { mutableStateOf(false) }
     var overlayTarget by remember { mutableStateOf<OverlayGestureTarget?>(null) }
+    // 「已打开的覆层还在被往外拉」这条独立通道。它不改进度，只报越界位移。
+    var overshootTarget by remember { mutableStateOf<OverlayGestureTarget?>(null) }
     var appListGestureActive by remember { mutableStateOf(false) }
     val velocityTracker = remember { VelocityTracker() }
+    val motionProfile = LocalFlueMotionProfile.current
 
     // 宿主手势只在真正需要它的状态挂载。detectDragGestures 跨过 touch-slop
     // 时会消费事件，Compose 一消费，底下 AndroidView（原生应用列表）立刻
@@ -138,6 +151,7 @@ fun GestureHost(
                 closingOverlay,
                 // 解锁后必须重建识别器，否则加载完成了手势还是死的。
                 gesturesLocked,
+                motionProfile,
             ) {
                 if (!hostGestureNeeded) return@pointerInput
                 val widthPx = size.width.coerceAtLeast(1).toFloat()
@@ -154,6 +168,28 @@ fun GestureHost(
                     // 关闭侧从 1 起算：手指反向（上滑）时 delta 为负，进度递减。
                     val base = if (closingOverlay == target) 1f else 0f
                     return (base + delta).coerceIn(0f, 1f)
+                }
+
+                /**
+                 * 已打开覆层「继续往外拉」的越界位移，签名与 translationX 同向
+                 * （正数 = 内容往右）。
+                 *
+                 * 竖向的控制中心不走这条路：它有自己的一段式 dismiss 物理（见
+                 * ControlCenterLayer），在那里叠越界会和 dismiss 进度打架。
+                 */
+                fun overlayOvershoot(target: OverlayGestureTarget): Float {
+                    val outward = when (target) {
+                        OverlayGestureTarget.Stack -> totalDx
+                        OverlayGestureTarget.Widgets -> -totalDx
+                        OverlayGestureTarget.ControlCenter -> return 0f
+                    }
+                    val magnitude = flueOverlayOvershootPx(
+                        outwardTravelPx = outward,
+                        viewportPx = size.width,
+                        density = density,
+                        motionProfile = motionProfile,
+                    )
+                    return if (target == OverlayGestureTarget.Widgets) -magnitude else magnitude
                 }
 
                 fun overlayVelocity(target: OverlayGestureTarget): Float {
@@ -177,6 +213,7 @@ fun GestureHost(
                         totalDy = 0f
                         consumed = false
                         overlayTarget = null
+                        overshootTarget = null
                         appListGestureActive = false
                         velocityTracker.resetTracking()
                     },
@@ -188,6 +225,13 @@ fun GestureHost(
                         val activeOverlay = overlayTarget
                         if (activeOverlay != null) {
                             onOverlayDrag?.invoke(activeOverlay, overlayProgress(activeOverlay))
+                            change.consume()
+                            return@detectDragGestures
+                        }
+
+                        val activeOvershoot = overshootTarget
+                        if (activeOvershoot != null) {
+                            onOverlayOvershoot?.invoke(overlayOvershoot(activeOvershoot))
                             change.consume()
                             return@detectDragGestures
                         }
@@ -223,6 +267,32 @@ fun GestureHost(
                             overlayTarget = closingOverlay
                             consumed = true
                             onOverlayDrag.invoke(closingOverlay, overlayProgress(closingOverlay))
+                            change.consume()
+                            return@detectDragGestures
+                        }
+
+                        // 覆层已打开、手指继续**往外**拉：以前这里没有任何 case ——
+                        // 横向进度被 coerceIn(0,1) 夹死，走到下面 80px 兜底时又只有
+                        // 「往回收」那一个方向，于是 consumed 被置为真而什么都不做，
+                        // 手势整条死掉（老师报的「到边界硬停」）。
+                        val outwardClaimed = closingOverlay != null &&
+                            onOverlayOvershoot != null &&
+                            when (closingOverlay) {
+                                OverlayGestureTarget.Stack ->
+                                    abs(totalDx) > axisLockPx &&
+                                        abs(totalDx) > abs(totalDy) &&
+                                        totalDx > 0f
+                                OverlayGestureTarget.Widgets ->
+                                    abs(totalDx) > axisLockPx &&
+                                        abs(totalDx) > abs(totalDy) &&
+                                        totalDx < 0f
+                                // 控制中心不走越界，见 overlayOvershoot 的注释。
+                                OverlayGestureTarget.ControlCenter -> false
+                            }
+                        if (closingOverlay != null && !consumed && outwardClaimed) {
+                            overshootTarget = closingOverlay
+                            consumed = true
+                            onOverlayOvershoot?.invoke(overlayOvershoot(closingOverlay))
                             change.consume()
                             return@detectDragGestures
                         }
@@ -311,6 +381,11 @@ fun GestureHost(
                                 false,
                             )
                         }
+                        // 越界只回弹，不改开/关：cancelled = true 让宿主保持当前状态，
+                        // 由它把越界位移弹回 0。
+                        overshootTarget?.let { target ->
+                            onOverlayRelease?.invoke(target, overlayProgress(target), 0f, true)
+                        }
                         if (appListGestureActive) {
                             onAppListRelease?.invoke(
                                 appListProgress(),
@@ -319,16 +394,21 @@ fun GestureHost(
                             )
                         }
                         overlayTarget = null
+                        overshootTarget = null
                         appListGestureActive = false
                     },
                     onDragCancel = {
                         overlayTarget?.let { target ->
                             onOverlayRelease?.invoke(target, overlayProgress(target), 0f, true)
                         }
+                        overshootTarget?.let { target ->
+                            onOverlayRelease?.invoke(target, overlayProgress(target), 0f, true)
+                        }
                         if (appListGestureActive) {
                             onAppListRelease?.invoke(appListProgress(), 0f, true)
                         }
                         overlayTarget = null
+                        overshootTarget = null
                         appListGestureActive = false
                     },
                 )

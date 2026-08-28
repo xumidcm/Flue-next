@@ -267,7 +267,24 @@ internal fun sideScreenContentAllowsVerticalScroll(
     showNotificationPreview: Boolean,
 ): Boolean = showMusicCard || showNotificationPreview
 
-internal fun sideScreenContentUsesElasticOverscroll(showMusicCard: Boolean): Boolean = showMusicCard
+/**
+ * 负一屏挂不挂弹性回弹。
+ *
+ * **必须与 [sideScreenContentAllowsVerticalScroll] 同一个判据。** 这两个判据原先各写
+ * 一份（可滚 = `showMusicCard || showNotificationPreview`，回弹 = `showMusicCard`），
+ * 差集恰好是「有通知横幅、没有音乐卡」—— 也就是大多数人的默认状态。那种状态下内容
+ * 能滚却拿不到 `Modifier.flueOverscroll`，上下滑到边界硬停，没有任何反馈，正是老师报的
+ * 「负一屏上下滑动橡皮筋丢失」。
+ *
+ * 所以这里直接委托，不再留第二份条件可以走偏。
+ */
+internal fun sideScreenContentUsesElasticOverscroll(
+    showMusicCard: Boolean,
+    showNotificationPreview: Boolean,
+): Boolean = sideScreenContentAllowsVerticalScroll(
+    showMusicCard = showMusicCard,
+    showNotificationPreview = showNotificationPreview,
+)
 
 internal data class MediaMarqueeSpec(
     val cycleDistancePx: Int,
@@ -419,6 +436,25 @@ fun ControlCenterLayer(
                     (controlCenterViewportHeightPx.coerceAtLeast(1) * 0.8f))
                     .coerceIn(0f, 1f)
 
+            /**
+             * 现在允不允许开始累计 dismiss 位移。
+             *
+             * 老师的要求是「页面能滚动时，先滑到底、触发越界回弹，再向上滑才能关闭」。
+             * 所以判据是**底边越界已经被拉过触发阈值** —— 内层没到底时共享回弹不会
+             * owns 底边，位移一直是 0，自然过不了阈值。
+             *
+             * 两条必须留的旁路：
+             * - 内容其实不溢出（`maxValue == 0`）：没有「滑到底」这回事，退回一段式，
+             *   否则短内容也要先拉橡皮筋才能关。这里用**实测**的溢出量，不用估算高度 ——
+             *   估算漏算了开关下面那行文字，估低了就会走错路径。
+             * - 动效档把回弹关掉：最大越界位移恒为 0，阈值永远过不去，控制中心就再也
+             *   关不掉了。
+             */
+            fun dismissGateOpen(): Boolean =
+                verticalScrollState.maxValue <= 0 ||
+                    !sharedVerticalElasticState.isElasticEnabled ||
+                    sharedVerticalElasticState.isBottomBeyondTrigger
+
             override fun onPreScroll(
                 available: androidx.compose.ui.geometry.Offset,
                 source: NestedScrollSource,
@@ -430,9 +466,19 @@ fun ControlCenterLayer(
                     return androidx.compose.ui.geometry.Offset(0f, available.y)
                 }
                 if (scrollDismissActive) {
-                    scrollDismissDragPx = (scrollDismissDragPx + available.y).coerceAtMost(0f)
+                    // 只独占「真的落在 dismiss 位移上」的那部分。反向拖回原位后要把闩
+                    // 解开并把剩下的量交还内层，否则一旦闩住内层列表就再也滚不动了。
+                    val next = (scrollDismissDragPx + available.y).coerceAtMost(0f)
+                    val used = next - scrollDismissDragPx
+                    scrollDismissDragPx = next
                     currentOnDismissProgressChange(dismissProgress())
-                    return androidx.compose.ui.geometry.Offset(0f, available.y)
+                    if (next >= 0f && available.y > 0f) {
+                        scrollDismissActive = false
+                    }
+                    if (used != 0f) {
+                        return androidx.compose.ui.geometry.Offset(0f, used)
+                    }
+                    return androidx.compose.ui.geometry.Offset.Zero
                 }
                 // Let the shared controller first consume a previously
                 // stretched edge. This keeps a reversal continuous instead
@@ -450,13 +496,16 @@ fun ControlCenterLayer(
                 }
                 if (
                     source == NestedScrollSource.UserInput &&
-                    available.y < 0f
+                    available.y < 0f &&
+                    (scrollDismissActive || dismissGateOpen())
                 ) {
                     scrollDismissActive = true
                     scrollDismissDragPx = (scrollDismissDragPx + available.y).coerceAtMost(0f)
                     currentOnDismissProgressChange(dismissProgress())
                     return androidx.compose.ui.geometry.Offset(0f, available.y)
                 }
+                // 闸门还没开：未消费的量先交给共享回弹，让底边拉出橡皮筋。
+                // 这条分支原来是死代码 —— dismiss 无条件抢在前面全量消费手势。
                 return sharedVerticalElasticState.connection.onPostScroll(
                     consumed = consumed,
                     available = available,
@@ -472,6 +521,11 @@ fun ControlCenterLayer(
                         (controlCenterViewportHeightPx.coerceAtLeast(1) * 0.8f)
                     scrollDismissActive = false
                     scrollDismissDragPx = 0f
+                    // dismiss 是在底边被拉过阈值之后才接手的，松手时那段越界位移还挂着。
+                    // 不收就会留一个不回弹的偏移（关闭时看不出来，但取消关闭时内容会歪着）。
+                    if (sharedVerticalElasticState.offsetPx != 0f) {
+                        sharedVerticalElasticState.connection.onPreFling(Velocity.Zero)
+                    }
                     currentOnDismissRelease(progress, velocity, false)
                     return available
                 }
@@ -619,23 +673,12 @@ fun ControlCenterLayer(
                 edge = true,
             ).toDp()
         }
-        val estimatedControlsHeight = toggleSize +
-            controlsSpacing +
-            sliderHeight +
-            controlsSpacing +
-            sliderHeight +
-            (if (showMusicControls) controlsSpacing + 156.dp else 0.dp) +
-            (if (showNotificationCard) controlsSpacing + 108.dp else 0.dp)
         val topStatusHeaderHeight = if (roundScreen) 96.dp else 32.dp
         // 顶部状态行 = 内容区 + 16dp 渐隐过渡带。圆屏需要两行，不能再用
         // 方屏的单行高度，否则电池与时间会被压进同一基线。
-        val estimatedContentHeight = verticalPadding * 2f +
-            topStatusHeaderHeight + 16.dp +
-            outerSpacing +
-            estimatedControlsHeight +
-            20.dp +
-            footerTopGap
-        val verticalScrollEnabled = estimatedContentHeight > maxHeight
+        // 始终挂载滚动容器，让 Compose 测量真实 contentHeight。是否存在有效滚动范围
+        // 直接读 maxValue，不再依赖卡片估高；内容不足一屏时 maxValue 为 0。
+        val verticalScrollEnabled = verticalScrollState.maxValue > 0
         LaunchedEffect(verticalScrollEnabled, toggleRowFits) {
             if (!verticalScrollEnabled) {
                 verticalScrollState.scrollTo(0)
@@ -651,120 +694,15 @@ fun ControlCenterLayer(
             .fillMaxSize()
             .onSizeChanged { size ->
                 controlCenterViewportHeightPx = size.height.coerceAtLeast(1)
-                if (verticalScrollEnabled) {
-                    sharedVerticalElasticState.setViewportHeight(size.height)
-                }
+                sharedVerticalElasticState.setViewportHeight(size.height)
             }
             .graphicsLayer {
-                translationY = if (verticalScrollEnabled) {
-                    sharedVerticalElasticState.offsetPx
-                } else {
-                    verticalOverscroll.value
-                }
+                translationY = sharedVerticalElasticState.offsetPx
             }
             .padding(start = leftSafeInset)
-        val contentModifier = if (verticalScrollEnabled) {
-            verticalElasticModifier
-                .nestedScroll(verticalElasticScroll)
-                .verticalScroll(verticalScrollState)
-        } else {
-            verticalElasticModifier.pointerInput(
-                controlCenterGestureLocked,
-            ) {
-                detectDragGestures(
-                    onDragStart = {
-                        fullScreenDragX = 0f
-                        fullScreenDragY = 0f
-                        fullScreenVelocityY = 0f
-                        fullScreenLastEventUptime = 0L
-                        fullScreenDismissActive = false
-                    },
-                    onDrag = { change, dragAmount ->
-                        if (controlCenterGestureLocked) {
-                            change.consume()
-                            return@detectDragGestures
-                        }
-                        if (fullScreenLastEventUptime != 0L) {
-                            val deltaMs =
-                                (change.uptimeMillis - fullScreenLastEventUptime).coerceAtLeast(1L)
-                            val instantVelocityY = dragAmount.y / deltaMs * 1000f
-                            fullScreenVelocityY = if (fullScreenVelocityY == 0f) {
-                                instantVelocityY
-                            } else {
-                                fullScreenVelocityY * 0.35f + instantVelocityY * 0.65f
-                            }
-                        }
-                        fullScreenLastEventUptime = change.uptimeMillis
-                        fullScreenDragX += dragAmount.x
-                        fullScreenDragY += dragAmount.y
-                        val closing = fullScreenDismissActive ||
-                            (
-                                verticalOverscroll.value <= 0f &&
-                                    fullScreenDragY < -18f &&
-                                    abs(fullScreenDragY) > abs(fullScreenDragX)
-                                )
-                        if (closing) {
-                            fullScreenDismissActive = true
-                            change.consume()
-                            currentOnDismissProgressChange(
-                                (1f + fullScreenDragY /
-                                    (controlCenterViewportHeightPx.coerceAtLeast(1) * 0.8f))
-                                    .coerceIn(0f, 1f)
-                            )
-                        } else if (abs(dragAmount.y) >= abs(dragAmount.x)) {
-                            change.consume()
-                            overscrollScope.launch {
-                                val next = when {
-                                    verticalOverscroll.value > 0f && dragAmount.y < 0f ->
-                                        (verticalOverscroll.value + dragAmount.y).coerceAtLeast(0f)
-                                    dragAmount.y > 0f ->
-                                        (verticalOverscroll.value + dragAmount.y * CONTROL_CENTER_OVERSCROLL_RESISTANCE)
-                                            .coerceAtMost(CONTROL_CENTER_OVERSCROLL_LIMIT)
-                                    dragAmount.y < 0f -> verticalOverscroll.value
-                                    else -> verticalOverscroll.value
-                                }
-                                verticalOverscroll.snapTo(next)
-                            }
-                        }
-                    },
-                    onDragEnd = {
-                        if (fullScreenDismissActive) {
-                            currentOnDismissRelease(
-                                (1f + fullScreenDragY /
-                                    (controlCenterViewportHeightPx.coerceAtLeast(1) * 0.8f))
-                                    .coerceIn(0f, 1f),
-                                fullScreenVelocityY /
-                                    (controlCenterViewportHeightPx.coerceAtLeast(1) * 0.8f),
-                                false,
-                            )
-                        }
-                        fullScreenDismissActive = false
-                        overscrollScope.launch {
-                            if (verticalOverscroll.value != 0f) {
-                                verticalOverscroll.animateTo(0f, spring(dampingRatio = 0.78f, stiffness = 420f))
-                            }
-                        }
-                    },
-                    onDragCancel = {
-                        if (fullScreenDismissActive) {
-                            currentOnDismissRelease(
-                                (1f + fullScreenDragY /
-                                    (controlCenterViewportHeightPx.coerceAtLeast(1) * 0.8f))
-                                    .coerceIn(0f, 1f),
-                                0f,
-                                true,
-                            )
-                        }
-                        fullScreenDismissActive = false
-                        overscrollScope.launch {
-                            if (verticalOverscroll.value != 0f) {
-                                verticalOverscroll.animateTo(0f, spring(dampingRatio = 0.78f, stiffness = 420f))
-                            }
-                        }
-                    }
-                )
-            }
-        }
+        val contentModifier = verticalElasticModifier
+            .nestedScroll(verticalElasticScroll)
+            .verticalScroll(verticalScrollState)
         Column(
             modifier = Modifier
                 .then(contentModifier)

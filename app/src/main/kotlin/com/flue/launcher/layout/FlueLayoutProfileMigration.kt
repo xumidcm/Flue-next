@@ -20,6 +20,8 @@ fun migratedLayoutProfiles(
     fisheyeRangeRows: Int? = null,
     fisheyeStrengthPercent: Int? = null,
     leftSafeInsetPercent: Int? = null,
+    narrowColumns: Int? = null,
+    appListScalePercent: Int? = null,
 ): List<FlueLayoutProfile> = FlueLayoutProfiles.builtIns.map { preset ->
     preset.copy(
         fisheyeEnabled = fisheyeEnabled ?: preset.fisheyeEnabled,
@@ -30,5 +32,7 @@ fun migratedLayoutProfiles(
         fisheyeRangeRows = fisheyeRangeRows ?: preset.fisheyeRangeRows,
         fisheyeStrengthPercent = fisheyeStrengthPercent ?: preset.fisheyeStrengthPercent,
         leftSafeInsetPercent = leftSafeInsetPercent ?: preset.leftSafeInsetPercent,
+        narrowColumns = narrowColumns ?: preset.narrowColumns,
+        appListScalePercent = appListScalePercent ?: preset.appListScalePercent,
     ).sanitized().requireValid()
 }

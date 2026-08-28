@@ -331,6 +331,8 @@ fun LauncherScreen(vm: LauncherViewModel) {
     val themeMode by vm.themeMode.collectAsStateWithLifecycle()
     val sideScreenEnabled by vm.sideScreenEnabled.collectAsStateWithLifecycle()
     val sideScreenShortcuts by vm.sideScreenShortcuts.collectAsStateWithLifecycle()
+    val sideScreenShortcutRows by vm.sideScreenShortcutRows.collectAsStateWithLifecycle()
+    val sideScreenShortcutCols by vm.sideScreenShortcutCols.collectAsStateWithLifecycle()
     val blurEnabled by vm.blurEnabled.collectAsStateWithLifecycle()
     val edgeBlurEnabled by vm.edgeBlurEnabled.collectAsStateWithLifecycle()
     val apps by vm.apps.collectAsStateWithLifecycle()
@@ -358,6 +360,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
     val appListEdgeSpacingCompressionEnabled by vm.appListEdgeSpacingCompressionEnabled.collectAsStateWithLifecycle()
     val appListFlowCrescentBulgePercent by vm.appListFlowCrescentBulgePercent.collectAsStateWithLifecycle()
     val appListFlowCrescentToRight by vm.appListFlowCrescentToRight.collectAsStateWithLifecycle()
+    val activeLayoutProfile by vm.activeLayoutProfile.collectAsStateWithLifecycle()
     val appListScalePercent by vm.appListScalePercent.collectAsStateWithLifecycle()
     val overlayMaskCornerRadiusDp by vm.overlayMaskCornerRadiusDp.collectAsStateWithLifecycle()
     val appListRowBorderEnabled by vm.appListRowBorderEnabled.collectAsStateWithLifecycle()
@@ -1262,6 +1265,12 @@ fun LauncherScreen(vm: LauncherViewModel) {
         var overlayGestureTarget by overlayGestureTargetState
         val overlayGestureProgress = remember { mutableFloatStateOf(0f) }
         var overlayGestureGeneration by remember { mutableStateOf(0L) }
+        // 覆层越界位移（像素，正数 = 内容往右）。进度必须留在 0..1，越界是叠在开态
+        // 之上的额外位移，只喂给 graphicsLayer 的 translationX，不参与布局。
+        // 同一时刻只有一个覆层开着，所以三层共用这一份状态。
+        val overlayOvershootPx = remember { mutableFloatStateOf(0f) }
+        val overlayOvershootAnim = remember { Animatable(0f) }
+        var overlayOvershootJob by remember { mutableStateOf<Job?>(null) }
         // 抬手初速度必须按目标分开存。以前是一个共享变量：控制中心下拉松手
         // 写进速度后，三个 settle 的 LaunchedEffect 都因 overlayGestureTarget
         // 归 null 而重启，谁先跑谁就把这个速度抢走灌进自己的 Animatable——
@@ -1405,6 +1414,16 @@ fun LauncherScreen(vm: LauncherViewModel) {
                     controlCenterProgressProvider(),
                     notificationGestureProgress,
                 ) > 0.001f
+            }
+        }
+        // Keep the slow-bucket watch face in its normal cadence while a side
+        // gesture is only starting. Text exit animation is enabled only once
+        // the overlay is nearly settled, so the animation remains visible
+        // without turning a 1fps face into a 30fps full repaint path for the
+        // entire drag.
+        val textExitAnimationActive by remember {
+            derivedStateOf {
+                overlayBackdropActive && overlayBackdropProgress() >= 0.84f
             }
         }
         // 通知中心压在负一屏上时，负一屏自己的模糊进度。只跟通知的进度走，
@@ -1827,6 +1846,33 @@ fun LauncherScreen(vm: LauncherViewModel) {
                 OverlayGestureTarget.ControlCenter -> controlCenterMounted = true
             }
         }
+        // 越界只改绘制位移，不动进度、不动挂载、不动 generation —— 它不是一次转场。
+        val updateOverlayOvershoot: (Float) -> Unit = { overshootPx ->
+            overlayOvershootJob?.cancel()
+            overlayOvershootJob = null
+            overlayOvershootPx.floatValue = overshootPx.takeIf(Float::isFinite) ?: 0f
+        }
+        val releaseOverlayOvershoot: () -> Unit = {
+            val from = overlayOvershootPx.floatValue
+            overlayOvershootJob?.cancel()
+            overlayOvershootJob = if (from == 0f) {
+                null
+            } else {
+                launcherScope.launch {
+                    try {
+                        overlayOvershootAnim.snapTo(from)
+                        overlayOvershootAnim.animateTo(
+                            targetValue = 0f,
+                            animationSpec = activeMotionProfile.edgeBounce.asFloatAnimationSpec(),
+                        ) {
+                            overlayOvershootPx.floatValue = value
+                        }
+                    } finally {
+                        overlayOvershootPx.floatValue = 0f
+                    }
+                }
+            }
+        }
         val updateAppListGesture: (Float) -> Unit = { progress ->
             if (!appListGestureActive) {
                 appListGestureGeneration++
@@ -1886,6 +1932,8 @@ fun LauncherScreen(vm: LauncherViewModel) {
                 overlayReleaseVelocities[target] = if (cancelled) 0f else velocity
                 val handoff = progress.coerceIn(0f, 1f)
                 val handoffGeneration = ++overlayGestureGeneration
+                // 松手统一收越界位移：无论这一次是 dismiss 还是纯越界，两条路都走这里。
+                releaseOverlayOvershoot()
                 if (open) {
                     vm.setState(overlayState)
                 } else if (wasOpen) {
@@ -1915,6 +1963,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
             controlCenterDismissHandledByContent = true,
             onOverlayDrag = updateOverlayGesture,
             onOverlayRelease = releaseOverlayGesture,
+            onOverlayOvershoot = updateOverlayOvershoot,
             onAppListDrag = updateAppListGesture,
             onAppListRelease = releaseAppListGesture,
             onBackdropCaptureRequested = requestCleanWatchFaceFrame,
@@ -2151,7 +2200,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
                                 gravityBackdropBlurEnabled = watchfaceGravityBackdropBlurEnabled,
                                 textEntryAnimationEnabled = watchFaceTextEntryAnimation,
                                 textExitAnimationEnabled = watchFaceTextExitAnimation,
-                                textExitAnimationActive = overlayBackdropActive,
+                                textExitAnimationActive = textExitAnimationActive,
                             )
                             if (watchFaceBottomFadeEnabled) {
                                 WatchFaceBottomFadeOverlay(
@@ -2181,7 +2230,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
                                 onRenderReady = markFaceRenderReady,
                                 textEntryAnimationEnabled = watchFaceTextEntryAnimation,
                                 textExitAnimationEnabled = watchFaceTextExitAnimation,
-                                textExitAnimationActive = overlayBackdropActive,
+                                textExitAnimationActive = textExitAnimationActive,
                             )
                             if (watchFaceBottomFadeEnabled) {
                                 WatchFaceBottomFadeOverlay(
@@ -2371,6 +2420,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
                         honeycombNarrowColumns = honeycombCols,
                         flowCrescentBulgePercent = appListFlowCrescentBulgePercent,
                         flowCrescentToRight = appListFlowCrescentToRight,
+                        flowShapeCurve = activeLayoutProfile.flowShapeCurve,
                         onAppClick = { appInfo, origin ->
                             launchAppFromLauncher(appInfo, origin, ScreenState.Apps)
                         },
@@ -2551,7 +2601,10 @@ fun LauncherScreen(vm: LauncherViewModel) {
                             // 边边」就是它。
                             val offscreen = size.width.coerceAtLeast(screenWidthPx)
                             val pageProgress = sidePageProgressProvider()
-                            translationX = (pageProgress - 1f) * offscreen
+                            // 越界位移叠在开态之上（正数 = 往右）。写在 translationX 上
+                            // 而不是布局里：越界不该触发重排。
+                            translationX = (pageProgress - 1f) * offscreen +
+                                overlayOvershootPx.floatValue
                             alpha = if (pageProgress > 0.001f) 1f else 0f
                             val blurP = sidePageNotificationBlurProgress()
                             val radiusPx = with(density) { (24f * blurP).dp.toPx() }
@@ -2572,6 +2625,8 @@ fun LauncherScreen(vm: LauncherViewModel) {
                     SmartStackLayer(
                         apps = allApps,
                         sideScreenShortcuts = sideScreenShortcuts,
+                        shortcutRows = sideScreenShortcutRows,
+                        shortcutColumns = sideScreenShortcutCols,
                         previewGroups = sideScreenPreviewGroups,
                         showMusicCard = cardPlacement.musicOnSideScreen,
                         showMediaCustomActions = showMediaCustomActions,
@@ -2620,6 +2675,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
                         onDismissProgressChange = { progress ->
                             updateOverlayGesture(OverlayGestureTarget.Stack, progress)
                         },
+                        onOvershootChange = updateOverlayOvershoot,
                         onDismissRelease = { progress, velocity, cancelled ->
                             releaseOverlayGesture(
                                 OverlayGestureTarget.Stack,
@@ -2647,7 +2703,9 @@ fun LauncherScreen(vm: LauncherViewModel) {
                             // 收起态会在屏幕右侧留下一道小组件页的边。
                             val offscreen = size.width.coerceAtLeast(screenWidthPx)
                             val pageProgress = widgetPageProgressProvider()
-                            translationX = (1f - pageProgress) * offscreen
+                            // 小组件页往外拉是向左，overlayOvershootPx 此时为负值。
+                            translationX = (1f - pageProgress) * offscreen +
+                                overlayOvershootPx.floatValue
                             alpha = if (pageProgress > 0.001f) 1f else 0f
                         }
                         // Keep the screen mask outside the page translation so an

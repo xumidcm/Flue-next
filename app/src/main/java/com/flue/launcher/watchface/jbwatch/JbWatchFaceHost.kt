@@ -39,6 +39,8 @@ import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.res.stringResource
+import com.flue.launcher.R
 import com.flue.launcher.watchface.WatchFaceDescriptor
 import com.flue.launcher.watchface.standard.WatchDataProvider
 import com.flue.launcher.watchface.standard.WatchDataSnapshot
@@ -494,7 +496,7 @@ fun JbWatchFaceHost(
                 }
             }
             loadError == null -> {
-                Text("Loading", color = Color.White.copy(alpha = 0.72f), fontSize = 12.sp)
+                Text(stringResource(R.string.watch_face_loading), color = Color.White.copy(alpha = 0.72f), fontSize = 12.sp)
             }
         }
     }
@@ -1346,7 +1348,7 @@ private fun resolveJbWatchPath(
     val rawPath = layer.path
     val normalized = rawPath?.trim().orEmpty()
     if (normalized.isBlank()) return null
-    val parsedPaths = parsePaths(normalized)
+    val parsedPaths = layer.pathFrames.ifEmpty { parsePaths(normalized) }
     val candidates = if (parsedPaths.size > 1) {
         val frameDelayMs = layer.gifDelay.takeIf { it > 0 } ?: 50
         val frameIndex = jbAnimationFrameIndex(

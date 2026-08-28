@@ -67,6 +67,7 @@
     <string name="settings_flow_crescent_direction_left">弧が左へ膨らむ</string>
     <string name="settings_flow_crescent_bulge">三日月の曲率</string>
     <string name="settings_flow_crescent_bulge_sub">中央付近の行がどれだけ外へ膨らむか</string>
+    <string name="settings_flow_curve_parameter_fmt">形状カーブ %1$s</string>
     <string name="settings_rotary_haptics">ロータリーハプティクス</string>
     <string name="settings_rotary_haptics_on">クラウンスクロール時に軽い振動フィードバックを維持</string>
     <string name="settings_rotary_haptics_off">クラウンスクロールの振動フィードバックを無効にする</string>
@@ -736,6 +737,15 @@
     <string name="backup_item_watch_files_sub">インポート済みのサードパーティ .watch ファイル</string>
     <string name="backup_summary_none">なし</string>
     <string name="wf_tools_promo">より高度な文字盤編集には「WFTools」をご利用ください</string>
+    <string name="wf_tools_watch_document">.watch 文字盤ドキュメントを参照</string>
+    <string name="settings_app_list_background_reset">背景効果を初期値に戻す</string>
+    <string name="settings_watch_store_market_url_allow_local">自作またはローカルネットワークのアドレスを許可（セキュリティリスク）</string>
+    <string name="watch_store_logout_confirm">この文字盤ストアアカウントからログアウトしますか？</string>
+    <string name="watch_store_login_web">Web 版でログイン</string>
+    <string name="watch_store_login_web_import">ログイン</string>
+    <string name="watch_store_login_web_missing">Web 版のログイン情報を検出できません</string>
+    <string name="watch_store_expand_replies_fmt">返信を %1$d 件表示</string>
+    <string name="watch_store_reinstall">文字盤を再インストール</string>
     <string name="wf_tools_no_browser_fmt">ブラウザが見つかりません。%1$s を手動で開いてください。</string>
     <string name="watch_face_tap_unavailable_fmt">文字盤のタップ操作を実行できません: %1$s</string>
     <string name="watch_face_tap_missing_app_fmt">アプリが見つかりません: %1$s</string>
@@ -830,7 +840,6 @@
     <string name="watch_editor_error_ffmpeg_unsupported">この端末アーキテクチャでは FFmpeg 動画読み込みを利用できません</string>
     <string name="watch_editor_error_read_video">選択した動画を読み込めません</string>
     <string name="watch_editor_status_converting_video_fmt">動画を変換しています %1$d%%</string>
-    <string name="watch_editor_status_copying_video_fmt">元の動画を読み込んでいます %1$d%%</string>
     <string name="watch_editor_error_video_import">動画の読み込みに失敗しました</string>
     <string name="watch_editor_status_importing_watch">.watch を読み込んでいます</string>
     <string name="watch_editor_error_read_file">選択したファイルを読み込めません</string>
@@ -958,8 +967,6 @@
     <string name="watch_editor_converting_video">動画を変換しています</string>
     <string name="watch_editor_video_conversion_message">FFmpeg が選択した範囲を文字盤用のループフレームへ変換します。</string>
     <string name="watch_editor_video_reencode_message">FFmpeg が選択した範囲を文字盤用の動画へ再エンコードします。</string>
-    <string name="watch_editor_video_passthrough_message">再エンコードせずに元の動画を文字盤へコピーしています。</string>
-    <string name="watch_editor_copying_video">元の動画を読み込んでいます</string>
     <string name="watch_editor_cancel_conversion">変換をキャンセル</string>
     <string name="watch_editor_collapse_child_layers">子レイヤーを折りたたむ</string>
     <string name="watch_editor_expand_child_layers">子レイヤーを展開</string>
@@ -979,8 +986,6 @@
     <string name="watch_editor_import_image_path">画像を path に読み込む</string>
     <string name="watch_editor_import_image_sequence">複数画像をループ背景として読み込む</string>
     <string name="watch_editor_import_video_frames">動画をループフレームとして読み込む</string>
-    <string name="watch_editor_error_frames_need_ffmpeg">この端末は 32 ビットのためループフレームへ変換できません。video レイヤーであれば動画をそのまま読み込めます。</string>
-    <string name="watch_editor_error_reencode_need_ffmpeg">この端末は 32 ビットのため動画の切り抜きや再エンコードができません。元の設定のまま読み込んでください。</string>
     <string name="watch_editor_text_entry_animation">テキストの開始アニメーション</string>
     <string name="watch_editor_text_exit_animation">テキストの終了アニメーション</string>
     <string name="watch_editor_select_app_title">起動するアプリを選択</string>

@@ -7,6 +7,7 @@ import com.flue.launcher.ui.style.FlueAlertDialog
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.Checkbox
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -37,6 +38,7 @@ fun WatchStoreBaseUrlDialog(
     onDismiss: () -> Unit,
 ) {
     var draft by remember { mutableStateOf(preferences.readBaseUrl()) }
+    var allowLocalNetwork by remember { mutableStateOf(preferences.readAllowLocalNetwork()) }
     var error by remember { mutableStateOf<String?>(null) }
     val isHttp = draft.trim().startsWith("http://", ignoreCase = true)
     val invalidMessage = stringResource(R.string.settings_watch_store_market_url_invalid)
@@ -67,11 +69,21 @@ fun WatchStoreBaseUrlDialog(
                         fontSize = 12.sp,
                     )
                 }
+                Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                    Checkbox(
+                        checked = allowLocalNetwork,
+                        onCheckedChange = { allowLocalNetwork = it },
+                    )
+                    Text(
+                        stringResource(R.string.settings_watch_store_market_url_allow_local),
+                        fontSize = 12.sp,
+                    )
+                }
             }
         },
         confirmButton = {
             TextButton(onClick = {
-                runCatching { preferences.writeBaseUrl(draft) }
+                runCatching { preferences.writeBaseUrl(draft, allowLocalNetwork) }
                     .onSuccess(onSaved)
                     .onFailure { error = invalidMessage }
             }) { Text(stringResource(R.string.action_save)) }

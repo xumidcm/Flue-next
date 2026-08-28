@@ -2,11 +2,13 @@ package com.flue.launcher.layout
 
 import com.flue.launcher.ui.navigation.LayoutMode
 import com.flue.launcher.util.FlowCrescentDirection
+import com.flue.launcher.util.FlowShapeCurve
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import org.json.JSONObject
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
@@ -51,6 +53,8 @@ class FlueLayoutProfileTest {
         assertEquals(4, honeycomb.fisheyeRangeRows)
         assertEquals(100, honeycomb.fisheyeStrengthPercent)
         assertEquals(0, honeycomb.leftSafeInsetPercent)
+        assertEquals(3, honeycomb.narrowColumns)
+        assertEquals(100, honeycomb.appListScalePercent)
         // 蜂窝 / 网格 / 列表三档除了 id、名字、布局之外逐位相同。
         listOf(FlueLayoutProfiles.Grid, FlueLayoutProfiles.List).forEach { preset ->
             assertEquals(
@@ -131,11 +135,45 @@ class FlueLayoutProfileTest {
             fisheyeEnabled = false,
             crescentDirection = FlowCrescentDirection.Left,
             crescentBulgePercent = 33,
+            narrowColumns = 5,
+            appListScalePercent = 137,
+            flowShapeCurve = FlowShapeCurve(0.2f, 0.1f, 0.8f, 0.9f),
         ).requireValid()
         val decoded = FlueLayoutProfileJson.decodeProfile(
             FlueLayoutProfileJson.encodeProfile(original),
         )
         assertEquals(original, decoded)
+    }
+
+    @Test
+    fun `layout profile fields stay isolated when switching modes`() {
+        val grid = FlueLayoutProfiles.Grid.copy(narrowColumns = 5, appListScalePercent = 80)
+        val list = FlueLayoutProfiles.List.copy(narrowColumns = 2, appListScalePercent = 145)
+
+        assertEquals(5, grid.narrowColumns)
+        assertEquals(80, grid.appListScalePercent)
+        assertEquals(2, list.narrowColumns)
+        assertEquals(145, list.appListScalePercent)
+    }
+
+    @Test
+    fun `schema one profile without new fields migrates to defaults`() {
+        val legacyJson = JSONObject(FlueLayoutProfileJson.encodeProfile(FlueLayoutProfiles.Grid))
+        legacyJson.put("schemaVersion", 1)
+        legacyJson.remove("narrowColumns")
+        legacyJson.remove("appListScalePercent")
+        legacyJson.remove("flowShapeX1")
+        legacyJson.remove("flowShapeY1")
+        legacyJson.remove("flowShapeX2")
+        legacyJson.remove("flowShapeY2")
+        val legacy = legacyJson.toString()
+
+        val decoded = FlueLayoutProfileJson.decodeProfile(legacy)
+
+        assertEquals(3, decoded.narrowColumns)
+        assertEquals(100, decoded.appListScalePercent)
+        assertEquals(FlowShapeCurve.Crescent, decoded.flowShapeCurve)
+        assertEquals(FLUE_LAYOUT_SCHEMA_VERSION, decoded.schemaVersion)
     }
 
     @Test

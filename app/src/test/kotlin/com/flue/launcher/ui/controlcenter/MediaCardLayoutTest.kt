@@ -44,7 +44,41 @@ class MediaCardLayoutTest {
 
     @Test
     fun `scrollable side-screen cards use the shared elastic edge`() {
-        assertEquals(true, sideScreenContentUsesElasticOverscroll(showMusicCard = true))
-        assertEquals(false, sideScreenContentUsesElasticOverscroll(showMusicCard = false))
+        // 回弹判据必须与可滚判据逐项一致。这里逐个组合断言，尤其是「有通知横幅、没有
+        // 音乐卡」那一格 —— 它是默认状态，原实现在这一格丢了橡皮筋。
+        assertEquals(
+            true,
+            sideScreenContentUsesElasticOverscroll(showMusicCard = true, showNotificationPreview = false),
+        )
+        assertEquals(
+            true,
+            sideScreenContentUsesElasticOverscroll(showMusicCard = false, showNotificationPreview = true),
+        )
+        assertEquals(
+            true,
+            sideScreenContentUsesElasticOverscroll(showMusicCard = true, showNotificationPreview = true),
+        )
+        assertEquals(
+            false,
+            sideScreenContentUsesElasticOverscroll(showMusicCard = false, showNotificationPreview = false),
+        )
+    }
+
+    @Test
+    fun `elastic overscroll predicate never diverges from the scrollable predicate`() {
+        for (music in listOf(false, true)) {
+            for (preview in listOf(false, true)) {
+                assertEquals(
+                    sideScreenContentAllowsVerticalScroll(
+                        showMusicCard = music,
+                        showNotificationPreview = preview,
+                    ),
+                    sideScreenContentUsesElasticOverscroll(
+                        showMusicCard = music,
+                        showNotificationPreview = preview,
+                    ),
+                )
+            }
+        }
     }
 }

@@ -53,6 +53,7 @@ internal class WatchmakerWatchFaceStageView @JvmOverloads constructor(
 
     private var appliedSignature: String? = null
     private var playing = true
+    private var windowVisible = true
     private val clipPath = Path()
     private var roundClip = false
     /**
@@ -126,7 +127,7 @@ internal class WatchmakerWatchFaceStageView @JvmOverloads constructor(
 
     private fun onPlaybackChanged(shouldPlay: Boolean) {
         playing = shouldPlay
-        videoViews.forEach { it.setPlaying(shouldPlay) }
+        videoViews.forEach { it.setPlaying(shouldPlay && windowVisible) }
     }
 
     private fun onTransitionOverlayChanged(overlayVisible: Boolean) {
@@ -194,7 +195,7 @@ internal class WatchmakerWatchFaceStageView @JvmOverloads constructor(
         playable.forEachIndexed { index, entry ->
             val videoView = videoViews[index]
             videoView.bindSource(entry.absolutePath)
-            videoView.setPlaying(playing)
+            videoView.setPlaying(playing && windowVisible)
             addView(videoView)
             videoLayerIndices += entry.layerIndex
 
@@ -302,8 +303,15 @@ internal class WatchmakerWatchFaceStageView @JvmOverloads constructor(
 
     override fun onAttachedToWindow() {
         super.onAttachedToWindow()
+        windowVisible = true
         // 重新上屏时按当前分段结构把播放器建回来。
         if (videoLayerIndices.isNotEmpty()) syncVideoSegments()
+    }
+
+    override fun onWindowVisibilityChanged(visibility: Int) {
+        super.onWindowVisibilityChanged(visibility)
+        windowVisible = visibility == VISIBLE
+        videoViews.forEach { it.setPlaying(playing && windowVisible) }
     }
 
     fun dispose() {

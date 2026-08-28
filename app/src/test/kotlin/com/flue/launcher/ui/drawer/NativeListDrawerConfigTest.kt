@@ -189,9 +189,10 @@ class NativeListDrawerConfigTest {
         )
 
         assertEquals(NativeAppListPresentation.HONEYCOMB, config.presentation)
-        assertEquals(69, config.iconSizePx)
+        // 指示器默认开启后会从可用宽度让出右侧占位，图标尺寸随之缩小。
+        assertEquals(66, config.iconSizePx)
         assertEquals(3, config.honeycombNarrowColumns)
-        assertEquals(69f * 1.02f, config.honeycombCellSizePx, 0.001f)
+        assertEquals(66f * 1.02f, config.honeycombCellSizePx, 0.001f)
     }
 
     @Test

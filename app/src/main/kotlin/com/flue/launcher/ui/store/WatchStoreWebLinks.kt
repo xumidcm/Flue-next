@@ -16,6 +16,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -86,12 +87,35 @@ internal fun StoreWebLinks(
     onOpenInApp: () -> Unit,
     onOpenExternal: () -> Unit,
     modifier: Modifier = Modifier,
+    inline: Boolean = false,
 ) {
-    Column(
-        modifier = modifier.fillMaxWidth(),
-        verticalArrangement = Arrangement.spacedBy(4.dp),
-    ) {
-        if (useMaterial3ExpressiveComponents(LauncherTheme.style.uiStyle)) {
+    val webViewAvailable = flueWebViewUsable(LocalContext.current)
+    if (!webViewAvailable) {
+        StoreWebLinkRow(
+            label = stringResource(R.string.watch_store_web_open_external),
+            onClick = onOpenExternal,
+            modifier = modifier,
+        )
+        return
+    }
+    if (inline) {
+        Row(
+            modifier = modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            StoreWebLinkRow(label = label, onClick = onOpenInApp, modifier = Modifier.weight(1f))
+            StoreWebLinkRow(
+                label = stringResource(R.string.watch_store_web_open_external),
+                onClick = onOpenExternal,
+                modifier = Modifier.weight(1f),
+            )
+        }
+    } else {
+        Column(
+            modifier = modifier.fillMaxWidth(),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            if (useMaterial3ExpressiveComponents(LauncherTheme.style.uiStyle)) {
             FlueExpressiveSplitButton(
                 primaryOnClick = onOpenInApp,
                 secondaryOnClick = onOpenExternal,
@@ -114,12 +138,13 @@ internal fun StoreWebLinks(
                     )
                 },
             )
-        } else {
-            StoreWebLinkRow(label = label, onClick = onOpenInApp)
-            StoreWebLinkRow(
-                label = stringResource(R.string.watch_store_web_open_external),
-                onClick = onOpenExternal,
-            )
+            } else {
+                StoreWebLinkRow(label = label, onClick = onOpenInApp)
+                StoreWebLinkRow(
+                    label = stringResource(R.string.watch_store_web_open_external),
+                    onClick = onOpenExternal,
+                )
+            }
         }
     }
 }
