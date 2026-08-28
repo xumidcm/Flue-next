@@ -1450,24 +1450,45 @@ class NativeAppListView @JvmOverloads constructor(
         origin: NativeDragPreviewSlot,
         positionDelta: Int,
     ): NativeDragPreviewSlot {
-        val distance = when (currentConfig.value.presentation) {
-            NativeAppListPresentation.LINEAR -> currentConfig.value.rowHeightPx.toFloat()
+        val config = currentConfig.value
+        val distance = when (config.presentation) {
+            NativeAppListPresentation.LINEAR -> config.rowHeightPx.toFloat()
             NativeAppListPresentation.HONEYCOMB ->
-                currentConfig.value.honeycombCellSizePx.takeIf { it > 0f }
-                    ?: currentConfig.value.iconSizePx.toFloat()
+                config.honeycombCellSizePx.takeIf { it > 0f }
+                    ?: config.iconSizePx.toFloat()
             NativeAppListPresentation.FLOW ->
-                currentConfig.value.flowCellSizePx.takeIf { it > 0f }
-                    ?: currentConfig.value.iconSizePx.toFloat()
+                config.flowCellSizePx.takeIf { it > 0f }
+                    ?: config.iconSizePx.toFloat()
             NativeAppListPresentation.RING ->
-                currentConfig.value.ringCellSizePx.takeIf { it > 0f }
-                    ?: currentConfig.value.iconSizePx.toFloat()
+                config.ringCellSizePx.takeIf { it > 0f }
+                    ?: config.iconSizePx.toFloat()
             NativeAppListPresentation.DENSE_GRID ->
-                currentConfig.value.denseGridMinimumItemHeightPx
-                    .coerceAtLeast(currentConfig.value.iconSizePx.toFloat())
+                config.denseGridMinimumItemHeightPx
+                    .coerceAtLeast(config.iconSizePx.toFloat())
+        }
+        // 目标格没挂到窗口上（在屏幕外）时只能按索引差估算落点。网格布局的索引差
+        // 同时含行与列：以前一律折算成纯纵向位移，星环/网格上「往右挪一格」的目标
+        // 会被摆到正下方一格 —— 预览位移方向错了，观感就是图标乱跳、赖在原地。
+        // 按列数拆成 行差×列差，列差走横向；LINEAR 单列，行为与从前一致。
+        // （蜂窝的宽窄行不是严格网格，这里的拆法是近似，但恒优于只走纵向。）
+        val columns = when (config.presentation) {
+            NativeAppListPresentation.LINEAR -> 1
+            NativeAppListPresentation.HONEYCOMB ->
+                config.honeycombNarrowColumns.coerceAtLeast(1)
+            NativeAppListPresentation.FLOW -> config.flowColumns.coerceAtLeast(1)
+            NativeAppListPresentation.RING -> config.honeycombNarrowColumns.coerceAtLeast(1)
+            NativeAppListPresentation.DENSE_GRID -> config.denseGridColumns.coerceAtLeast(1)
+        }
+        val rowDelta = positionDelta.floorDiv(columns)
+        val columnDelta = positionDelta.mod(columns)
+        val horizontalDistance = when (config.presentation) {
+            NativeAppListPresentation.DENSE_GRID ->
+                config.denseGridItemSpacingPx + config.denseGridMinimumItemWidthPx
+            else -> distance
         }
         return NativeDragPreviewSlot(
-            centerX = origin.centerX,
-            centerY = origin.centerY + positionDelta * distance,
+            centerX = origin.centerX + columnDelta * horizontalDistance,
+            centerY = origin.centerY + rowDelta * distance,
         )
     }
 

@@ -967,9 +967,9 @@ internal fun nativeRingRadialProgress(
 /**
  * 直屏星环的上下边缘触发进度。
  *
- * 直屏不是把整张网按二维半径缩放，而是让滚动到上下边缘的行进入鱼眼带。触发带宽度
- * 取一行真实格边长，因此格心在带外时严格返回 0，中心行不会被横向位置误判成鱼眼。
- * 圆屏仍使用 [nativeRingRadialProgress]，不经过这条直屏规则。
+ * 直屏不是把整张网按二维半径缩放，而是让滚动到上下边缘的行进入鱼眼带。触发带宽度取
+ * 「生效行数」行真实格边长（与圆屏稳定核共用同一份设置），因此格心在带外时严格返回 0，
+ * 屏心行不会被横向位置误判成鱼眼。圆屏仍使用 [nativeRingRadialProgress]，不经过这条直屏规则。
  */
 internal fun nativeRingFisheyeProgress(
     centerY: Float,
@@ -993,11 +993,12 @@ internal fun nativeRingFisheyeProgress(
     )
     val cellSize = config.ringCellSizePx.takeIf { it.isFinite() && it > 0f }
         ?: availableWidth / config.honeycombNarrowColumns.coerceIn(1, NATIVE_RING_MAX_COLUMNS)
-    // A rectangular ring is a tiled grid, not a radial lens. Keep the
-    // trigger to the row touching the edge even when the shared honeycomb
-    // setting is four or more rows. The setting remains meaningful for the
-    // circular ring, while a straight screen stays flat in its stable area.
-    val triggerRange = cellSize.coerceAtMost(viewportHeight / 2f)
+    // 触发带跟着「生效行数」走，与圆屏的稳定核共用同一份设置。以前写死一行：
+    // 老师把行数滑杆调到几，直屏星环都只缩最贴边那一排 —— 设置在直屏上是摆设。
+    // 上限仍是半屏高：带再宽也不能盖过屏心。
+    val triggerRange = (
+        cellSize * config.honeycombFisheyeRangeRows.coerceIn(1, 8).toFloat()
+        ).coerceAtMost(viewportHeight / 2f)
     if (!triggerRange.isFinite() || triggerRange <= 0f) return 0f
     val distanceToNearestEdge = minOf(centerY, viewportHeight - centerY)
     return ((triggerRange - distanceToNearestEdge) / triggerRange).coerceIn(0f, 1f)
@@ -1031,14 +1032,15 @@ private fun nativeRingStableCoreFraction(config: NativeAppListConfig): Float =
  *
  * 强度取鱼眼强度的一半（0..200% → 0..1）：100% 是出厂档，还留一倍的余量给老师往上调。
  *
- * 这条函数只服务圆屏的径向收拢；直屏触发行使用单独的边缘进度函数和轻量收拢上限。
- * 形状判定仍收口在纯函数的调用层，保证直屏平铺规则可以脱离 View 单测。
+ * 直屏与圆屏共用这一条径向收拢（2026-08 老师要求方屏星环也要「同心弧、均匀铺满」的
+ * 观感，原来的「直屏严格平铺」约定作废）；直屏缩放侧另有按行数触发的边缘进度函数。
+ * 行距上限对两种屏形一视同仁，方屏放开后同样被它兜住不重叠。
  */
 internal fun nativeRingConvergenceFraction(
     radialProgress: Float,
     config: NativeAppListConfig,
 ): Float {
-    if (!config.fisheyeEnabled || config.deviceShape != NativeDeviceShape.ROUND) return 0f
+    if (!config.fisheyeEnabled) return 0f
     val progress = radialProgress.takeIf(Float::isFinite)?.coerceAtLeast(0f) ?: return 0f
     val strength = config.fisheyeStrength.takeIf(Float::isFinite)?.coerceIn(0f, 2f) ?: return 0f
     val curvature = RING_MAX_CURVATURE * (strength / 2f)
@@ -1127,9 +1129,9 @@ internal class NativeRingOffset(
 }
 
 /**
- * 星环的收拢位移：仅圆屏按二维径向收拢。
+ * 星环的收拢位移：圆屏与直屏都按二维径向收拢。
  *
- * ## 圆屏为什么是四条边一起弯
+ * ## 为什么是四条边一起弯
  *
  * 收的是**径向**分量，而径向距离里含着另一个轴的偏移。于是同一行里越靠外的列
  * `t` 越大、被拉得越多 —— 纵向分量把那一行拽成一道弧，横向分量把它收窄。列同理。
@@ -1138,14 +1140,17 @@ internal class NativeRingOffset(
  * ## 为什么单独一个函数、不并进 [nativeRingChildVisual]
  *
  * 与心流的月牙同一个原因：圆屏那条路会用 [NativeDrawerGeometryAdapter] **整体替换**
- * translationX/Y（把图标收进内切圆的安全轮廓）。位移先加进视觉里就会被那次替换吃掉，
- * 而圆屏正是这套布局的目标机型。调用方的做法是把「收拢后的位置」当作期望格心喂给
- * 那个适配器，再把这一份位移加回它给出的 translation 上（见 [NativeRingLayoutManager]）。
+ * translationX/Y（把图标收进内切圆的安全轮廓）。位移先加进视觉里就会被那次替换吃掉。
+ * 调用方的做法是把「收拢后的位置」当作期望格心喂给那个适配器，再把这一份位移加回
+ * 它给出的 translation 上（见 [NativeRingLayoutManager]）。
  *
- * ## 直屏为什么不收拢
+ * ## 直屏为什么也收拢
  *
- * 参考布局里直屏每一排格心始终水平等距，触发行只统一缩放。把各列往屏心拉会让整排
- * 变窄，重新出现蜂窝/径向布局的观感，所以直屏在这里严格返回零位移。
+ * 最初直屏严格平铺（每排格心水平等距）。2026-08 老师看着参考图要求方屏星环也是
+ * 「弯曲的同心排、均匀铺满」，于是放开形状门：同一条径向公式在直屏上把行拽成弧，
+ * 行距仍由 [nativeRingSpacingCeiling] 兜底，不会因为弯曲出现图标重叠。
+ * 直屏没有圆屏那道安全轮廓（`if (round)` 才走适配器），但收拢只会把格子往屏心拉，
+ * 不会把任何图标推出可视区。
  */
 internal fun nativeRingConvergenceOffset(
     centerX: Float,
@@ -1161,7 +1166,6 @@ internal fun nativeRingConvergenceOffset(
     ) {
         return output.set(0f, 0f)
     }
-    if (config.deviceShape != NativeDeviceShape.ROUND) return output.set(0f, 0f)
     val fraction = nativeRingConvergenceFraction(
         radialProgress = nativeRingRadialProgress(
             centerX = centerX,

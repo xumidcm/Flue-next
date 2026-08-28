@@ -8,10 +8,11 @@ import org.junit.Test
 /**
  * 星环布局的几何与四边收拢。
  *
- * 这套布局的需求是老师给的：「圆屏上面和下面、左边右边都有弧度，向中间收缩靠拢；
- * 方屏那就上面下面左边右边都平铺」。这两条互斥的行为都被压在
- * [nativeRingConvergenceFraction] 一个纯函数里（`deviceShape` 判定刻意没放进布局
- * 管理器），所以这里能真的把它们测出来 —— 摆在 View 层就只能靠肉眼验。
+ * 需求演变：最初是「圆屏四边有弧度、方屏严格平铺」；2026-08 老师看着参考图要求
+ * 方屏星环也呈同心弧、均匀铺满，于是两种屏形共用同一条径向收拢（仍受鱼眼开关门控），
+ * 差别只剩直屏的缩放走按「生效行数」触发的边缘带。两条行为都压在
+ * [nativeRingConvergenceFraction] / [nativeRingFisheyeProgress] 纯函数里，这里能真的
+ * 把它们测出来 —— 摆在 View 层就只能靠肉眼验。
  */
 class NativeRingGeometryTest {
 
@@ -115,26 +116,33 @@ class NativeRingGeometryTest {
         assertEquals(geometry.centerX(1), geometry.centerX(5), 0.001f)
     }
 
-    // ---------- 验收点 2：直屏按触发行鱼眼 ----------
+    // ---------- 验收点 2：直屏按生效行数触发鱼眼带 ----------
 
-    /** 直屏中心和触发带之外的行保持平铺，只有边缘触发行应用鱼眼和收拢。 */
+    /**
+     * 直屏的鱼眼带宽度由「生效行数」决定：带内行渐进缩小，带外（含屏心）保持平铺。
+     *
+     * 以前触发带写死一行，行数滑杆在直屏上是摆设 —— 2026-08 老师报「生效行数不生效」
+     * 就是它。现在 1 行只卷最贴边那排，4 行带伸到半屏（上限），屏心那格永远不缩。
+     */
     @Test
-    fun `a rectangular ring keeps interior rows flat and transforms edge rows`() {
+    fun `a rectangular ring scales its rows inside the row-count trigger band`() {
         val rectangular = config(round = false, fisheyeRangeRows = 1).copy(
             ringCellSizePx = 100f,
         )
 
+        // 1 行：带 = 一格。带外（150）与屏心（200）都严格为 0。
         assertEquals(0f, nativeRingFisheyeProgress(200f, 400f, rectangular), 0.001f)
         assertEquals(0f, nativeRingFisheyeProgress(150f, 400f, rectangular), 0.001f)
         assertTrue(nativeRingFisheyeProgress(50f, 400f, rectangular) > 0f)
         assertTrue(nativeRingFisheyeProgress(350f, 400f, rectangular) > 0f)
-        // The shared honeycomb setting must not make the whole straight screen
-        // a lens. Only the edge row enters the rectangular trigger band.
+        // 4 行：带 = 四格，夹到半屏（200）。150 进了带内，屏心仍在带外。
         val sharedWideSetting = rectangular.copy(honeycombFisheyeRangeRows = 4)
-        assertEquals(0f, nativeRingFisheyeProgress(150f, 400f, sharedWideSetting), 0.001f)
+        assertTrue(nativeRingFisheyeProgress(150f, 400f, sharedWideSetting) > 0f)
+        assertEquals(0f, nativeRingFisheyeProgress(200f, 400f, sharedWideSetting), 0.001f)
         assertTrue(nativeRingFisheyeProgress(50f, 400f, sharedWideSetting) > 0f)
         // On a tall rectangular screen, the fallback cell size comes from the
-        // width, otherwise height/columns would make several rows fish-eyed.
+        // width: band = cell * rows = 400 < 800 (half viewport), so y=500 stays
+        // outside while y=390 is already inside.
         assertEquals(
             0f,
             nativeRingFisheyeProgress(
@@ -145,6 +153,15 @@ class NativeRingGeometryTest {
             ),
             0.001f,
         )
+        assertTrue(
+            nativeRingFisheyeProgress(
+                centerY = 390f,
+                viewportHeight = 1_600f,
+                config = sharedWideSetting.copy(ringCellSizePx = 0f),
+                viewportWidth = 400f,
+            ) > 0f,
+        )
+        // 圆屏不走这条直屏规则；鱼眼关掉时直屏也严格平铺。
         assertEquals(0f, nativeRingFisheyeProgress(150f, 400f, config()), 0.001f)
         assertEquals(
             0f,
@@ -164,17 +181,30 @@ class NativeRingGeometryTest {
         assertEquals(1f, horizontallyDistantInterior.scale, 0.001f)
         assertTrue("顶部触发行应缩小", topEdge.scale < 1f)
         assertEquals(0f, interior.translationX, 0.001f)
+    }
 
-        // Even a fish-eyed edge row keeps its grid centers flat and equally
-        // spaced. Only scale/alpha changes on rectangular screens.
-        val edgeOffset = offsetAt(340f, 50f, rectangular)
-        assertEquals(0f, edgeOffset.x, 0.001f)
-        assertEquals(0f, edgeOffset.y, 0.001f)
-        val bottomEdgeOffset = offsetAt(340f, 350f, rectangular)
-        assertEquals(0f, bottomEdgeOffset.x, 0.001f)
-        assertEquals(0f, bottomEdgeOffset.y, 0.001f)
-        assertEquals(0f, offsetAt(340f, 150f, rectangular).x, 0.001f)
-        assertEquals(0f, offsetAt(340f, 150f, rectangular).y, 0.001f)
+    /**
+     * 直屏也弯（2026-08 约定）：同一条径向公式把边缘行/列拽向屏心，行被拽成弧；
+     * 稳定核内的格子仍然不动，鱼眼关掉时整屏严格平铺。
+     */
+    @Test
+    fun `a rectangular ring bends edge rows towards the centre like a round one`() {
+        val rectangular = config(round = false).copy(ringCellSizePx = 100f)
+
+        // 顶行被往下拉，右侧列被往左拉 —— 方向与圆屏一致。
+        assertTrue(offsetAt(200f, 40f, rectangular).y > 0f)
+        assertTrue(offsetAt(360f, 200f, rectangular).x < 0f)
+        // 同一行里越靠外的列被拉得更多，直排才弯成弧。
+        val inner = abs(offsetAt(220f, 40f, rectangular).y)
+        val outer = abs(offsetAt(360f, 40f, rectangular).y)
+        assertTrue("外列($outer) 应比内列($inner) 拉得多", outer > inner)
+        // 稳定核内不收拢：默认 4 行对应核半径 0.5（距屏心 100px 以内）。
+        assertEquals(0f, offsetAt(240f, 180f, rectangular).x, 0.001f)
+        assertEquals(0f, offsetAt(240f, 180f, rectangular).y, 0.001f)
+        // 鱼眼关掉：直屏同样完全平铺。
+        val flat = offsetAt(340f, 50f, rectangular.copy(fisheyeEnabled = false))
+        assertEquals(0f, flat.x, 0.001f)
+        assertEquals(0f, flat.y, 0.001f)
     }
 
     // ---------- 验收点 1：圆屏四向收拢 ----------
@@ -353,6 +383,35 @@ class NativeRingGeometryTest {
 
         assertTrue(
             "相邻行中心距 ${innerCenter - outerCenter} 小于视觉图标高度 $requiredDistance",
+            innerCenter - outerCenter >= requiredDistance,
+        )
+    }
+
+    /**
+     * 直屏放开收拢后，行距上限必须同样兜得住：弯曲之后相邻两行的中心距仍要装下
+     * 两行**实际画出来**的图标（直屏的缩放来自按行数触发的边缘带，与圆屏的径向
+     * 缩放数值不同，所以单独测一遍）。
+     */
+    @Test
+    fun `adjacent rectangular edge rows keep at least their painted icon height`() {
+        val viewport = 454f
+        val cellSize = viewport / 4f
+        val iconSize = nativeRingIconSizePx(cellSize, 1f).toFloat()
+        val cfg = config(round = false, fisheyeStrength = 1f).copy(
+            ringCellSizePx = cellSize,
+            iconSizePx = iconSize.toInt(),
+        )
+        val x = cellSize / 2f
+        val outerY = 0f
+        val innerY = cellSize
+        val outerCenter = outerY + offsetAt(x, outerY, cfg, viewport, viewport).y
+        val innerCenter = innerY + offsetAt(x, innerY, cfg, viewport, viewport).y
+        val requiredDistance = iconSize * (
+            scaleAt(x, outerY, cfg) + scaleAt(x, innerY, cfg)
+            ) / 2f
+
+        assertTrue(
+            "直屏相邻行中心距 ${innerCenter - outerCenter} 小于视觉图标高度 $requiredDistance",
             innerCenter - outerCenter >= requiredDistance,
         )
     }

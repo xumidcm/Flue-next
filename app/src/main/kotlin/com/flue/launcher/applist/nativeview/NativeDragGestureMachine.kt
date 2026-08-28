@@ -111,12 +111,10 @@ internal class NativeDragGestureMachine(
         }
 
         val effects = mutableListOf<NativeDragEffect>()
-        val folderCandidate = folderCandidateKey
-            ?.takeUnless { it == source }
-            ?.takeIf {
-                speedPxPerMs.isFinite() &&
-                    abs(speedPxPerMs) <= policy.folderHoverMaxSpeedPxPerMs
-            }
+        // 候选不再在这里按速度预过滤：gate 要区分「离开了图标」（整门重置）和
+        // 「还在同一个图标上但这一采样超速」（只重置停留时钟），必须见到原始候选。
+        // 速度合法性由 gate 自己判（它一直就有这道检查）。
+        val folderCandidate = folderCandidateKey?.takeUnless { it == source }
         val nextArmedTarget = folderHoverGate?.update(
             candidateKey = folderCandidate?.value,
             speedPxPerMs = speedPxPerMs,

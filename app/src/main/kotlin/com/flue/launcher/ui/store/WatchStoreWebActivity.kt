@@ -321,6 +321,13 @@ class WatchStoreWebActivity : FlueComponentActivity() {
                 require(exp > System.currentTimeMillis() / 1_000L) { "网页登录令牌已过期" }
                 val username = tokenPayload.optString("username").trim()
                 require(username.isNotEmpty()) { "网页登录用户信息缺失" }
+                // 成功也要说一声：一 finish 就回到商店，没有提示的话分不清
+                // 「导入了」还是「按钮没反应」（失败分支有 Toast，成功一直哑着）。
+                Toast.makeText(
+                    this,
+                    getString(R.string.watch_store_login_web_imported_fmt, username),
+                    Toast.LENGTH_SHORT,
+                ).show()
                 setResult(
                     RESULT_OK,
                     Intent()

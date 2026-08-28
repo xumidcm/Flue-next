@@ -159,24 +159,27 @@ internal class NativeAppListDragController(
         val folderCandidate = host.folderKeyAt(x, y).takeIf {
             allowFolderCreation()
         }
-        // 排序预览与合成用**空间**消歧，不再靠「开了文件夹就整个关掉预览」。
+        // 排序预览与合成的消歧按「空间 + 时间」两维走，不再靠
+        // 「开了文件夹就整个关掉预览」。
         //
-        // 上一版是 `if (allowFolderCreation()) null else reorderTarget` —— 开关一开，
+        // 最初那版是 `if (allowFolderCreation()) null else reorderTarget` —— 开关一开，
         // 实时避让位移就全程消失，等于用「不能排序预览」换「两个手势不打架」。
-        // 老师现在要两个都要：能自由拖动排序，也能拖到图标上合成。
         //
-        // 判据本来就有，只是没被用上：folderKeyAt 带 42% 图标半径的核心区门槛，
-        // 出了这个圈返回 null。于是两种意图在空间上天然分开 ——
+        // 第二版引入 folderKeyAt 的核心区门槛（42% 图标半径）做空间消歧：指针落进
+        // 某个图标的核心区就冻结避让。但星环把图标铺到 0.86 格宽，核心区占掉每格
+        // 约七成面积，「从别的图标上路过」的大半时间都被冻结，观感就是老师报的
+        // 「避让赖着不动，得反复拖几下才动」。
         //
-        //   指针落在图标间隙 / 外圈  → folderCandidate == null → 播避让预览
-        //   指针落在某个图标核心区  → folderCandidate != null → 让位给合成高亮
+        // 现在这一版把冻结条件收紧到**时间维**：只有合成悬停真正武装（指针停在
+        // 核心区里凑满 dwell、高亮已亮起）才让位 —— 移动中照常避让，静止悬停才进
+        // 合成判定。这正是成熟桌面（Launcher3 的 hit-region + alarm）的分法。
         //
-        // 这也正是成熟桌面（Launcher3 的 hit-region + alarm）的分法。
-        //
-        // 在核心区里把预览目标掐成 null 是**冻结**而不是回弹：状态机对 null 目标
+        // 武装后把预览目标掐成 null 是**冻结**而不是回弹：状态机对 null 目标
         // 什么都不做（不发 Move 效果、lastMoveTarget 不变），所以位移停在上一帧，
         // 手指移出核心区后接着往下走，不会出现「一进图标中心整列弹回去」。
-        val previewTarget = if (folderCandidate != null) null else reorderTarget
+        val folderHoverArmed = folderCandidate != null &&
+            machine.folderHoverTarget == folderCandidate
+        val previewTarget = if (folderHoverArmed) null else reorderTarget
         val effects = machine.onMove(
             pointerX = x,
             pointerY = y,
@@ -491,12 +494,13 @@ internal class NativeAppListDragController(
             machine.onMove(
                 pointerX = lastPointerX,
                 pointerY = lastPointerY,
-                // 与 onMove 的 :165 同一条写法。旧写法
-                // `if (allowFolderCreation()) null else …` 在这里危害最大：自动滚动
-                // 边带是 `viewportHeight * 0.16f`（454px 屏上下各约 73px），指针一进
-                // 边带这一帧就每帧跑一次，于是**只要在边带里拖，避让就全程消失** ——
-                // 老师报的「拖动到图标上面不避让」。
-                targetKey = if (folderCandidate != null) {
+                // 与 onMove 同一条法则：只在合成悬停**武装后**才冻结避让。
+                // 旧写法 `if (folderCandidate != null) null else …` 在这里危害最大：
+                // 自动滚动边带是 `viewportHeight * 0.16f`（454px 屏上下各约 73px），
+                // 指针一进边带这一帧就每帧跑一次，只要在边带里拖，避让就全程消失。
+                targetKey = if (folderCandidate != null &&
+                    machine.folderHoverTarget == folderCandidate
+                ) {
                     null
                 } else {
                     host.reorderKeyAt(lastPointerX, lastPointerY)

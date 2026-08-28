@@ -1166,6 +1166,7 @@
     <string name="watch_store_logout_confirm">Sign out of this watch store account?</string>
     <string name="watch_store_login_web">Sign in on the web</string>
     <string name="watch_store_login_web_import">Sign in</string>
+    <string name="watch_store_login_web_imported_fmt">Web login imported (%1$s)</string>
     <string name="watch_store_login_web_missing">No web login was detected</string>
     <string name="watch_store_profile_saving">Saving…</string>
     <string name="watch_store_profile_saved">Saved</string>

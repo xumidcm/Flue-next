@@ -108,7 +108,16 @@ internal class NativeFolderHoverGate(
             speedPxPerMs.isFinite() && abs(speedPxPerMs) <= policy.folderHoverMaxSpeedPxPerMs
         }
         if (validCandidate == null) {
-            reset()
+            if (candidateKey == null) {
+                reset()
+                return null
+            }
+            // 候选还在、只是这一采样超速（手抖 / 快速掠过）：只重置停留时钟。
+            // 以前这里整门重置 —— 目标与「停稳过」的最慢速度证据一起被抹掉，
+            // 悬停在 0.55px/ms 门槛附近抖两下就永远凑不满 dwell，老师报的
+            // 「经常组不上文件夹」就是它。目标换了仍走下面的整门重启。
+            startedAtMillis = nowMillis
+            armed = false
             return null
         }
         if (targetKey != validCandidate) {

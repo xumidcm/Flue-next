@@ -115,12 +115,13 @@ class NativeAppListDragControllerTest {
     }
 
     @Test
-    fun `with folder creation enabled reorder preview is suppressed but drop still commits the move`() {
+    fun `with folder creation enabled moving previews reorder and drop still commits the move`() {
         val host = FakeDragHost().apply {
             keys = listOf(key("a"), key("b"), key("c"), key("d"))
         }
         val scheduler = FakeDragScheduler()
-        // 文件夹功能开启时不再发实时预览位移，但落手时仍提交排序。
+        // 文件夹功能开启时移动中照常播避让预览；只有悬停武装（静止凑满 dwell、
+        // 高亮亮起）才冻结。落手时仍提交排序。
         val controller = NativeAppListDragController(host, scheduler, policy, allowFolderCreation = { true })
         startDrag(controller, scheduler)
 
@@ -131,16 +132,15 @@ class NativeAppListDragControllerTest {
         host.hitKey = key("c")
         controller.onMove(10f, 180f, 650L)
 
-        assertEquals(0, host.previewMoveCount)
+        // 三次快速掠过都超速，dwell 从未武装 → 每个目标都正常播避让。
+        assertEquals(3, host.previewMoveCount)
         assertFalse(host.commands.any { it is AppListCommand.Move })
 
         controller.onUp(10f, 150f, 651L)
 
-        // 没有预览就没有虚拟列表位移：源仍在 c 之前，落到 c 的位置等于插到
-        // c 之后，所以 beforeKey 是 d。上面那条有预览的用例里，每次预览都会
-        // 改动虚拟列表，落手时几何已经不同，beforeKey 才是 c。
+        // 有预览时虚拟列表随避让变动，落到 c 的位置等于插到 c 之前。
         assertEquals(
-            listOf(AppListCommand.Move(key("a"), beforeKey = key("d"))),
+            listOf(AppListCommand.Move(key("a"), beforeKey = key("c"))),
             host.commands.filterIsInstance<AppListCommand.Move>(),
         )
     }
@@ -158,7 +158,8 @@ class NativeAppListDragControllerTest {
         scheduler.runFrame()
         assertTrue(host.scrollDeltas.single() > 0f)
         assertTrue(scheduler.hasFrame)
-        assertEquals(0, host.previewMoveCount)
+        // 自动滚动这帧也播避让：快速进入边带超速、dwell 未武装，冻结不再适用。
+        assertEquals(1, host.previewMoveCount)
 
         assertTrue(controller.onUp(10f, 398f, 720L))
         assertFalse(scheduler.hasFrame)
@@ -300,7 +301,8 @@ class NativeAppListDragControllerTest {
 
         scheduler.advanceTo(1_200L)
         assertEquals(key("b"), host.folderHoverKey)
-        assertEquals(0, host.previewMoveCount)
+        // 悬停期间（武装前）移动中避让照常播过一次；武装后预览冻结、计数不再涨。
+        assertEquals(1, host.previewMoveCount)
         controller.onUp(10f, 150f, 1_201L)
 
         assertEquals(

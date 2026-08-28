@@ -1205,6 +1205,7 @@
     <string name="watch_store_logout_confirm">确定退出当前表盘商店账号吗？</string>
     <string name="watch_store_login_web">在网页版登录</string>
     <string name="watch_store_login_web_import">登录</string>
+    <string name="watch_store_login_web_imported_fmt">已导入网页登录（%1$s）</string>
     <string name="watch_store_login_web_missing">未检测到网页登录信息</string>
     <string name="watch_store_profile_saving">正在保存…</string>
     <string name="watch_store_profile_saved">已保存</string>

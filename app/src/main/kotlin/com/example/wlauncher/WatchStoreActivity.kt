@@ -1773,6 +1773,7 @@ private fun WatchStoreScreen(
                 // G5/H1：手表上打字费劲，登录与上传都给一条「去网页版做」的路。
                 onOpenWeb = { openWebPage(WatchStoreWebPage.DASHBOARD) },
                 onOpenWebExternal = { openExternalPage(WatchStoreWebPage.DASHBOARD) },
+                externalAuthSession = notificationSession,
             )
         }
 
@@ -1802,6 +1803,7 @@ private fun WatchStoreScreen(
                 onOpenWeb = { openWebPage(WatchStoreWebPage.DASHBOARD) },
                 onOpenWebExternal = { openExternalPage(WatchStoreWebPage.DASHBOARD) },
                 onOpenWebLogin = { openWebPage(WatchStoreWebPage.LOGIN) },
+                externalAuthSession = notificationSession,
             )
         }
 
@@ -5125,6 +5127,12 @@ private fun MyUploadsOverlay(
     onOpenWeb: (() -> Unit)? = null,
     onOpenWebExternal: (() -> Unit)? = null,
     onOpenWebLogin: (() -> Unit)? = null,
+    /**
+     * 根级会话（网页登录导入落地后由宿主更新）。覆层只在首次组合时读一次 auth store，
+     * 开着覆层去网页版登录再导入的话，旧快照会让表单一直停在未登录；
+     * 这个参数一变就重读一次共享存储（见下方 LaunchedEffect）。
+     */
+    externalAuthSession: WatchStoreAuthSession? = null,
 ) {
     val context = LocalContext.current
     val style = LauncherTheme.style
@@ -5160,6 +5168,14 @@ private fun MyUploadsOverlay(
         saved.password?.let { password = it }
         rememberUsername = saved.rememberUsername
         rememberPassword = saved.rememberPassword
+    }
+
+    LaunchedEffect(externalAuthSession) {
+        // 网页登录导入把 token 写进了共享 auth store；覆层还开着时重读一遍，
+        // 登录表单立即翻成已登录（contentState 看 session），并触发下面的列表加载。
+        if (externalAuthSession != null) {
+            session = withContext(Dispatchers.IO) { authStore.read() }
+        }
     }
 
     LaunchedEffect(session?.token) {
@@ -6302,6 +6318,8 @@ private fun StoreUploadOverlay(
      */
     onOpenWeb: (() -> Unit)? = null,
     onOpenWebExternal: (() -> Unit)? = null,
+    /** 同 MyUploadsOverlay：网页登录导入落地后触发重读共享 auth store。 */
+    externalAuthSession: WatchStoreAuthSession? = null,
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -6384,6 +6402,19 @@ private fun StoreUploadOverlay(
             }
         }
         authChecked = true
+    }
+
+    LaunchedEffect(externalAuthSession) {
+        // 开着覆层去网页版登录、导入成功回到商店：重读共享 auth store，
+        // 登录表单立即翻成已登录，不必退出覆层再进来。
+        if (externalAuthSession != null) {
+            val stored = withContext(Dispatchers.IO) { authStore.read() }
+            auth = stored
+            if (!authorEdited) {
+                author = stored?.username ?: author
+            }
+            authChecked = true
+        }
     }
 
     LaunchedEffect(auth, categoriesRetryToken) {

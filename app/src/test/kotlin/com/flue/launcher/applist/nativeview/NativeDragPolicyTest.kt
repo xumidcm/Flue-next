@@ -77,8 +77,12 @@ class NativeDragPolicyTest {
         assertEquals("a", gate.update("a", 0.2f, 1334L))
         // 换目标：重新计时，立刻不再武装。
         assertNull(gate.update("b", 0.2f, 1340L))
-        // 超过速度门槛：候选直接作废，停多久都不算。
+        // 超过速度门槛：只重置停留时钟（2026-08 起）。目标与最慢速度证据保留 ——
+        // 抖一下不该把「已经在这个图标上停稳过」清零，否则悬停在门槛附近永远凑不满。
         assertNull(gate.update("b", 0.8f, 2200L))
+        // 时钟从 2200 重算，按最慢 0.2 那一档 334ms：2533 差一毫秒、2534 武装。
+        assertNull(gate.update("b", 0.2f, 2533L))
+        assertEquals("b", gate.update("b", 0.2f, 2534L))
     }
 
     /**

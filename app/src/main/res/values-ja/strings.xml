@@ -743,6 +743,7 @@
     <string name="watch_store_logout_confirm">この文字盤ストアアカウントからログアウトしますか？</string>
     <string name="watch_store_login_web">Web 版でログイン</string>
     <string name="watch_store_login_web_import">ログイン</string>
+    <string name="watch_store_login_web_imported_fmt">Web 版のログインを取り込みました（%1$s）</string>
     <string name="watch_store_login_web_missing">Web 版のログイン情報を検出できません</string>
     <string name="watch_store_expand_replies_fmt">返信を %1$d 件表示</string>
     <string name="watch_store_reinstall">文字盤を再インストール</string>
