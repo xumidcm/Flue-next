@@ -2253,11 +2253,13 @@ private fun AnimatedMusicText(
         progress.snapTo(1f)
     }
 
-    val transform = preset.transform(phase, progress.value, distancePx)
+    // transform 本来在组合期逐帧求值（读 progress.value → 每帧重组整个组件）。
+    // 把求值移进 graphicsLayer 的逐帧 lambda：动画帧只重画这一层，不触发重组。
     Box(
         modifier = Modifier
             .clipToBounds()
             .graphicsLayer {
+                val transform = preset.transform(phase, progress.value, distancePx)
                 alpha = transform.alpha
                 translationX = transform.translationX
                 translationY = transform.translationY

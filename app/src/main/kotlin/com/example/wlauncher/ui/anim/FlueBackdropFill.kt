@@ -32,6 +32,12 @@ private const val BACKDROP_MAX_BLUR_RADIUS_PX = 64
 private const val BACKDROP_SHARED_MAX_BLUR_RADIUS_PX = 128
 
 /**
+ * 九宫格镜像层重录的 progress 死区：低于这个变化量沿用上一次录制。
+ * 0.5% 的 progress ≈ 2px 级别的镜像几何差，在 20% 压暗 + 全屏模糊之下不可见。
+ */
+private const val MAGNIFIED_RECORD_PROGRESS_EPSILON = 0.005f
+
+/**
  * The backdrop animation is sampled every frame. Reusing a small fixed set of
  * effects keeps that sampling cheap while a two-pixel step remains visually
  * continuous on a full-screen, darkened backdrop.
@@ -132,6 +138,8 @@ private class BackdropCaptureState {
     var lastCaptureUptimeMs: Long = Long.MIN_VALUE
     var capturedSize: IntSize = IntSize.Zero
     var capturedPixelCopyGeneration: Long = Long.MIN_VALUE
+    /** 上次重录九宫格镜像层时的 progress；变化小于阈值就不重录。 */
+    var recordedProgress: Float = Float.NaN
 }
 
 /**
@@ -397,23 +405,31 @@ internal fun Modifier.flueBackdropFill(
         val insetRight = insetLeft + size.width * insetScale
         val insetBottom = insetTop + size.height * insetScale
 
-        magnifiedLayer.record(this, layoutDirection, layerSize) {
-            fun drawSource(
-                translateX: Float,
-                translateY: Float,
-                scaleX: Float,
-                scaleY: Float,
-            ) {
-                translate(left = translateX, top = translateY) {
-                    scale(
-                        scaleX = scaleX,
-                        scaleY = scaleY,
-                        pivot = Offset.Zero,
-                    ) {
-                        drawLayer(backdropLayer)
+        // 九宫格镜像重录节流：转场动画的每一帧 progress 都在变，但变化低于
+        // 阈值时镜像几何的差异只有零点几像素，且整层还要过 20% 压暗 + 模糊，
+        // 重录九个 clipRect 分区属于纯浪费。跳帧期间沿用上一次的录制内容。
+        val magnifiedGeometryMoved = !(
+            kotlin.math.abs(p - captureState.recordedProgress) < MAGNIFIED_RECORD_PROGRESS_EPSILON &&
+                captureState.capturedSize == layerSize
+            )
+        if (magnifiedGeometryMoved) {
+            magnifiedLayer.record(this, layoutDirection, layerSize) {
+                fun drawSource(
+                    translateX: Float,
+                    translateY: Float,
+                    scaleX: Float,
+                    scaleY: Float,
+                ) {
+                    translate(left = translateX, top = translateY) {
+                        scale(
+                            scaleX = scaleX,
+                            scaleY = scaleY,
+                            pivot = Offset.Zero,
+                        ) {
+                            drawLayer(backdropLayer)
+                        }
                     }
                 }
-            }
 
             // 中心：和正在下沉的前景保持完全相同的几何位置。
             clipRect(
@@ -486,6 +502,8 @@ internal fun Modifier.flueBackdropFill(
                     )
                 }
             }
+        }
+            captureState.recordedProgress = p
         }
         // Mirror handles convolution sampling beyond the physical screen;
         // the mirrored center/strips/corners already fill the visible area.

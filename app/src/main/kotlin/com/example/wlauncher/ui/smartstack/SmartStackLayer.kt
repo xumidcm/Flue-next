@@ -1301,9 +1301,17 @@ fun WidgetPageLayer(
         }
     }
 
-    LaunchedEffect(draggingWidgetKey, widgetDragAutoScrollPx) {
+    // key 只放「是否处于自动滚动状态」这个离散量。直接把 widgetDragAutoScrollPx
+    // 放进 key 的话，拖拽期间每个 MOVE 事件（靠近边缘的连续值）都会取消并重启
+    // 协程，previousFrameNanos 跟着归零、帧间隔恒按 1/60 假设，高刷屏上滚动
+    // 速度失真；现在速度值在循环内逐帧现读，激活态切换才重启。
+    val widgetAutoScrollActive = draggingWidgetKey != null && widgetDragAutoScrollPx != 0f
+    LaunchedEffect(widgetAutoScrollActive) {
+        if (!widgetAutoScrollActive) return@LaunchedEffect
         var previousFrameNanos = 0L
-        while (draggingWidgetKey != null && widgetDragAutoScrollPx != 0f && isActive) {
+        while (isActive) {
+            val autoScrollPx = widgetDragAutoScrollPx
+            if (autoScrollPx == 0f) break
             var scrollDelta = 0f
             withFrameNanos { frameTimeNanos ->
                 val frameDeltaSeconds = if (previousFrameNanos == 0L) {
@@ -1312,7 +1320,7 @@ fun WidgetPageLayer(
                     ((frameTimeNanos - previousFrameNanos) / 1_000_000_000f).coerceIn(1f / 144f, 0.05f)
                 }
                 previousFrameNanos = frameTimeNanos
-                scrollDelta = widgetDragAutoScrollPx * frameDeltaSeconds
+                scrollDelta = autoScrollPx * frameDeltaSeconds
             }
             val consumed = listState.scrollBy(scrollDelta)
             if (consumed != 0f) {

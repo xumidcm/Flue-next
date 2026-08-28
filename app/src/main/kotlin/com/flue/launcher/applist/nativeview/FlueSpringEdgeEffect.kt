@@ -683,8 +683,9 @@ internal class FlueSpringEdgeEffectFactory(
                     cancel()
                     return@addUpdateListener
                 }
+                // publish → setPullOffset 已在位移变化时 invalidate，
+                // 不再额外 postInvalidateOnAnimation。
                 publish()
-                owner.postInvalidateOnAnimation()
             }
             addListener(object : android.animation.AnimatorListenerAdapter() {
                 private var cancelled = false
@@ -705,8 +706,10 @@ internal class FlueSpringEdgeEffectFactory(
     }
 
     private fun publish() {
+        // 失效统一交给 onOffsetChanged（setPullOffset）在位移变化时发起；
+        // 这里再 post 一次就是回弹期每帧双份重绘。位移不变时本来也不需要
+        // 新的一帧。
         onOffsetChanged(physics.offset)
-        owner.postInvalidateOnAnimation()
     }
 
     fun releaseOwner() {

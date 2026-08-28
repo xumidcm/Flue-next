@@ -106,9 +106,10 @@ class NativeAppListView @JvmOverloads constructor(
         override fun onScrolled(recyclerView: RecyclerView, dx: Int, dy: Int) {
             applyAttachedChildVisuals()
             // 指示器画在宿主自己的 display list 上，不属于任何子 View，所以子项被
-            // offsetChildrenVertical 挪走并不会让它重绘。滚动时必须显式失效一次，
-            // 否则滑块只在「顺手被别的原因重绘」的那几帧才跟上，看起来是一顿一顿的。
-            if (currentConfig.value.scrollIndicatorEnabled) invalidate()
+            // offsetChildrenVertical 挪走并不会让它重绘。滚动时只失效指示器那一条
+            // 脏区（[scheduleScrollIndicatorFrame]）就够：整屏 invalidate 会让每行
+            // 重走一遍鱼眼/模糊绘制，滚动期间每帧一次是纯浪费。
+            if (currentConfig.value.scrollIndicatorEnabled) scheduleScrollIndicatorFrame()
         }
 
         override fun onScrollStateChanged(recyclerView: RecyclerView, newState: Int) {
@@ -1319,11 +1320,27 @@ class NativeAppListView @JvmOverloads constructor(
         val next = offset.takeIf(Float::isFinite) ?: 0f
         if (pullOffsetPx == next) return
         pullOffsetPx = next
-        for (index in 0 until childCount) {
-            (getChildAt(index) as? NativeAppListRowView)
-                ?.setContentTranslationY(next)
+        if (usesHostChildVisualPass(activeLayoutStrategy)) {
+            // 单遍完成「写 contentTranslationY + 重算行视觉」：鱼眼/弦宽都是
+            // 行心 y（含 contentTranslationY）的函数，必须先写后算。原来是
+            // 三遍全 child 扫描（写位移、LM 重放、host 重放）+ 双份失效，
+            // 回弹动画期间每帧白跑两遍。
+            for (index in 0 until childCount) {
+                val child = getChildAt(index) ?: continue
+                (child as? NativeAppListRowView)?.setContentTranslationY(next)
+                applyChildVisual(child)
+            }
+            draggedSourceKey?.let { key ->
+                holderForKey(key)?.itemView?.alpha = 0f
+            }
+        } else {
+            // 空间布局的行视觉由 LayoutManager 重放；contentTranslationY 先行写入。
+            for (index in 0 until childCount) {
+                (getChildAt(index) as? NativeAppListRowView)
+                    ?.setContentTranslationY(next)
+            }
+            (layoutManager as? NativeSpatialAppListLayoutManager)?.reapplyChildVisuals()
         }
-        applyMoveFrameVisuals()
         invalidate()
     }
 

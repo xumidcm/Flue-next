@@ -172,7 +172,27 @@ internal class NativeDrawerGeometryAdapter {
     ) {
         // 与 safeInsetsForViewport 走同一个夹取：两份实现各自演化的话，会给
         // SafeOutline.create 送进互相冲突的 safeBounds，圆屏布局期直接 require 失败。
-        val safe = config.safeInsetsForViewport(viewportWidth, viewportHeight)
+        // resolve 每帧每个子项都会进来一次；insets 只随视口与 config 的 inset 值
+        // 变化，按 (视口, inset) 缓存进可变对象，命中路径不再分配。
+        val keyWidth = viewportWidth.toInt()
+        val keyHeight = viewportHeight.toInt()
+        if (
+            cachedInsetsViewportWidth != keyWidth ||
+            cachedInsetsViewportHeight != keyHeight ||
+            cachedInsetsLeft != config.leftSafeInsetPx ||
+            cachedInsetsTop != config.topSafeInsetPx ||
+            cachedInsetsRight != config.rightSafeInsetPx ||
+            cachedInsetsBottom != config.bottomSafeInsetPx
+        ) {
+            config.applySafeInsetsForViewport(viewportWidth, viewportHeight, cachedInsets)
+            cachedInsetsViewportWidth = keyWidth
+            cachedInsetsViewportHeight = keyHeight
+            cachedInsetsLeft = config.leftSafeInsetPx
+            cachedInsetsTop = config.topSafeInsetPx
+            cachedInsetsRight = config.rightSafeInsetPx
+            cachedInsetsBottom = config.bottomSafeInsetPx
+        }
+        val safe = cachedInsets
         val availableWidth = (viewportWidth - safe.left - safe.right).coerceAtLeast(1f)
         val availableHeight = (viewportHeight - safe.top - safe.bottom).coerceAtLeast(1f)
         var width = itemWidth.coerceAtMost(availableWidth)
@@ -188,6 +208,28 @@ internal class NativeDrawerGeometryAdapter {
         }
         safeItemWidth = width.coerceAtLeast(0.01f)
         safeItemHeight = height.coerceAtLeast(0.01f)
+    }
+
+    private val cachedInsets = MutableViewportSafeInsets()
+    private var cachedInsetsViewportWidth = Int.MIN_VALUE
+    private var cachedInsetsViewportHeight = Int.MIN_VALUE
+    private var cachedInsetsLeft = Int.MIN_VALUE
+    private var cachedInsetsTop = Int.MIN_VALUE
+    private var cachedInsetsRight = Int.MIN_VALUE
+    private var cachedInsetsBottom = Int.MIN_VALUE
+}
+
+private class MutableViewportSafeInsets {
+    var left = 0f
+    var top = 0f
+    var right = 0f
+    var bottom = 0f
+
+    fun set(left: Float, top: Float, right: Float, bottom: Float) {
+        this.left = left
+        this.top = top
+        this.right = right
+        this.bottom = bottom
     }
 }
 
@@ -210,13 +252,23 @@ private fun NativeAppListConfig.safeInsetsForViewport(
     viewportWidth: Float,
     viewportHeight: Float,
 ): ViewportSafeInsets {
+    val output = MutableViewportSafeInsets()
+    applySafeInsetsForViewport(viewportWidth, viewportHeight, output)
+    return ViewportSafeInsets(output.left, output.top, output.right, output.bottom)
+}
+
+private fun NativeAppListConfig.applySafeInsetsForViewport(
+    viewportWidth: Float,
+    viewportHeight: Float,
+    output: MutableViewportSafeInsets,
+) {
     val width = viewportWidth.toInt().coerceAtLeast(1)
     val height = viewportHeight.toInt().coerceAtLeast(1)
     val left = leftSafeInsetPx.coerceIn(0, width - 1).toFloat()
     val right = rightSafeInsetPx.coerceIn(0, (width - left).toInt() - 1).toFloat()
     val top = topSafeInsetPx.coerceIn(0, height - 1).toFloat()
     val bottom = bottomSafeInsetPx.coerceIn(0, (height - top).toInt() - 1).toFloat()
-    return ViewportSafeInsets(left, top, right, bottom)
+    output.set(left, top, right, bottom)
 }
 
 internal fun NativeAppListConfig.toDeviceProfile(
