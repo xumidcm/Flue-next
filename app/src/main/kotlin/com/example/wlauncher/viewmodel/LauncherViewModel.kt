@@ -825,6 +825,9 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     private var watchFacePrefsHydrated = false
     private var watchFaceScanHydrated = false
     private var lastWatchFaceRefreshAt = 0L
+
+    /** 最近一次全量表盘扫描的墙钟时刻；配合 [watchFaceDiskChangedSince] 做廉价变化探测。 */
+    private var lastWatchFaceScanWallClockMs = 0L
     private var watchFaceRefreshJob: Job? = null
     private val pendingWriteJobs = ConcurrentHashMap<String, Job>()
     private val appOrderWriteCoordinator = AppOrderWriteCoordinator()
@@ -1033,7 +1036,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                         null
                     }
                 val storedLayoutProfiles = prefs[KEY_LAYOUT_PROFILES]?.let { payload ->
-                    runCatching { FlueLayoutProfileJson.decodeLibrary(payload) }.getOrNull()
+                    decodeLayoutProfileLibraryCached(payload)
                 }
                 val loadedLayoutProfiles = FlueLayoutProfiles.withMissingBuiltIns(
                     storedLayoutProfiles ?: migratedLayoutProfiles(
@@ -1167,10 +1170,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                 }
 
                 val customMotionProfiles = prefs[KEY_CUSTOM_MOTION_PROFILES]
-                    ?.let { payload ->
-                        runCatching { FlueMotionProfileJson.decodeLibrary(payload) }
-                            .getOrDefault(emptyList())
-                    }
+                    ?.let { payload -> decodeMotionProfileLibraryCached(payload) }
                     .orEmpty()
                     .filterNot { FlueMotionProfiles.isBuiltIn(it.id) }
                 val loadedMotionProfiles =
@@ -3084,7 +3084,19 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
             }
         }
         if (!force && watchFaceScanHydrated && now - lastWatchFaceRefreshAt < 25_000L) return
+        // force 的本意是「编辑器改了表盘，必须立刻重扫」。但从任意应用/锁屏回来
+        // 也都会走这条 —— 原来每次 onResume 都付一轮「逐包 ZipFile + XML 解析」
+        // 的成本。磁盘探测（纯 stat 走）发现什么都没变时，force 直接落空，
+        // cachedWatchFaces 已在上方发布，视图保持现状即可。
+        if (
+            force && watchFaceScanHydrated &&
+            !watchFaceDiskChangedSince(lastWatchFaceScanWallClockMs)
+        ) {
+            lastWatchFaceRefreshAt = now
+            return
+        }
         lastWatchFaceRefreshAt = now
+        lastWatchFaceScanWallClockMs = System.currentTimeMillis()
         watchFaceRefreshJob?.cancel()
         watchFaceRefreshJob = viewModelScope.launch {
             val scanned = withContext(Dispatchers.IO) {
@@ -3093,6 +3105,33 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
             publishWatchFaces(scanned)
             syncSelectedWatchFace(freshScanCompleted = true)
         }
+    }
+
+    /**
+     * 表盘存储目录里有没有比 [scanWallClockMs] 更晚的改动。只递归 stat（深度封顶），
+     * 不读文件内容：覆盖编辑器改 watch.xml/pxml、导入/删除表盘这三类真实变更。
+     * mtime 在部分文件系统上是秒级精度，留 2s 余量宁可多扫一次也不错漏编辑结果。
+     */
+    private fun watchFaceDiskChangedSince(scanWallClockMs: Long): Boolean {
+        if (scanWallClockMs <= 0L) return true
+        val context = getApplication<Application>()
+        val roots = listOf(
+            WatchmakerWatchFaceStorage.rootDirectory(context),
+            JbWatchFaceStorage.rootDir(context),
+        )
+        val slackMs = 2_000L
+        val newest = roots.maxOfOrNull { root -> newestMtimeOf(root, depth = 0) } ?: 0L
+        return newest > scanWallClockMs - slackMs
+    }
+
+    private fun newestMtimeOf(file: File, depth: Int): Long {
+        var newest = file.lastModified()
+        if (depth >= 3) return newest
+        val children = runCatching { file.listFiles() }.getOrNull() ?: return newest
+        for (child in children) {
+            newest = maxOf(newest, newestMtimeOf(child, depth + 1))
+        }
+        return newest
     }
 
     suspend fun importJbWatchFace(uri: Uri): Result<WatchFaceDescriptor> {
@@ -4338,7 +4377,13 @@ private fun encodeWatchfaceCanvasOverrides(
 
 private fun decodeWatchfaceCanvasOverrides(raw: String?): Map<String, WatchCanvasSettings> {
     if (raw.isNullOrBlank()) return emptyMap()
-    return raw.lineSequence()
+    // DataStore 收集器每次发射都整体重跑，而这份文本在两次「真正编辑」之间
+    // 几乎不变。按原文做单条记忆化，写入风暴（拖滑杆等连续写盘）期间不再
+    // 每次发射都重新逐行解析。收集器在 IO 线程跑，这里无需加锁。
+    decodeWatchfaceCanvasOverridesCache?.let { (payload, decoded) ->
+        if (payload == raw) return decoded
+    }
+    val decoded = raw.lineSequence()
         .mapNotNull { line ->
             val separator = line.indexOf('=')
             if (separator <= 0) return@mapNotNull null
@@ -4346,6 +4391,34 @@ private fun decodeWatchfaceCanvasOverrides(raw: String?): Map<String, WatchCanva
             id to WatchCanvasSettings.decode(line.substring(separator + 1))
         }
         .toMap()
+    decodeWatchfaceCanvasOverridesCache = raw to decoded
+    return decoded
+}
+
+private var decodeWatchfaceCanvasOverridesCache: Pair<String, Map<String, WatchCanvasSettings>>? = null
+
+/**
+ * 大 JSON 库的按 payload 记忆化（布局档案 / 动效档案）。偏好收集器对每次
+ * 写盘都全量重跑；没有这份缓存时，拖动任意一个滑杆的每一帧都会把两份
+ * JSON 全文重新解析一遍。单条缓存即可：同一个 payload 的解码结果是纯函数。
+ */
+private var layoutProfileLibraryCache: Pair<String, List<FlueLayoutProfile>?>? = null
+
+/** 与原实现同为「失败返回 null」：null 会走迁移路径，不能与空列表混淆。 */
+private fun decodeLayoutProfileLibraryCached(payload: String): List<FlueLayoutProfile>? {
+    layoutProfileLibraryCache?.let { (key, value) -> if (key == payload) return value }
+    val decoded = runCatching { FlueLayoutProfileJson.decodeLibrary(payload) }.getOrNull()
+    layoutProfileLibraryCache = payload to decoded
+    return decoded
+}
+
+private var motionProfileLibraryCache: Pair<String, List<FlueMotionProfile>>? = null
+
+private fun decodeMotionProfileLibraryCached(payload: String): List<FlueMotionProfile> {
+    motionProfileLibraryCache?.let { (key, value) -> if (key == payload) return value }
+    val decoded = runCatching { FlueMotionProfileJson.decodeLibrary(payload) }.getOrDefault(emptyList())
+    motionProfileLibraryCache = payload to decoded
+    return decoded
 }
 
 private fun ExternalLaunchState.sessionOrNull(): ExternalLaunchSession? = when (this) {
