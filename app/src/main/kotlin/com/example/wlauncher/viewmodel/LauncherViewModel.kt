@@ -61,6 +61,7 @@ import com.flue.launcher.layout.FLUE_LAYOUT_NARROW_COLUMNS_MAX
 import com.flue.launcher.layout.FLUE_LAYOUT_NARROW_COLUMNS_MIN
 import com.flue.launcher.util.FlowCrescentDirection
 import com.flue.launcher.util.FlowShapeCurve
+import com.flue.launcher.util.RecentsVisibility
 import com.flue.launcher.ui.common.FlueScreenShape
 import com.flue.launcher.ui.common.DEFAULT_OVERLAY_MASK_CORNER_RADIUS_DP
 import com.flue.launcher.ui.common.normalizeOverlayMaskCornerRadiusDp
@@ -936,7 +937,11 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                 val loadedLowRes = prefs[KEY_LOW_RES] ?: false
                 if (_lowResIcons.value != loadedLowRes) {
                     _lowResIcons.value = loadedLowRes
-                    refreshIcons()
+                    // 首次加载而非用户切换：初始扫描还在延迟等待时只改参数，
+                    // 避免冷启动连跑两轮全量扫描（图标包加载同理，见下文）。
+                    appRepository.setIconRenderingOptionsDeferrable(
+                        iconSize = if (loadedLowRes) 64 else 128
+                    )
                 }
 
                 val loadedLegacyCircularIcons = true
@@ -1335,7 +1340,9 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                 val selectedPack = prefs[KEY_ICON_PACK_PACKAGE]
                 if (_selectedIconPackPackage.value != selectedPack) {
                     _selectedIconPackPackage.value = selectedPack
-                    appRepository.setIconPackPackage(selectedPack)
+                    // 首次加载走可延迟路径：若初始扫描还没开跑，把图标包并入
+                    // 那一轮，不单独再扫一次（用户运行时切换仍走即时重扫）。
+                    appRepository.setIconRenderingOptionsDeferrable(packageName = selectedPack)
                 }
 
                 val loadedWatchFaceId = prefs[KEY_SELECTED_WATCHFACE_ID] ?: BUILT_IN_WATCHFACE_ID
@@ -1523,6 +1530,9 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
 
                 val loadedHideFromRecents = prefs[KEY_HIDE_FROM_RECENTS] ?: true
                 if (_hideFromRecents.value != loadedHideFromRecents) _hideFromRecents.value = loadedHideFromRecents
+                // RecentsVisibility 的读方遍布各 Activity 的 onCreate/onResume，
+                // 靠这条收集器推送保持缓存与 DataStore 一致，读方就不必阻塞读盘。
+                RecentsVisibility.updateCache(loadedHideFromRecents)
 
                 val loadedSegmentedDownload = prefs[KEY_WATCH_STORE_SEGMENTED_DOWNLOAD] ?: true
                 if (_watchStoreSegmentedDownload.value != loadedSegmentedDownload) {

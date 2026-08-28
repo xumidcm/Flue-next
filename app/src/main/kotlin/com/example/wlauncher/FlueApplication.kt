@@ -12,12 +12,14 @@ import com.flue.launcher.ui.theme.UiStyle
 import com.flue.launcher.ui.theme.DEFAULT_UI_STYLE
 import com.flue.launcher.watchface.standard.WatchWeatherRepository
 import com.flue.launcher.watchface.standard.WatchWeatherSources
+import com.flue.launcher.util.RecentsVisibility
 import com.flue.launcher.widget.SIDE_SCREEN_APP_WIDGET_HOST_ID
 import com.flue.launcher.widget.WidgetHostLifecycleController
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.launch
 
 class FlueApplication : Application() {
     val repositories: FlueRepositories by lazy { FlueRepositories(this) }
@@ -34,6 +36,11 @@ class FlueApplication : Application() {
         // snapshot and temperature-unit preference therefore survive host
         // recreation and remain identical across those surfaces.
         WatchWeatherSources.applicationSource = WatchWeatherRepository.default(this)
+        // 最近任务可见性偏好在多个 Activity 的 onCreate/onResume 同步读取；
+        // 在后台先把 DataStore 首读做完，主线程读方就只剩内存取值。
+        repositories.applicationScope.launch {
+            RecentsVisibility.warmUp(this@FlueApplication)
+        }
     }
 
     companion object {

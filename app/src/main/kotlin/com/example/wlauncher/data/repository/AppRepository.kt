@@ -116,13 +116,27 @@ class AppRepository(private val context: Context) {
     private var freshScanPublished = false
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val refreshMonitor = Any()
+    // 快照恢复（后台）与全量刷新都写 catalogData；发布走同一个监视器，
+    // 让「恢复让位给刷新」的判断与写入原子化，旧数据不会反向覆盖新扫描。
+    private val catalogPublishMonitor = Any()
     private var refreshJob: Job? = null
     private var packageRefreshJob: Job? = null
+    // 当前挂起的 refreshJob 是否是「执行时才读图标参数」的初始扫描；
+    // true 期间收集器加载持久化图标偏好可以直接改参数，不必另起一轮扫描。
+    @Volatile
+    private var pendingInitialScan = false
     private val installTimeCache = mutableMapOf<String, Long>()
     private val iconLocks = ConcurrentHashMap<String, Any>()
     private val itemStorage = AppListItemStorage(context)
-    private var itemCatalog: Map<String, AppInfo> = emptyMap()
-    private var folderCatalog: List<StoredAppListFolder> = emptyList()
+    // 两个目录恒成对更新；快照恢复与全量刷新可能在不同线程先后落地，
+    // 读写两侧都取这一个 volatile 快照，避免看到两字段错配的中间态。
+    private class CatalogData(
+        val items: Map<String, AppInfo> = emptyMap(),
+        val folders: List<StoredAppListFolder> = emptyList(),
+    )
+
+    @Volatile
+    private var catalogData = CatalogData()
     private val iconCache = object : LinkedHashMap<String, CachedIconSet>(160, 0.75f, true) {
         override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, CachedIconSet>?): Boolean {
             return size > 160
@@ -142,8 +156,17 @@ class AppRepository(private val context: Context) {
     }
 
     init {
-        val cachedSnapshotLoaded = restoreCachedSnapshot()
-        refreshAsync(initialDelayMs = if (cachedSnapshotLoaded) 1_400L else 0L)
+        // 快照恢复不再占用主线程：原来在 init 里同步读 JSON 并逐应用解码最多
+        // 4 张 PNG（百级应用 ≈ 数百次解码），全在首帧之前，弱设备上是明显的
+        // 启动黑窗。改为后台恢复：恢复完成前列表为空，落地后增量填充；
+        // 恢复与刷新的发布顺序由 catalogPublishMonitor 保证（见 restoreCachedSnapshot）。
+        scope.launch {
+            val cachedSnapshotLoaded = restoreCachedSnapshot()
+            refreshAsync(
+                initialDelayMs = if (cachedSnapshotLoaded) 1_400L else 0L,
+                liveIconOptions = true,
+            )
+        }
         val filter = IntentFilter().apply {
             addAction(Intent.ACTION_PACKAGE_ADDED)
             addAction(Intent.ACTION_PACKAGE_REMOVED)
@@ -194,6 +217,34 @@ class AppRepository(private val context: Context) {
         useLegacyCircularIcons = legacyCircular
         currentIconSize = nextIconSize
         refreshAsync(nextIconSize)
+    }
+
+    /**
+     * 与 [setIconRenderingOptions] 相同，但初始全量扫描还在延迟等待时只更新
+     * 参数、不另起扫描：等待中的那轮扫描执行时会读最新参数（[refreshAsync] 的
+     * liveIconOptions 路径）。冷启动收集器首次加载持久化图标偏好（图标包、
+     * 低清图标）走这条路径，把「初始扫描 + 参数重扫」合并成一次。
+     */
+    fun setIconRenderingOptionsDeferrable(
+        packageName: String? = iconPackPackage,
+        legacyCircular: Boolean = useLegacyCircularIcons,
+        iconSize: Int = currentIconSize
+    ) {
+        val normalized = packageName?.takeIf { it.isNotBlank() }
+        val nextIconSize = iconSize.coerceAtLeast(1)
+        val changed = iconPackPackage != normalized ||
+            useLegacyCircularIcons != legacyCircular ||
+            currentIconSize != nextIconSize
+        if (!changed) return
+        synchronized(refreshMonitor) {
+            if (pendingInitialScan) {
+                iconPackPackage = normalized
+                useLegacyCircularIcons = legacyCircular
+                currentIconSize = nextIconSize
+                return
+            }
+        }
+        setIconRenderingOptions(packageName = normalized, legacyCircular = legacyCircular, iconSize = nextIconSize)
     }
 
     private fun reorder(orderSnapshot: CustomOrderSnapshot) {
@@ -315,9 +366,10 @@ class AppRepository(private val context: Context) {
             installTimeCache.keys.retainAll(knownPackages)
         }
 
-        freshScanPublished = true
-        itemCatalog = catalogMap + folderEntries.associateBy { it.componentKey }
-        folderCatalog = storedFolders
+        synchronized(catalogPublishMonitor) {
+            freshScanPublished = true
+            catalogData = CatalogData(catalogMap + folderEntries.associateBy { it.componentKey }, storedFolders)
+        }
         synchronized(customOrderMonitor) {
             val orderSnapshot = customOrderSnapshot
             _allSelectableApps.value = sortApps(catalogItems, orderSnapshot)
@@ -334,7 +386,7 @@ class AppRepository(private val context: Context) {
      * 重跑 queryIntentActivities 并对每个应用调 loadLabel(pm)（图标虽有缓存，
      * label 没有），上百个应用就是用户看到的「放手后要等好一会儿文件夹才出来」。
      *
-     * 这条路径复用已发布的 [itemCatalog]（AppInfo 里图标和标签都是现成的），
+     * 这条路径复用已发布的 [catalogData]（AppInfo 里图标和标签都是现成的），
      * 只重建文件夹合成图标 + 重算顶层列表，代价与应用数无关。
      *
      * 前提是已经有过一次完整扫描（[freshScanPublished]）；否则回落全量刷新。
@@ -356,9 +408,9 @@ class AppRepository(private val context: Context) {
             refreshGeneration += 1
             refreshGeneration
         }
-        // 只取真实条目：itemCatalog 里也混着上一轮合成的文件夹条目，
+        // 只取真实条目：目录里也混着上一轮合成的文件夹条目，
         // 拿它们当子项会套娃。
-        val catalogItems = itemCatalog.values.filterNot { it.isFolder }
+        val catalogItems = catalogData.items.values.filterNot { it.isFolder }
         val catalogMap = catalogItems.associateBy { it.componentKey }
         val storedFolders = itemStorage.loadFolders()
         val folderChildKeys = storedFolders.flatMap { folder -> folder.itemKeys }.toSet()
@@ -383,8 +435,7 @@ class AppRepository(private val context: Context) {
         // would briefly resurrect a child that has already been moved out.
         if (synchronized(this) { generation != refreshGeneration }) return
 
-        itemCatalog = catalogMap + folderEntries.associateBy { it.componentKey }
-        folderCatalog = storedFolders
+        catalogData = CatalogData(catalogMap + folderEntries.associateBy { it.componentKey }, storedFolders)
         synchronized(customOrderMonitor) {
             val orderSnapshot = customOrderSnapshot
             _allSelectableApps.value = sortApps(catalogItems, orderSnapshot)
@@ -504,26 +555,28 @@ class AppRepository(private val context: Context) {
     }
 
     fun folderItems(folderKey: String): List<AppInfo> {
-        val folder = folderCatalog.firstOrNull { it.componentKey == folderKey } ?: return emptyList()
+        val catalog = catalogData
+        val folder = catalog.folders.firstOrNull { it.componentKey == folderKey } ?: return emptyList()
         return folder.itemKeys
-            .mapNotNull(itemCatalog::get)
+            .mapNotNull(catalog.items::get)
             .filterNot(::isHiddenApp)
     }
 
     fun folderItemKeys(folderKey: String): List<String> {
-        return folderCatalog.firstOrNull { it.componentKey == folderKey }?.itemKeys.orEmpty()
+        return catalogData.folders.firstOrNull { it.componentKey == folderKey }?.itemKeys.orEmpty()
     }
 
     fun folderMembershipSnapshot(): Map<String, List<String>> {
-        return folderCatalog.associate { it.componentKey to it.itemKeys }
+        return catalogData.folders.associate { it.componentKey to it.itemKeys }
     }
 
     fun itemsForKeys(keys: List<String>): List<AppInfo> {
-        return keys.mapNotNull(itemCatalog::get)
+        val items = catalogData.items
+        return keys.mapNotNull(items::get)
     }
 
     fun itemForKey(key: String): AppInfo? {
-        return itemCatalog[key]
+        return catalogData.items[key]
     }
 
     fun addLegacyShortcut(label: String?, intent: Intent?, icon: Bitmap?): Boolean {
@@ -655,14 +708,22 @@ class AppRepository(private val context: Context) {
         }.getOrNull()
     }
 
-    private fun refreshAsync(iconSize: Int = currentIconSize, initialDelayMs: Long = 0L) {
+    private fun refreshAsync(
+        iconSize: Int = currentIconSize,
+        initialDelayMs: Long = 0L,
+        liveIconOptions: Boolean = false,
+    ) {
         synchronized(refreshMonitor) {
             refreshJob?.cancel()
+            // 只有「执行时读参数」的初始扫描在等待时，参数可以只改不扫；
+            // 任何新调度都会取代旧的等待任务，标志位随之重算。
+            pendingInitialScan = liveIconOptions
             refreshJob = scope.launch {
                 if (initialDelayMs > 0L) {
                     kotlinx.coroutines.delay(initialDelayMs)
                 }
-                refresh(iconSize)
+                pendingInitialScan = false
+                refresh(if (liveIconOptions) currentIconSize else iconSize)
             }
         }
     }
@@ -704,8 +765,12 @@ class AppRepository(private val context: Context) {
         topLevelItems += catalogItems.filterNot { it.componentKey in folderChildKeys }
         topLevelItems += folderEntries
 
-        itemCatalog = catalogMap + folderEntries.associateBy { it.componentKey }
-        folderCatalog = storedFolders
+        synchronized(catalogPublishMonitor) {
+            // 后台恢复期间可能已有一轮全量刷新先发布（图标包/安装广播都会触发），
+            // 那条路径持有同一监视器置位并写入新目录，此处让位，避免缓存盖回新扫描。
+            if (freshScanPublished) return false
+            catalogData = CatalogData(catalogMap + folderEntries.associateBy { it.componentKey }, storedFolders)
+        }
         synchronized(customOrderMonitor) {
             val orderSnapshot = customOrderSnapshot
             _allSelectableApps.value = sortApps(catalogItems, orderSnapshot)
@@ -1502,7 +1567,7 @@ class AppRepository(private val context: Context) {
 
     private fun visibleAppListItem(app: AppInfo): AppInfo? {
         if (!app.isFolder) return app.takeUnless(::isHiddenApp)
-        val visibleChildren = app.folderItemKeys.mapNotNull(itemCatalog::get).filterNot(::isHiddenApp)
+        val visibleChildren = app.folderItemKeys.mapNotNull(catalogData.items::get).filterNot(::isHiddenApp)
         if (visibleChildren.isEmpty()) return null
         if (visibleChildren.map { it.componentKey } == app.folderItemKeys) return app
         return createFolderEntry(
