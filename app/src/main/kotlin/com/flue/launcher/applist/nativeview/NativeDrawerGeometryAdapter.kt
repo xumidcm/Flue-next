@@ -44,6 +44,15 @@ internal class NativeDrawerGeometryAdapter {
         itemHeight: Float,
         config: NativeAppListConfig,
         output: NativeSpatialChildVisual,
+        /**
+         * 这一帧图标**真正被画出来**的缩放倍数。
+         *
+         * 调用方传进来的 itemWidth/itemHeight 是布局值（`iconBounds`，不含 visualScale）。
+         * 鱼眼把边缘行缩到 0.58 倍时，若轮廓仍按 1.0 倍留位，内切余量就少算了约 40%，
+         * 边缘行被往屏内多推同样多 —— 老师报的「圆屏顶上和底下会有图标重叠」的三个成因
+         * 之一。默认 1f 保住既有调用点（方屏 / 不缩放的场景本来就是 1）。
+         */
+        visualScale: Float = 1f,
     ): NativeSpatialChildVisual {
         if (
             !centerX.isFinite() || !centerY.isFinite() ||
@@ -61,16 +70,19 @@ internal class NativeDrawerGeometryAdapter {
             itemHeight = itemHeight,
             config = config,
         )
-        val halfItemHeight = safeItemHeight / 2f
-        if (
-            centerY + halfItemHeight < 0f ||
-            centerY - halfItemHeight > viewportHeight
-        ) {
-            // Do not pin recycled/off-screen rows to the safe outline. Only
-            // visible icons are constrained; off-screen content must continue
-            // moving naturally so scrolling never develops an edge pile-up.
+        if (centerY < 0f || centerY > viewportHeight) {
+            // 护栏按**布局槽位中心**判，不再按「整行完全出屏」判。
+            //
+            // 旧判据是 `centerY + halfItemHeight < 0`，也就是只有整行都看不见了才放行。
+            // 454px 屏、96px 图标那一档，槽位在 y = −45 的那一行仍满足 −45 + 48 > 0，
+            // 于是被安全轮廓从屏外**拽进屏内**钉到 53.1，跟 y = 91 那一行重叠约 38px ——
+            // 这正是「顶上和底下图标重叠」的主因。槽心已经出了视口的行根本不该参与收边：
+            // 它要么马上被回收，要么正随滚动进场，让它自然移动即可。
             return output.set(1f, 1f, 0f, 0f, 0f)
         }
+        // 会话按**未缩放**的尺寸建立，缩放只在这一次 resolve 里生效：轮廓几何（圆心 /
+        // 半径）与 item 尺寸无关，而鱼眼让每个子项的缩放都不同，把它计入会话的重建判据
+        // 会让一帧里扫过的每个子项都重建一次 SafeOutline。
         ensureSession(
             viewportWidth = viewportWidth,
             viewportHeight = viewportHeight,
@@ -78,11 +90,16 @@ internal class NativeDrawerGeometryAdapter {
             itemHeight = safeItemHeight,
             config = config,
         )
+        // 先按内切圆夹、再乘缩放（不是反过来）：夹取结果保证未缩放尺寸就已经塞得进圆，
+        // 再往小乘必然仍然塞得进；顺序颠倒会让缩放档的图标反而拿到更宽松的留位。
+        val scale = visualScale.takeIf { it.isFinite() && it > 0f }?.coerceAtMost(1f) ?: 1f
         val activeSession = requireNotNull(session)
         activeSession.resolve(
             desiredCenterX = centerX,
             desiredCenterY = centerY,
             output = resolved,
+            hitWidth = safeItemWidth * scale,
+            hitHeight = safeItemHeight * scale,
         )
         return output.set(
             scale = resolved.scale,

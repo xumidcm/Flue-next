@@ -3,6 +3,7 @@
 import com.flue.launcher.i18n.FlueComponentActivity
 
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
@@ -68,6 +69,8 @@ import com.flue.launcher.service.FlueAccessibilityService
 import com.flue.launcher.service.FlueDeviceAdminController
 import com.flue.launcher.service.ScreenLockControlMode
 import com.flue.launcher.service.screenLockControlMode
+import com.flue.launcher.watchface.standard.WatchLocationPermissionPolicy
+import com.flue.launcher.watchface.standard.WatchWeatherRepository
 import com.flue.launcher.ui.anim.appListLaunchPlateValues
 import com.flue.launcher.ui.anim.appListLaunchValues
 import com.flue.launcher.ui.anim.appListLayerValues
@@ -236,6 +239,20 @@ class LauncherActivity : FlueComponentActivity() {
                 }
             }
         }
+    }
+
+    override fun onRequestPermissionsResult(
+        requestCode: Int,
+        permissions: Array<String>,
+        grantResults: IntArray,
+    ) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode != WatchLocationPermissionPolicy.REQUEST_CODE) return
+        if (grantResults.none { it == PackageManager.PERMISSION_GRANTED }) return
+
+        // The repository may have just recorded a permission-less refresh attempt. Force a new
+        // location/weather pass now instead of waiting for its 15-minute soft TTL.
+        WatchWeatherRepository.default(this).requestRefresh()
     }
 
     override fun onNewIntent(intent: Intent) {

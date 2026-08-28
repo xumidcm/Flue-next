@@ -22,8 +22,6 @@ internal class NativeFlowLayoutManager(
     configProvider: () -> NativeAppListConfig,
 ) : NativeAppGridLayoutManager(configProvider) {
     private val childVisualScratch = NativeSpatialChildVisual()
-    private val safeGeometryScratch = NativeSpatialChildVisual()
-    private val safeGeometryAdapter = NativeDrawerGeometryAdapter()
     private var geometryLeftInset = Int.MIN_VALUE
     private var geometryColumns = Int.MIN_VALUE
     private var geometryIconSize = Int.MIN_VALUE
@@ -107,10 +105,14 @@ internal class NativeFlowLayoutManager(
         for (index in 0 until childCount) {
             val child = requireNotNull(getChildAt(index))
             val row = child as? NativeAppListRowView
+            // 只读**不含重排预览**的位移通道。月牙横移是行 y 的函数，读了预览位移就成了
+            // 「预览 → 月牙 → 命中坐标 → 新预览」的帧率级自反馈环 —— 那正是老师报的
+            // 「心流拖动时整个列表散掉」。详见
+            // NativeAppListRowView.positionTranslationYWithoutPreviewOrFlow 的注释。
             val positionTranslationX =
-                row?.positionTranslationXWithoutFlow() ?: child.translationX
+                row?.positionTranslationXWithoutPreviewOrFlow() ?: child.translationX
             val positionTranslationY =
-                row?.positionTranslationYWithoutFlow() ?: child.translationY
+                row?.positionTranslationYWithoutPreviewOrFlow() ?: child.translationY
             val centerX = getDecoratedLeft(child) + getDecoratedMeasuredWidth(child) / 2f +
                 positionTranslationX
             val centerY = getDecoratedTop(child) + getDecoratedMeasuredHeight(child) / 2f +
@@ -126,36 +128,18 @@ internal class NativeFlowLayoutManager(
                 // 二维半径会把明暗和月牙的横向位移绑在一起。详见那个参数的注释。
                 verticalOnlyFisheye = true,
             )
-            val safe = if (config.deviceShape == NativeDeviceShape.ROUND) {
-                safeGeometryAdapter.resolve(
-                    centerX = centerX,
-                    centerY = centerY,
-                    viewportWidth = width.toFloat(),
-                    viewportHeight = height.toFloat(),
-                    itemWidth = row?.iconWidthForSafeGeometry()
-                        ?.takeIf { it.isFinite() && it > 0f }
-                        ?: getDecoratedMeasuredWidth(child).toFloat().coerceAtLeast(1f),
-                    itemHeight = row?.iconHeightForSafeGeometry()
-                        ?.takeIf { it.isFinite() && it > 0f }
-                        ?: getDecoratedMeasuredHeight(child).toFloat().coerceAtLeast(1f),
-                    config = config,
-                    output = safeGeometryScratch,
-                )
-            } else {
-                null
-            }
-            // 月牙叠在**基准之后**：圆屏那条 safe 路整体替换 translationX，
-            // 先加进 visual 会被它吃掉。用几何里那份夹过的 bulge，与基准 x 同源。
+            // 月牙叠在基准之后。这里**不再**按 deviceShape 分叉：老师指定圆屏专属几何
+            // 只保留列表与星环，心流 / 蜂窝 / 密集网格在圆屏上与方屏一致（不收边）。
+            // 圆屏收边原本会把屏外那一两行拽进屏内钉在弧上，正是「顶上和底下图标重叠」
+            // 的来源之一；而心流本来就用月牙自己控制越界，不需要第二道轮廓。
             val crescentX = nativeFlowCrescentTranslationX(
                 bulgePx = flow.crescentBulgePx,
                 toRight = flow.crescentToRight,
                 childCenterY = centerY,
                 viewportHeight = height.toFloat(),
             )
-            val flowTranslationX = (safe?.translationX ?: visual.translationX) + crescentX
-            val flowTranslationY = safe?.translationY?.plus(
-                nativeEntryTranslationY(config, height.toFloat()),
-            ) ?: visual.translationY
+            val flowTranslationX = visual.translationX + crescentX
+            val flowTranslationY = visual.translationY
             if (row != null) {
                 row.setFlowTranslation(flowTranslationX, flowTranslationY)
                 row.setVisualScale(visual.scale)

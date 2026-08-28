@@ -224,13 +224,19 @@ internal object WatchStoreJsonParser {
     fun avatarUrl(payload: String): String? =
         optionalStringOrNull(parseObject(payload), "avatar_url", MAX_URL_LENGTH)
 
-    /** `GET /watchfaces/:id/comments` → `{data:[…]}`，最旧在前。 */
+    /**
+     * `GET /watchfaces/:id/comments` → `{data:[…]}`，最旧在前。
+     *
+     * 超过 [MAX_COMMENT_ITEMS] 时**截断**而不是 fail：上游这条没有任何分页参数，一次就把
+     * 全量吐回来（`api/src/routes/features.js:88-95`），热门表盘迟早超限 —— 那时候 fail
+     * 会把整个评论区变成一行「加载失败」，而只看前 500 条至少还能读。
+     */
     fun comments(payload: String): List<WatchStoreComment> {
         val root = parseObject(payload)
         val data = requiredArray(root, "data")
-        if (data.length() > MAX_COMMENT_ITEMS) fail("Too many comments in one response")
-        return buildList(data.length()) {
-            for (index in 0 until data.length()) {
+        val count = minOf(data.length(), MAX_COMMENT_ITEMS)
+        return buildList(count) {
+            for (index in 0 until count) {
                 add(parseComment(data.optJSONObject(index) ?: fail("data[$index] is not an object")))
             }
         }

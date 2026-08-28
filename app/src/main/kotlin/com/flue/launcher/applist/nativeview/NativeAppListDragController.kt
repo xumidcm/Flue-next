@@ -96,6 +96,16 @@ internal class NativeAppListDragController(
     private var lastPointerX = 0f
     private var lastPointerY = 0f
     private var lastPointerAtMillis = 0L
+    /**
+     * 最近一次**真实指针采样**测出的速度。
+     *
+     * 合成帧（自动滚动帧、folder-hover 到期回调）没有新的指针采样，以前它们往
+     * [NativeFolderHoverGate] 里塞的是 `0f` —— 等于谎报「手指已经完全停稳」，
+     * `requiredDwellMillis()` 直接掉到下限 300ms。于是自动滚动期间任何划过探针
+     * 的图标都会在 300ms 内武装合并，正是老师报的误触。改为复用这一份实测速度：
+     * 合成帧不带来新信息，就不该改变 gate 对「停得多稳」的判断。
+     */
+    private var lastPointerSpeedPxPerMs = 0f
     private var lastAutoScrollFrameAtMillis: Long? = null
     private var frameScheduled = false
     private var folderCommandDispatched = false
@@ -125,6 +135,9 @@ internal class NativeAppListDragController(
         lastPointerX = x
         lastPointerY = y
         lastPointerAtMillis = eventTimeMillis
+        // 新手势：还没有任何位移采样。合成帧只可能在 machine.isDragging 之后跑，
+        // 那时至少已有一次 onMove 写过真实速度，所以这里的初值观察不到。
+        lastPointerSpeedPxPerMs = 0f
         machine.onDown(source, x, y, eventTimeMillis, policy)
         suppressedLongClickKey = source
         host.suppressLongClick(source, true)
@@ -141,6 +154,7 @@ internal class NativeAppListDragController(
         lastPointerX = x
         lastPointerY = y
         lastPointerAtMillis = eventTimeMillis
+        lastPointerSpeedPxPerMs = speed
         val reorderTarget = host.reorderKeyAt(x, y)
         val folderCandidate = host.folderKeyAt(x, y).takeIf {
             allowFolderCreation()
@@ -395,10 +409,12 @@ internal class NativeAppListDragController(
         if (eligible == null) return
 
         scheduledFolderTarget = eligible
+        // 到期时刻与 gate 的门槛同源（见 nativeFolderDwellPollMillis 的注释），
+        // 不再在这里单独读一遍 policy.folderHoverMillis。
         scheduledFolderDeadlineMillis = maxOf(
             eventTimeMillis,
             scheduler.nowMillis,
-        ) + policy.folderHoverMillis
+        ) + nativeFolderDwellPollMillis(policy)
         val delay = (scheduledFolderDeadlineMillis - scheduler.nowMillis).coerceAtLeast(0L)
         scheduler.postFolderHover(delay) {
             val expectedTarget = scheduledFolderTarget
@@ -419,12 +435,17 @@ internal class NativeAppListDragController(
                 machine.onMove(
                     pointerX = lastPointerX,
                     pointerY = lastPointerY,
-                    targetKey = if (allowFolderCreation()) {
+                    // 与 onMove 的 :165 同一条写法：**空间**消歧，而不是
+                    // 「开了文件夹就整个关掉预览」。旧写法
+                    // `if (allowFolderCreation()) null else …` 会在开关一开时
+                    // 让实时避让位移全程消失 —— 老师报的「拖动到图标上面不避让」。
+                    targetKey = if (currentTarget != null) {
                         null
                     } else {
                         host.reorderKeyAt(lastPointerX, lastPointerY)
                     },
-                    speedPxPerMs = 0f,
+                    // 合成帧不谎报「已停稳」，复用最近一次真实采样的速度。
+                    speedPxPerMs = lastPointerSpeedPxPerMs,
                     nowMillis = now,
                     folderCandidateKey = currentTarget.takeIf { it == expectedTarget },
                 ),
@@ -470,19 +491,26 @@ internal class NativeAppListDragController(
             machine.onMove(
                 pointerX = lastPointerX,
                 pointerY = lastPointerY,
-                targetKey = if (allowFolderCreation()) {
+                // 与 onMove 的 :165 同一条写法。旧写法
+                // `if (allowFolderCreation()) null else …` 在这里危害最大：自动滚动
+                // 边带是 `viewportHeight * 0.16f`（454px 屏上下各约 73px），指针一进
+                // 边带这一帧就每帧跑一次，于是**只要在边带里拖，避让就全程消失** ——
+                // 老师报的「拖动到图标上面不避让」。
+                targetKey = if (folderCandidate != null) {
                     null
                 } else {
                     host.reorderKeyAt(lastPointerX, lastPointerY)
                 },
-                speedPxPerMs = 0f,
+                // 合成帧不谎报「已停稳」（以前是 0f，把 requiredDwellMillis 压到下限
+                // 300ms，自动滚动期间划过的任何图标都会武装合并）。
+                speedPxPerMs = lastPointerSpeedPxPerMs,
                 nowMillis = scheduler.nowMillis,
                 folderCandidateKey = folderCandidate,
             ),
         )
         updateFolderHoverSchedule(
             candidate = folderCandidate,
-            speedPxPerMs = 0f,
+            speedPxPerMs = lastPointerSpeedPxPerMs,
             eventTimeMillis = scheduler.nowMillis,
         )
         updateAutoScrollSchedule()

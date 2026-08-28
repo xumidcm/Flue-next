@@ -1682,4 +1682,10 @@
     <string name="watch_editor_shape_kind_hexagon">六角形</string>
     <string name="watch_editor_shape_kind_star">星</string>
     <string name="watch_editor_shape_kind_heart">ハート</string>
+
+    <!-- P0 batch additions -->
+    <string name="watch_store_login_or_register">ログイン / 新規登録</string>
+    <string name="watch_store_login_required">この機能はログインが必要です</string>
+    <string name="watch_store_web_view_outdated_fmt">内蔵ブラウザのバージョンが古いため（%1$s）、システムのブラウザで開きました</string>
+    <string name="watch_store_web_view_render_failed">ウェブ版の読み込みに失敗したため、システムのブラウザで開きました</string>
 </resources>

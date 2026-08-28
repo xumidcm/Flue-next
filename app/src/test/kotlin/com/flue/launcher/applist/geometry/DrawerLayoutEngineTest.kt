@@ -31,6 +31,27 @@ class DrawerLayoutEngineTest {
     }
 
     @Test
+    fun roundOutlinePreservesTheOrderOfRowsBeyondItsSoftBoundary() {
+        val result = engine.layout(
+            request(
+                itemCenters = listOf(
+                    placement("outer", x = 200f, y = -100f),
+                    placement("inner", x = 200f, y = -99f),
+                ),
+                // 参数名跟 request() 的形参对齐（deviceProfile，不是 profile）。
+                deviceProfile = DeviceProfile.Round(),
+                fisheye = FisheyeParameters.Classic(
+                    minScale = 1f,
+                    minAlpha = 1f,
+                    maximumSpacingCompression = 0f,
+                ),
+            ),
+        )
+
+        assertTrue(result[0].bounds.centerY < result[1].bounds.centerY)
+    }
+
+    @Test
     fun nextIsVerticallySymmetric() {
         val top = placement("top", x = 200f, y = 60f)
         val bottom = placement("bottom", x = 200f, y = 340f)

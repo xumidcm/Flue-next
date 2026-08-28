@@ -186,6 +186,11 @@ import com.flue.launcher.ui.store.threadWatchStoreComments
 import com.flue.launcher.ui.store.watchStoreSocialDetailVisibility
 import com.flue.launcher.ui.store.favoriteCountAfterToggle
 import com.flue.launcher.ui.store.isOwnWatchStoreComment
+import com.flue.launcher.ui.store.WatchStoreAccountMenuAction
+import com.flue.launcher.ui.store.commentsAfterWatchStoreCommentDeletion
+import com.flue.launcher.ui.store.mergeEditedWatchStoreComment
+import com.flue.launcher.ui.store.watchStoreAccountMenuActions
+import com.flue.launcher.ui.store.watchStoreInstallStateShowsDownloadCount
 import androidx.compose.ui.zIndex
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.flue.launcher.R
@@ -597,6 +602,27 @@ private fun WatchStoreScreen(
     val notificationAuthStore = remember { WatchStoreAuthStore(context) }
     val unreadCounter = remember(notificationApi) { WatchStoreUnreadCounter.of(notificationApi) }
     var notificationSession by remember { mutableStateOf(notificationAuthStore.read()) }
+    /**
+     * 自己的 `user.id`。
+     *
+     * 评论区判断「这条是不是我发的」只能靠它：用户名是可变的展示名，而且
+     * `PUT /my/comments/:id` 的响应里根本没有 user 字段（见 [isOwnWatchStoreComment] 的注释）。
+     * 会话里只存了 token 和用户名（`WatchStoreAuthStore`），所以这里按 token 拉一次
+     * `/my/me` —— 一次登录只一次往返。拉失败时留 null：那时候只是不显示自己评论上的
+     * 编辑 / 删除按钮，绝不会把别人的评论错标成自己的。
+     */
+    var notificationAccountId by remember { mutableStateOf<String?>(null) }
+    /**
+     * 未登录时从菜单或详情页动作直接进登录表单。
+     *
+     * 复用「我的上传」覆层里那套表单（记住用户名/密码、注册切换、去网页版几条路都在里面），
+     * 只是让它直接落在表单上、跳过中间那页「登录后查看我的上传」。
+     */
+    var loginFormRequested by remember { mutableStateOf(false) }
+    val requestLogin: () -> Unit = {
+        loginFormRequested = true
+        myUploadsVisible = true
+    }
     var unreadNotificationCount by remember { mutableIntStateOf(0) }
     var featureFlags by remember { mutableStateOf(WatchStoreFeatureFlags()) }
     val featureFlagCache = remember(api) { WatchStoreFeatureFlagCache.of(api) }
@@ -608,10 +634,26 @@ private fun WatchStoreScreen(
     }
 
     // 从「我的上传」返回时可能刚登录 / 刚登出，重新读一次会话。
+    //
+    // 新增的登录入口复用的就是这一层覆层（`loginFormRequested` 只改它的落地页），所以
+    // `myUploadsVisible` 已经把它盖住了，不需要再往 key 里加一个可见性状态。
     LaunchedEffect(myUploadsVisible, uploadVisible) {
         if (!myUploadsVisible && !uploadVisible) {
+            loginFormRequested = false
             notificationSession = withContext(Dispatchers.IO) { notificationAuthStore.read() }
         }
+    }
+
+    // 自己的 user.id 跟着 token 走：登出立刻清掉，免得下一个账号沿用上一个人的归属判断。
+    LaunchedEffect(notificationSession?.token, notificationApi) {
+        val token = notificationSession?.token
+        if (token == null) {
+            notificationAccountId = null
+            return@LaunchedEffect
+        }
+        notificationAccountId = withContext(Dispatchers.IO) {
+            runCatching { notificationApi.getAccount(token).id }.getOrNull()
+        }?.takeIf(String::isNotBlank)
     }
 
     LaunchedEffect(notificationSession?.token) {
@@ -1318,7 +1360,11 @@ private fun WatchStoreScreen(
                                     categoryMenuExpanded = false
                                 },
                                 viewMode = viewMode,
+                                // 「我的上传 / 上传表盘」看登录态，不再只看网络是否加载成功；
+                                // showManagement 退化成「市场可达」这一层含义。
                                 showManagement = marketLoadSucceeded,
+                                isLoggedIn = notificationSession != null,
+                                onLogin = requestLogin,
                                 onToggleViewMode = {
                                     val next = if (viewMode == WatchStoreViewMode.LIST) {
                                         WatchStoreViewMode.GRID
@@ -1452,7 +1498,11 @@ private fun WatchStoreScreen(
                                     categoryMenuExpanded = false
                                 },
                                 viewMode = viewMode,
+                                // 「我的上传 / 上传表盘」看登录态，不再只看网络是否加载成功；
+                                // showManagement 退化成「市场可达」这一层含义。
                                 showManagement = marketLoadSucceeded,
+                                isLoggedIn = notificationSession != null,
+                                onLogin = requestLogin,
                                 onToggleViewMode = {
                                     val next = if (viewMode == WatchStoreViewMode.LIST) {
                                         WatchStoreViewMode.GRID
@@ -1553,6 +1603,8 @@ private fun WatchStoreScreen(
                         onMyUploads = { myUploadsVisible = true },
                         onOpenCustomMarketUrl = { marketUrlDialogVisible = true },
                         showManagement = marketLoadSucceeded,
+                        isLoggedIn = notificationSession != null,
+                        onLogin = requestLogin,
                         onOpenNotifications = if (notificationSession != null) {
                             { notificationsVisible = true }
                         } else {
@@ -1643,11 +1695,13 @@ private fun WatchStoreScreen(
                     onOpenWeb = { openWebWatchFace(overlayId) },
                     onOpenWebExternal = { openExternalWatchFace(overlayId) },
                     sessionToken = notificationSession?.token,
+                    sessionAuthorId = notificationAccountId,
                     featureFlags = featureFlags,
                     onOpenCreator = { username ->
                         creatorUsernameToOpen = username
                         creatorsVisible = true
                     },
+                    onRequestLogin = requestLogin,
                 )
             }
         }
@@ -1689,6 +1743,9 @@ private fun WatchStoreScreen(
                 repository = repository,
                 installedFaces = installedFaces,
                 registrationEnabled = featureFlags.registrationEnabled,
+                // 从菜单的「登录 / 注册」或详情页的「去登录」进来时直接落在表单上，
+                // 不经过中间那页「登录后查看我的上传」（老师原话：点击直接跳转登录）。
+                startInLoginForm = loginFormRequested,
                 onDismiss = { myUploadsVisible = false },
                 onOpenWeb = { openWebPage(WatchStoreWebPage.DASHBOARD) },
                 onOpenWebExternal = { openExternalPage(WatchStoreWebPage.DASHBOARD) },
@@ -1882,6 +1939,8 @@ private fun WatchStoreBrowseControls(
     onCategoryChange: (WatchStoreCategory?) -> Unit,
     viewMode: WatchStoreViewMode,
     showManagement: Boolean,
+    isLoggedIn: Boolean,
+    onLogin: () -> Unit,
     onToggleViewMode: () -> Unit,
     onUpload: () -> Unit,
     onMyUploads: () -> Unit,
@@ -1912,6 +1971,8 @@ private fun WatchStoreBrowseControls(
                 onMyUploads = onMyUploads,
                 onOpenCustomMarketUrl = onOpenCustomMarketUrl,
                 showManagement = showManagement,
+                isLoggedIn = isLoggedIn,
+                onLogin = onLogin,
                 onOpenNotifications = onOpenNotifications,
                 hasUnreadNotifications = hasUnreadNotifications,
                 onMyFavorites = onMyFavorites,
@@ -2048,6 +2109,8 @@ private fun StoreHeader(
     onMyUploads: () -> Unit,
     onOpenCustomMarketUrl: () -> Unit,
     showManagement: Boolean,
+    isLoggedIn: Boolean,
+    onLogin: () -> Unit,
     onOpenNotifications: (() -> Unit)? = null,
     hasUnreadNotifications: Boolean = false,
     onMyFavorites: (() -> Unit)? = null,
@@ -2136,6 +2199,8 @@ private fun StoreHeader(
         }
         StoreOverflowMenu(
             showManagement = showManagement,
+            isLoggedIn = isLoggedIn,
+            onLogin = onLogin,
             onUpload = onUpload,
             onMyUploads = onMyUploads,
             onOpenCustomMarketUrl = onOpenCustomMarketUrl,
@@ -2183,6 +2248,8 @@ private fun StoreFloatingActions(
     onMyUploads: () -> Unit,
     onOpenCustomMarketUrl: () -> Unit,
     showManagement: Boolean,
+    isLoggedIn: Boolean,
+    onLogin: () -> Unit,
     modifier: Modifier = Modifier,
     onOpenNotifications: (() -> Unit)? = null,
     hasUnreadNotifications: Boolean = false,
@@ -2234,6 +2301,8 @@ private fun StoreFloatingActions(
         }
         StoreOverflowMenu(
             showManagement = showManagement,
+            isLoggedIn = isLoggedIn,
+            onLogin = onLogin,
             onUpload = onUpload,
             onMyUploads = onMyUploads,
             onOpenCustomMarketUrl = onOpenCustomMarketUrl,
@@ -2264,6 +2333,8 @@ private fun StoreFloatingActions(
 @Composable
 private fun StoreOverflowMenu(
     showManagement: Boolean,
+    isLoggedIn: Boolean,
+    onLogin: () -> Unit,
     onUpload: () -> Unit,
     onMyUploads: () -> Unit,
     onOpenCustomMarketUrl: () -> Unit,
@@ -2349,22 +2420,40 @@ private fun StoreOverflowMenu(
                                 open()
                             }
                         }
-                        if (showManagement) {
-                            StoreOverflowItem(
-                                icon = MiuixIcons.Folder,
-                                label = stringResource(R.string.watch_store_my_uploads),
-                            ) {
-                                expanded = false
-                                onMyUploads()
+                        // 账号相关的那几行按登录态给（见 watchStoreAccountMenuActions）：
+                        // 登录后是「我的上传 + 上传表盘」，未登录只给一行「登录 / 注册」。
+                        //
+                        // 市场没加载成功时管理类的两项不摆 —— 点进去只会再失败一次；
+                        // 但「登录 / 注册」照摆，那是这种状态下唯一能自救的入口。
+                        watchStoreAccountMenuActions(signedIn = isLoggedIn)
+                            .filter {
+                                it == WatchStoreAccountMenuAction.LOGIN_OR_REGISTER || showManagement
                             }
-                            StoreOverflowItem(
-                                icon = MiuixIcons.UploadCloud,
-                                label = stringResource(R.string.watch_store_upload_face),
-                            ) {
-                                expanded = false
-                                onUpload()
+                            .forEach { action ->
+                                when (action) {
+                                    WatchStoreAccountMenuAction.LOGIN_OR_REGISTER -> StoreOverflowItem(
+                                        icon = MiuixIcons.Contacts,
+                                        label = stringResource(R.string.watch_store_login_or_register),
+                                    ) {
+                                        expanded = false
+                                        onLogin()
+                                    }
+                                    WatchStoreAccountMenuAction.MY_UPLOADS -> StoreOverflowItem(
+                                        icon = MiuixIcons.Folder,
+                                        label = stringResource(R.string.watch_store_my_uploads),
+                                    ) {
+                                        expanded = false
+                                        onMyUploads()
+                                    }
+                                    WatchStoreAccountMenuAction.UPLOAD -> StoreOverflowItem(
+                                        icon = MiuixIcons.UploadCloud,
+                                        label = stringResource(R.string.watch_store_upload_face),
+                                    ) {
+                                        expanded = false
+                                        onUpload()
+                                    }
+                                }
                             }
-                        }
                         // 收藏与合集是账号的东西：未登录时这两项直接不出现（与铃铛同一条
                         // 判断），点开只能看见「请先登录」的入口不如没有。
                         onMyFavorites?.let { open ->
@@ -2677,7 +2766,7 @@ private fun InstallStateLine(
     compact: Boolean,
     onDownload: () -> Unit,
     onCancelDownload: () -> Unit,
-    fallbackLine: (@Composable () -> Unit)? = null,
+    downloadCountLine: (@Composable () -> Unit)? = null,
 ) {
     // 状态区固定尺寸槽位：下载前/下载中/已安装/失败四态内容高度各不相同
     // （纯文字比带图标的迷你按钮矮几个 dp），任由内容决定高度会让宫格卡片
@@ -2688,12 +2777,16 @@ private fun InstallStateLine(
             .height(if (compact) 20.dp else 22.dp),
         contentAlignment = Alignment.CenterStart,
     ) {
+        // 「这一态能不能并排放下下载量」由 watchStoreInstallStateShowsDownloadCount 一处说了算。
+        // 以前是各分支自己决定，于是「已安装」那一支干脆没碰过下载量 —— 正是老师报的
+        // 「已安装的表盘不会显示下载量」。
+        val showDownloadCount = watchStoreInstallStateShowsDownloadCount(downloadState)
         InstallStateLineContent(
             downloadState = downloadState,
             compact = compact,
             onDownload = onDownload,
             onCancelDownload = onCancelDownload,
-            fallbackLine = fallbackLine,
+            downloadCountLine = if (showDownloadCount) downloadCountLine else null,
         )
     }
 }
@@ -2704,7 +2797,7 @@ private fun InstallStateLineContent(
     compact: Boolean,
     onDownload: () -> Unit,
     onCancelDownload: () -> Unit,
-    fallbackLine: (@Composable () -> Unit)?,
+    downloadCountLine: (@Composable () -> Unit)?,
 ) {
     val style = LauncherTheme.style
     when (downloadState) {
@@ -2751,12 +2844,25 @@ private fun InstallStateLineContent(
                 )
             }
         }
-        is WatchStoreInstallState.Installed -> Text(
-            stringResource(R.string.watch_store_installed),
-            color = style.positiveColor,
-            fontSize = 10.sp,
-            maxLines = 1,
-        )
+        is WatchStoreInstallState.Installed -> Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                stringResource(R.string.watch_store_installed),
+                color = style.positiveColor,
+                fontSize = 10.sp,
+                maxLines = 1,
+            )
+            if (downloadCountLine != null) {
+                Spacer(Modifier.width(6.dp))
+                // 下载量靠右：与「未安装」那一支（下载量在左、按钮在右）保持同一个重心，
+                // 一列卡片扫下来数字始终贴着同一侧。
+                Box(Modifier.weight(1f), contentAlignment = Alignment.CenterEnd) {
+                    downloadCountLine()
+                }
+            }
+        }
         is WatchStoreInstallState.Failed -> {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
@@ -2779,8 +2885,8 @@ private fun InstallStateLineContent(
         }
         WatchStoreInstallState.NotInstalled -> {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                if (fallbackLine != null) {
-                    Box(Modifier.weight(1f)) { fallbackLine() }
+                if (downloadCountLine != null) {
+                    Box(Modifier.weight(1f)) { downloadCountLine() }
                 } else {
                     Spacer(Modifier.weight(1f))
                 }
@@ -2870,9 +2976,9 @@ private fun WatchFaceListCard(
                 compact = false,
                 onDownload = onDownload,
                 onCancelDownload = onCancelDownload,
-                fallbackLine = {
+                downloadCountLine = {
                     Text(
-                            stringResource(R.string.watch_store_download_count_fmt, item.downloadCount),
+                        stringResource(R.string.watch_store_download_count_fmt, item.downloadCount),
                         color = style.secondaryTextColor,
                         fontSize = 11.sp,
                         maxLines = 1,
@@ -2945,9 +3051,9 @@ private fun WatchFaceGridCard(
                 compact = true,
                 onDownload = onDownload,
                 onCancelDownload = onCancelDownload,
-                fallbackLine = {
+                downloadCountLine = {
                     Text(
-                            stringResource(R.string.watch_store_download_count_fmt, item.downloadCount),
+                        stringResource(R.string.watch_store_download_count_fmt, item.downloadCount),
                         color = style.secondaryTextColor,
                         fontSize = 10.sp,
                         maxLines = 1,
@@ -2985,8 +3091,12 @@ private fun WatchFaceDetailPage(
     /** 同一个地址交给系统浏览器。内置 WebView 打不开站点弹窗时的逃生门。 */
     onOpenWebExternal: (() -> Unit)? = null,
     sessionToken: String? = null,
+    /** 自己的 `user.id`。评论的归属判断只认它，见 [isOwnWatchStoreComment]。 */
+    sessionAuthorId: String? = null,
     featureFlags: WatchStoreFeatureFlags = WatchStoreFeatureFlags(),
     onOpenCreator: (String) -> Unit = {},
+    /** 未登录时点收藏 / 评分 / 举报，弹提示之后由它把人带到登录表单。 */
+    onRequestLogin: () -> Unit = {},
 ) {
     val context = LocalContext.current
     val style = LauncherTheme.style
@@ -3246,8 +3356,10 @@ private fun WatchFaceDetailPage(
                                 detail = detail,
                                 summary = summary,
                                 sessionToken = sessionToken,
+                                sessionAuthorId = sessionAuthorId,
                                 featureFlags = featureFlags,
                                 onOpenCreator = onOpenCreator,
+                                onRequestLogin = onRequestLogin,
                             )
                         }
                         if (error != null) {
@@ -3561,8 +3673,10 @@ private fun WatchStoreSocialDetailSection(
     detail: WatchStoreWatchFaceDetail?,
     summary: WatchStoreWatchFace?,
     sessionToken: String?,
+    sessionAuthorId: String?,
     featureFlags: WatchStoreFeatureFlags,
     onOpenCreator: (String) -> Unit,
+    onRequestLogin: () -> Unit,
 ) {
     val context = LocalContext.current
     val style = LauncherTheme.style
@@ -3598,6 +3712,20 @@ private fun WatchStoreSocialDetailSection(
     var collectionNameVisible by remember(remoteId) { mutableStateOf(false) }
     var collectionName by remember(remoteId) { mutableStateOf("") }
     var collectionBusy by remember(remoteId) { mutableStateOf(false) }
+    /**
+     * 「登录后才能使用这个功能」提示。
+     *
+     * 未登录时收藏 / 加入合集 / 举报 / 评分**照样显示**（见 watchStoreSocialDetailVisibility），
+     * 点下去走这里 —— 既不静默吞掉点击，也不发一个必然 401 的请求。
+     */
+    var loginPromptVisible by remember(remoteId) { mutableStateOf(false) }
+
+    /** 已登录返回 true；未登录时弹「去登录」并返回 false，调用方直接停手。 */
+    fun ensureSignedIn(): Boolean {
+        if (sessionToken != null) return true
+        loginPromptVisible = true
+        return false
+    }
 
     BackHandler(enabled = replyTo != null) {
         replyTo = null
@@ -3695,7 +3823,11 @@ private fun WatchStoreSocialDetailSection(
             runCatching {
                 withContext(Dispatchers.IO) { api.editMyComment(token, commentId, content) }
             }.onSuccess { updated ->
-                comments = comments.map { if (it.id == updated.id) updated else it }
+                // 只合 content —— PUT 的响应没有 user 也没有 parent_comment_id，整条替换会让
+                // 这条回复当场跳到顶级、作者名变空（见 mergeEditedWatchStoreComment）。
+                comments = comments.map {
+                    if (it.id == updated.id) mergeEditedWatchStoreComment(it, updated) else it
+                }
                 cancelEdit()
             }.onFailure { failure ->
                 failure.throwIfCancellation()
@@ -3706,8 +3838,9 @@ private fun WatchStoreSocialDetailSection(
     }
 
     fun toggleFavorite() {
-        val token = sessionToken ?: return
         if (!visibility.showFavorite || submitting) return
+        if (!ensureSignedIn()) return
+        val token = sessionToken ?: return
         val before = favorite
         val beforeCount = favoriteCount
         val targetFavorite = !before
@@ -3735,21 +3868,28 @@ private fun WatchStoreSocialDetailSection(
     }
 
     fun setRating(value: Int) {
-        val token = sessionToken ?: return
         if (!visibility.showRating || submitting) return
+        if (!ensureSignedIn()) return
+        val token = sessionToken ?: return
+        // 乐观置数：submitting 期间所有星星都是禁用的，点完到回包这一小段在手表上肉眼可见，
+        // 不先把星星点亮会让人以为这一下没点上（那正是 T-08 反馈的现场感受）。
+        val before = rating
+        rating = (before ?: WatchStoreRatingSummary(average = 0.0, count = 0L)).copy(mine = value)
         submitting = true
         scope.launch {
             runCatching {
                 withContext(Dispatchers.IO) { api.setRating(token, remoteId, value) }
-                // POST /watchfaces/:id/rating 的响应把「我这一票」放在 rating 字段里，
-                // 而 ratingSummary 解析器读的是 mine（那是 GET /my/watchfaces/:id/rating 的
-                // 字段名）→ mine 恒为 null → 星星不亮，必须退出重进才看到。
-                // 平均分和总数在响应里有，所以只有自己那几颗星不亮，与反馈一致。
-            }.onSuccess { rating = it.copy(mine = value) }
-                .onFailure { failure ->
-                    failure.throwIfCancellation()
-                    error = failure.userFacingMessage(context)
-                }
+            }.onSuccess {
+                // 平均分与总数用服务端的新值，但 mine 必须显式带上 value：POST 的响应把
+                // 「我这一票」放在 `rating` 字段里，而 ratingSummary 主要读的是 `mine`
+                // （那是 GET /my/watchfaces/:id/rating 的字段名）。解析器虽然两个键都试了，
+                // 也不该指望每个部署都回这个字段 —— 否则又变成「退出重进才看到评分」。
+                rating = it.copy(mine = value)
+            }.onFailure { failure ->
+                failure.throwIfCancellation()
+                rating = before
+                error = failure.userFacingMessage(context)
+            }
             submitting = false
         }
     }
@@ -3774,6 +3914,7 @@ private fun WatchStoreSocialDetailSection(
     }
 
     fun loadCollections() {
+        if (!ensureSignedIn()) return
         val token = sessionToken ?: return
         collectionPickerVisible = true
         collectionsLoading = true
@@ -3876,6 +4017,9 @@ private fun WatchStoreSocialDetailSection(
                 // 三个动作合成一行居中的纯图标：收藏 / 加入合集 / 举报。
                 // 举报本来是卡片外单独一行小字，和这两个隔开之后完全看不出是同一类
                 // 操作，而且带文字的按钮一行摆不下、圆屏上更挤（老师报的）。
+                //
+                // **未登录时这一行照样在**：能不能收藏是这块表盘的属性，不该由「我登录了没」
+                // 决定看不看得见；点下去会弹「登录后才能使用这个功能」（见 ensureSignedIn）。
                 if (visibility.showFavorite || visibility.showReport) {
                     Row(
                         modifier = Modifier.fillMaxWidth(),
@@ -3908,9 +4052,13 @@ private fun WatchStoreSocialDetailSection(
                                 icon = MiuixIcons.Blocklist,
                                 contentDescription = stringResource(R.string.watch_store_report),
                                 onClick = {
-                                    selectedReportReason = null
-                                    reportMessage = ""
-                                    reportVisible = true
+                                    // 在**打开表单之前**就拦住：让人挑完理由、写完说明再说
+                                    // 「请先登录」比一开始就说更糟。
+                                    if (ensureSignedIn()) {
+                                        selectedReportReason = null
+                                        reportMessage = ""
+                                        reportVisible = true
+                                    }
                                 },
                                 enabled = !submitting,
                             )
@@ -3966,7 +4114,6 @@ private fun WatchStoreSocialDetailSection(
         // 完全没有提示。
         if (visibility.showComments) {
             var composerOpen by remember(remoteId) { mutableStateOf(false) }
-            val signedInUsername = sessionToken?.let { notificationUsername(context) }
             val threads = remember(comments) { threadWatchStoreComments(comments) }
             // 一份线程渲染逻辑，详情卡与「全部评论」二级页共用 —— 复制两遍必然漂移出
             // 两套交互（回复框在一边能开、另一边不能）。
@@ -3975,7 +4122,7 @@ private fun WatchStoreSocialDetailSection(
                     WatchStoreCommentThreadRow(
                         repository = repository,
                         thread = thread,
-                        signedInUsername = signedInUsername,
+                        signedInAuthorId = sessionAuthorId,
                         avatarRevision = authorAvatarRevision,
                         onOpenCreator = onOpenCreator,
                         onReply = { replyTo = it; draft = "" },
@@ -3994,7 +4141,11 @@ private fun WatchStoreSocialDetailSection(
                             val token = sessionToken ?: return@WatchStoreCommentThreadRow
                             scope.launch {
                                 runCatching { withContext(Dispatchers.IO) { api.deleteMyComment(token, id) } }
-                                    .onSuccess { comments = comments.filterNot { it.id == id || it.parentCommentId == id } }
+                                    // 服务端是 ON DELETE CASCADE，整棵子树都没了；本地只砍一层
+                                    // 会留下一堆孤儿回复冒充顶级评论。
+                                    .onSuccess {
+                                        comments = commentsAfterWatchStoreCommentDeletion(comments, id)
+                                    }
                                     .onFailure { failure -> error = failure.userFacingMessage(context) }
                             }
                         },
@@ -4081,7 +4232,17 @@ private fun WatchStoreSocialDetailSection(
                         )
                     }
                     if (sessionToken == null) {
-                        Text(stringResource(R.string.watch_store_sign_in_to_comment), color = style.secondaryTextColor, fontSize = 11.sp)
+                        // 点这一句直接进登录表单。评论区本来就有这句提示，不必再多弹一个窗 ——
+                        // 与三个动作图标弹的「去登录」走的是同一条路（onRequestLogin）。
+                        Text(
+                            stringResource(R.string.watch_store_sign_in_to_comment),
+                            color = style.secondaryTextColor,
+                            fontSize = 11.sp,
+                            modifier = Modifier
+                                .clip(style.compactShape)
+                                .clickable(onClick = onRequestLogin)
+                                .padding(horizontal = 6.dp, vertical = 3.dp),
+                        )
                     }
                 }
             }
@@ -4264,6 +4425,21 @@ private fun WatchStoreSocialDetailSection(
             },
         )
     }
+
+    // 未登录点收藏 / 加入合集 / 举报 / 评分：不静默、也不发必然 401 的请求，
+    // 就在这里说清楚，并给一条直达登录表单的路。
+    if (loginPromptVisible) {
+        FlueAlertDialog(
+            onDismissRequest = { loginPromptVisible = false },
+            title = stringResource(R.string.watch_store_login_required),
+            confirmText = stringResource(R.string.watch_store_login_or_register),
+            onConfirm = {
+                loginPromptVisible = false
+                onRequestLogin()
+            },
+            dismissText = stringResource(R.string.watch_editor_cancel),
+        )
+    }
 }
 
 @Composable
@@ -4323,7 +4499,7 @@ private fun WatchStoreStat(value: String, label: String, modifier: Modifier = Mo
 private fun WatchStoreCommentThreadRow(
     repository: WatchStoreRepository,
     thread: com.flue.launcher.ui.store.WatchStoreCommentThread,
-    signedInUsername: String?,
+    signedInAuthorId: String?,
     avatarRevision: Int,
     onOpenCreator: (String) -> Unit,
     onReply: (String) -> Unit,
@@ -4342,10 +4518,44 @@ private fun WatchStoreCommentThreadRow(
 ) {
     val style = LauncherTheme.style
     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        WatchStoreCommentRow(repository, thread.root, signedInUsername, avatarRevision, onOpenCreator, onReply, editingCommentId, editingDraft, onEdit, onEditChange, onSaveEdit, onCancelEdit, onDelete)
+        WatchStoreCommentRow(
+            repository = repository,
+            comment = thread.root,
+            isThreadRoot = true,
+            replyToUsername = null,
+            signedInAuthorId = signedInAuthorId,
+            avatarRevision = avatarRevision,
+            onOpenCreator = onOpenCreator,
+            onReply = onReply,
+            editingCommentId = editingCommentId,
+            editingDraft = editingDraft,
+            onEdit = onEdit,
+            onEditChange = onEditChange,
+            onSaveEdit = onSaveEdit,
+            onCancelEdit = onCancelEdit,
+            onDelete = onDelete,
+        )
+        // 缩进只有一档（22dp）：thread.replies 已经把任意深度摊平了，层级靠每行的
+        // 「@某人」标签表达（见 threadWatchStoreComments 的注释）。手表屏宽撑不住多档缩进。
         thread.replies.forEach { reply ->
             Row(Modifier.padding(start = 22.dp)) {
-                WatchStoreCommentRow(repository, reply, signedInUsername, avatarRevision, onOpenCreator, onReply, editingCommentId, editingDraft, onEdit, onEditChange, onSaveEdit, onCancelEdit, onDelete)
+                WatchStoreCommentRow(
+                    repository = repository,
+                    comment = reply.comment,
+                    isThreadRoot = false,
+                    replyToUsername = reply.replyToUsername,
+                    signedInAuthorId = signedInAuthorId,
+                    avatarRevision = avatarRevision,
+                    onOpenCreator = onOpenCreator,
+                    onReply = onReply,
+                    editingCommentId = editingCommentId,
+                    editingDraft = editingDraft,
+                    onEdit = onEdit,
+                    onEditChange = onEditChange,
+                    onSaveEdit = onSaveEdit,
+                    onCancelEdit = onCancelEdit,
+                    onDelete = onDelete,
+                )
             }
         }
         AnimatedVisibility(
@@ -4393,7 +4603,11 @@ private fun WatchStoreCommentThreadRow(
 private fun WatchStoreCommentRow(
     repository: WatchStoreRepository,
     comment: WatchStoreComment,
-    signedInUsername: String?,
+    /** 是不是这条 thread 的顶级评论。回复入口只挂在顶级上，见下面那段注释。 */
+    isThreadRoot: Boolean,
+    /** 这条在回复谁（父评论的作者名）。顶级评论与父评论已消失时给 null。 */
+    replyToUsername: String?,
+    signedInAuthorId: String?,
     avatarRevision: Int,
     onOpenCreator: (String) -> Unit,
     onReply: (String) -> Unit,
@@ -4443,7 +4657,7 @@ private fun WatchStoreCommentRow(
                 modifier = Modifier.clickable { onOpenCreator(comment.authorUsername) },
             )
             Spacer(Modifier.weight(1f))
-            if (isOwnWatchStoreComment(comment, signedInUsername)) {
+            if (isOwnWatchStoreComment(comment, signedInAuthorId)) {
                 // 图标要对得上语义：以前「编辑」用的是**齿轮**（Settings）、
                 // 「回复」用的是**加号**，读者只能靠猜。
                 IconButton(onClick = { onEdit(comment) }, modifier = Modifier.size(30.dp)) {
@@ -4463,6 +4677,17 @@ private fun WatchStoreCommentRow(
                     )
                 }
             }
+        }
+        if (replyToUsername != null) {
+            // 「在回复谁」只能靠这个标签：任意深度都摊平到一档缩进之后，层级信息不在版式里了
+            // （见 WatchStoreCommentReply）。用 @用户名 这种通用写法，不需要额外的文案。
+            Text(
+                "@$replyToUsername",
+                color = style.accentColor,
+                fontSize = 10.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
         }
         if (editingCommentId == comment.id) {
             OutlinedTextField(
@@ -4485,8 +4710,13 @@ private fun WatchStoreCommentRow(
         } else {
             Text(comment.content, color = style.bodyColor, fontSize = 11.sp, lineHeight = 15.sp)
         }
-        if (comment.parentCommentId == null) {
+        if (isThreadRoot) {
             // 回复做成带文字的入口：一个光秃秃的图标按钮说明不了它是「回复」。
+            //
+            // 只有顶级评论摆这个入口：thread 里的回复框是挂在 thread.root.id 上的一个，
+            // 回复的回复要挂在哪一行还没定（留给 T-38/T-39 的评论区改造）。判据用
+            // isThreadRoot 而不是 parentCommentId == null —— parent 被隐藏的孤儿评论也是
+            // 一条顶级 thread，它照样该能被回复。
             Text(
                 stringResource(R.string.watch_store_reply_a11y),
                 color = style.secondaryTextColor,
@@ -4500,9 +4730,6 @@ private fun WatchStoreCommentRow(
         }
     }
 }
-
-private fun notificationUsername(context: Context): String? =
-    WatchStoreAuthStore(context).read()?.username
 
 /**
  * 已上传表盘管理覆层。
@@ -4778,6 +5005,13 @@ private fun MyUploadsOverlay(
     repository: WatchStoreRepository,
     installedFaces: List<WatchFaceDescriptor>,
     registrationEnabled: Boolean = true,
+    /**
+     * 直接落在登录表单上（而不是先显示「登录后查看我的上传」那一页）。
+     *
+     * 未登录时市场菜单里那一行叫「登录 / 注册」—— 点它再让人多点一次「登录」按钮是多余的。
+     * 已登录时这个值无意义：`session != null` 的分支根本不看 `loginFormVisible`。
+     */
+    startInLoginForm: Boolean = false,
     onDismiss: () -> Unit,
     /** G5 / H1：底部「打开网页版」→ `/dashboard`（未登录时的登录表单底下也是这一条）。 */
     onOpenWeb: (() -> Unit)? = null,
@@ -4800,7 +5034,9 @@ private fun MyUploadsOverlay(
     var deleteTarget by remember { mutableStateOf<MyWatchFaceEntry?>(null) }
     var deleteInProgress by remember { mutableStateOf(false) }
     var deleteError by remember { mutableStateOf<String?>(null) }
-    var loginFormVisible by remember { mutableStateOf(false) }
+    // 覆层每次显示都是一次新的组合（AnimatedVisibility 关掉时内容离开组合树），
+    // 所以这里的初值就是「本次进来要不要直接看到表单」。
+    var loginFormVisible by remember { mutableStateOf(startInLoginForm) }
     var username by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
     var rememberUsername by remember { mutableStateOf(false) }

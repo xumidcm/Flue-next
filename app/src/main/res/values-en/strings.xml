@@ -1640,9 +1640,9 @@
     <string name="watch_editor_attribute_pct_complete">Progress percentage</string>
     <string name="watch_editor_attribute_end_style">End cap style</string>
     <string name="watch_editor_attribute_outside_opacity">Unfilled opacity</string>
-    <string name="watch_editor_attribute_color2">Color 2 Â· gradient end</string>
-    <string name="watch_editor_attribute_color3">Color 3 Â· track</string>
-    <string name="watch_editor_attribute_color4">Color 4 Â· border</string>
+    <string name="watch_editor_attribute_color2">Color 2 · gradient end</string>
+    <string name="watch_editor_attribute_color3">Color 3 · track</string>
+    <string name="watch_editor_attribute_color4">Color 4 · border</string>
     <string name="watch_editor_attribute_outline">Outline mode</string>
     <string name="watch_editor_attribute_o_color">Outline color</string>
     <string name="watch_editor_attribute_o_size">Outline size</string>
@@ -1682,4 +1682,10 @@
     <string name="watch_editor_shape_kind_hexagon">Hexagon</string>
     <string name="watch_editor_shape_kind_star">Star</string>
     <string name="watch_editor_shape_kind_heart">Heart</string>
+
+    <!-- P0 batch additions -->
+    <string name="watch_store_login_or_register">Sign in / Register</string>
+    <string name="watch_store_login_required">Sign in to use this</string>
+    <string name="watch_store_web_view_outdated_fmt">The built-in browser is too old (%1$s); opened in the system browser instead</string>
+    <string name="watch_store_web_view_render_failed">The web store failed to load; opened in the system browser instead</string>
 </resources>

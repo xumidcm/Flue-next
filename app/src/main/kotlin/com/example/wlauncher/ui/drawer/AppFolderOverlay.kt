@@ -467,15 +467,21 @@ fun AppFolderOverlay(
             // 标题与入口用同一份文案：这个弹窗预勾了当前成员，做的是「管理」而不是
             // 单纯「添加」，两处叫法不一致会让人以为是两个不同的入口。
             title = { Text(stringResource(R.string.folder_manage_apps)) },
+            // T-06：正文是长列表 → 关掉外壳整块滚动，「完成 / 取消」才不会被顶出屏幕。
+            scrollableContent = false,
             text = {
                 if (editableCandidates.isEmpty()) {
                     Text(stringResource(R.string.folder_manage_apps_empty))
                 } else {
                     LazyColumn(
                         state = addListState,
-                        modifier = Modifier
-                            .heightIn(max = 320.dp)
-                            .flueOverscroll(addListState),
+                        // T-06：不再写死 `heightIn(max = 320.dp)`。关掉外壳滚动之后，这里
+                        // 拿到的纵向约束就是「卡高减掉标题与按钮」的剩余，列表按它自适应 ——
+                        // 320dp 在 454×454 屏上本来就超了，按钮因此摸不到。
+                        //
+                        // 这条依赖上面的 `scrollableContent = false`：卡片若可滚，纵向约束
+                        // 是 Infinity，LazyColumn 会直接抛「measured with infinity max height」。
+                        modifier = Modifier.flueOverscroll(addListState),
                         verticalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
                         items(editableCandidates, key = { it.componentKey }) { app ->

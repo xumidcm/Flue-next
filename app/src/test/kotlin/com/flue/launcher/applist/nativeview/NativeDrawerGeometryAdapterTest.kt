@@ -1,6 +1,7 @@
 package com.flue.launcher.applist.nativeview
 
 import org.junit.Assert.assertTrue
+import org.junit.Assert.assertEquals
 import org.junit.Test
 
 class NativeDrawerGeometryAdapterTest {
@@ -51,5 +52,22 @@ class NativeDrawerGeometryAdapterTest {
 
         assertTrue(result.translationX.isFinite())
         assertTrue(result.translationY.isFinite())
+    }
+
+    @Test
+    fun viewportExternalSlotIsNotPulledBackOntoTheRoundOutline() {
+        val result = NativeDrawerGeometryAdapter().resolve(
+            centerX = 40f,
+            centerY = -1f,
+            viewportWidth = 80f,
+            viewportHeight = 80f,
+            itemWidth = 32f,
+            itemHeight = 32f,
+            config = NativeAppListConfig(deviceShape = NativeDeviceShape.ROUND),
+            output = NativeSpatialChildVisual(),
+        )
+
+        assertEquals(0f, result.translationX, 0f)
+        assertEquals(0f, result.translationY, 0f)
     }
 }

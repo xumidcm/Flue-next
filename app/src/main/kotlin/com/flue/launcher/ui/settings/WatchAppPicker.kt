@@ -88,6 +88,9 @@ internal fun WatchAppPickerDialog(
 
     FlueAlertDialog(
         onDismissRequest = onDismiss,
+        // T-06：关掉外壳的整块滚动，让列表拿到有限纵向约束、按钮钉在卡底。
+        // 这个弹窗的正文就是一个长列表，正是那个参数的目标场景。
+        scrollableContent = false,
         title = {
             Text(title, color = style.titleColor, fontWeight = FontWeight.Bold)
         },
@@ -111,9 +114,16 @@ internal fun WatchAppPickerDialog(
                 )
                 Spacer(Modifier.height(6.dp))
                 LazyColumn(
-                    // 固定高度：弹窗卡片本身可滚，这里再让列表按内容长高会撑出无限
-                    // 高度约束（FlueDialog 里嵌 verticalScroll 崩过一次，同一个坑）。
-                    modifier = Modifier.height(250.dp),
+                    // T-06：高度由弹窗外壳给，这里**不再写死 dp**。
+                    //
+                    // 以前是 `Modifier.height(250.dp)`，因为卡片那层无条件套着
+                    // verticalScroll、纵向约束是 Infinity，只能写死。而 250dp 在 454×454
+                    // 屏上让整块内容涨到 483dp（可用卡高只有 209dp），按钮被顶出屏幕，
+                    // 列表又吞掉纵向拖动让外层滚不动 —— 老师报的「看不到下面的按钮」。
+                    //
+                    // 现在 `scrollableContent = false` 让约束变有限，列表按剩余空间自适应；
+                    // `fill = false` 是为了只有两三个应用时卡片跟着收，不留大片空白。
+                    modifier = Modifier.weight(1f, fill = false),
                     verticalArrangement = Arrangement.spacedBy(2.dp),
                 ) {
                     items(filtered, key = { "${it.packageName}/${it.activityClass}" }) { app ->

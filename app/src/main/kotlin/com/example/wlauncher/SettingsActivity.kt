@@ -26,6 +26,7 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.annotation.StringRes
 import androidx.activity.result.contract.ActivityResultContracts.RequestPermission
+import androidx.activity.result.contract.ActivityResultContracts.RequestMultiplePermissions
 import androidx.activity.result.contract.ActivityResultContracts.CreateDocument
 import androidx.activity.result.contract.ActivityResultContracts.OpenDocument
 import androidx.activity.compose.setContent
@@ -241,6 +242,7 @@ import com.flue.launcher.watchface.standard.WatchDateLocale
 import com.flue.launcher.watchface.standard.WatchTemperatureUnit
 import com.flue.launcher.watchface.standard.WatchWeatherLocation
 import com.flue.launcher.watchface.standard.WatchWeatherRepository
+import com.flue.launcher.watchface.standard.WatchLocationPermissionPolicy
 import com.flue.launcher.watchface.standard.hasHeartRatePermission
 import com.flue.launcher.watchface.standard.requiredHeartRatePermission
 import com.flue.launcher.watchface.store.WatchStoreRepository
@@ -735,11 +737,8 @@ private fun SettingsRootScreen(
             }
         }
     }
-    var coarseLocationPermissionGranted by remember(context) {
-        mutableStateOf(
-            ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_COARSE_LOCATION) ==
-                PackageManager.PERMISSION_GRANTED,
-        )
+    var locationPermissionGranted by remember(context) {
+        mutableStateOf(WatchLocationPermissionPolicy.isGranted(context))
     }
     // 表盘日程（{cex} / {cNxx}）。与心率完全同一套：只有用户主动点这一行才申请
     // READ_CALENDAR，没授权时那些标签渲染 `--`，一次查询都不会发。
@@ -786,11 +785,9 @@ private fun SettingsRootScreen(
             }
         }
     }
-    val coarseLocationPermissionLauncher = rememberLauncherForActivityResult(RequestPermission()) { granted ->
-        coarseLocationPermissionGranted = granted ||
-            ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_COARSE_LOCATION) ==
-            PackageManager.PERMISSION_GRANTED
-        if (coarseLocationPermissionGranted) {
+    val locationPermissionLauncher = rememberLauncherForActivityResult(RequestMultiplePermissions()) {
+        locationPermissionGranted = WatchLocationPermissionPolicy.isGranted(context)
+        if (locationPermissionGranted) {
             resolveAndUseSystemWeatherLocation()
         } else {
             Toast.makeText(
@@ -1398,11 +1395,7 @@ private fun SettingsRootScreen(
                 accessibilityServiceEnabled = FlueAccessibilityService.isEnabled(context) || accessibilityServiceConnected
                 deviceAdminEnabled = FlueDeviceAdminController.isActive(context)
                 bodySensorsPermissionGranted = hasBodySensorsPermission(context)
-                coarseLocationPermissionGranted =
-                    ContextCompat.checkSelfPermission(
-                        context,
-                        Manifest.permission.ACCESS_COARSE_LOCATION,
-                    ) == PackageManager.PERMISSION_GRANTED
+                locationPermissionGranted = WatchLocationPermissionPolicy.isGranted(context)
                 weatherLocationLabel = weatherRepository.activeLocationLabel().orEmpty()
                 weatherUsingSystemLocation = weatherRepository.isUsingSystemLocation()
                 weatherTemperatureUnit = weatherRepository.temperatureUnit()
@@ -2063,7 +2056,7 @@ private fun SettingsRootScreen(
                         title = stringResource(R.string.settings_watch_weather_city),
                         subtitle = weatherLocationLabel.takeIf(String::isNotBlank)?.let { label ->
                             stringResource(R.string.settings_watch_weather_city_selected_fmt, label)
-                        } ?: if (coarseLocationPermissionGranted && weatherUsingSystemLocation) {
+                        } ?: if (locationPermissionGranted && weatherUsingSystemLocation) {
                             stringResource(R.string.settings_watch_weather_city_system)
                         } else {
                             stringResource(R.string.settings_watch_weather_city_unset)
@@ -2089,7 +2082,7 @@ private fun SettingsRootScreen(
                 row("watch_weather_system_location") { position ->
                     ActionCard(
                         title = stringResource(R.string.settings_watch_weather_use_system),
-                        subtitle = if (coarseLocationPermissionGranted && weatherUsingSystemLocation) {
+                        subtitle = if (locationPermissionGranted && weatherUsingSystemLocation) {
                             weatherLocationLabel.takeIf(String::isNotBlank)?.let { label ->
                                 stringResource(R.string.settings_watch_weather_use_system_active_fmt, label)
                             } ?: stringResource(R.string.settings_watch_weather_use_system_active)
@@ -2106,10 +2099,10 @@ private fun SettingsRootScreen(
                             SettingsIcon(material = OfficialMiuixIcons.OfficialRefresh, miuix = OfficialMiuixIcons.OfficialRefresh)
                         },
                         onClick = {
-                            if (coarseLocationPermissionGranted) {
+                            if (locationPermissionGranted) {
                                 resolveAndUseSystemWeatherLocation()
                             } else {
-                                coarseLocationPermissionLauncher.launch(Manifest.permission.ACCESS_COARSE_LOCATION)
+                                locationPermissionLauncher.launch(WatchLocationPermissionPolicy.PERMISSIONS)
                             }
                         },
                         groupPosition = position,
@@ -4847,11 +4840,15 @@ private fun SettingsRootScreen(
             FlueAlertDialog(
                 onDismissRequest = { weatherCityDialogVisible = false },
                 title = { Text(stringResource(R.string.settings_watch_weather_city_dialog_title)) },
+                // T-06：关掉外壳整块滚动，「搜索 / 取消」才钉得住卡底。
+                // 候选城市能出七八条，原来叠着两层滚动（外壳 + 这里的 verticalScroll），
+                // 内层吞掉纵向拖动、外层滚不动，按钮就摸不到了。
+                scrollableContent = false,
                 text = {
                     Column(
-                        modifier = Modifier
-                            .heightIn(max = 360.dp)
-                            .verticalScroll(rememberScrollState()),
+                        // 高度不再写死 360dp：`scrollableContent = false` 之后这里拿到的是
+                        // 「卡高减掉标题与按钮」的剩余约束，内容超出时由这一层自己滚。
+                        modifier = Modifier.verticalScroll(rememberScrollState()),
                         verticalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
                         Text(stringResource(R.string.settings_watch_weather_city_dialog_message))

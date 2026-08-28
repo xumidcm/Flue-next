@@ -1,6 +1,8 @@
 package com.flue.launcher.watchface.standard
 
+import android.app.Activity
 import android.content.Context
+import android.content.ContextWrapper
 import android.content.Intent
 import android.net.Uri
 import android.graphics.Bitmap
@@ -21,6 +23,7 @@ import android.provider.AlarmClock
 import android.provider.MediaStore
 import android.provider.Settings
 import android.util.AttributeSet
+import android.util.Log
 import android.view.GestureDetector
 import android.view.HapticFeedbackConstants
 import android.view.KeyEvent
@@ -57,6 +60,7 @@ import java.security.MessageDigest
 import java.util.Calendar
 import java.util.Locale
 import kotlin.math.cos
+import kotlin.math.hypot
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
@@ -845,6 +849,18 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
     private val calendar = Calendar.getInstance()
     private var frameStartedAtUptimeMs = SystemClock.uptimeMillis()
     private val tapTargets = ArrayList<TapTarget>(8)
+
+    /**
+     * `color_switch_*` 选中的强调色，`null` 表示用表盘自己的 `ucolor_default`。
+     *
+     * 存这一层而不是直接改 `definition.rootAttributes`：后者是导入期产物、被多个
+     * PreparedSource 共享，改了会污染同一份定义的其它实例（编辑器预览与桌面同屏时
+     * 就是两个实例）。
+     */
+    private var userColorOverride: String? = null
+
+    /** 已经为哪些表盘弹过位置权限（按 `rootCacheKey`）。拒了就不再反复问。 */
+    private val locationPromptedFaceKeys = HashSet<String>(2)
     private val gestureDetector = GestureDetector(
         context,
         object : GestureDetector.SimpleOnGestureListener() {
@@ -1061,6 +1077,10 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
                     gravityBackdropBlurPrepared = false
                 }
                 source = replacement
+                // 换表盘要重新载入这张表盘自己的配色索引：索引是按 rootCacheKey 存的，
+                // 上一张表盘循环到第 7 档，不该让下一张也从第 7 档开始。
+                restoreWatchColorSwitchSelection(replacement)
+                requestLocationPermissionIfFaceNeedsIt(replacement)
                 loadedDescriptorKey = descriptor.stableKey
                 loadedRefreshToken = refreshToken
                 completeLiveTransformHandoffIfReady(descriptor.stableKey, refreshToken)
@@ -3363,6 +3383,25 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         // ① margin > 0 才画边框与轨道。margin == 0 时未填充区完全透明。
         val innerWidth = (width - margin * 2f).coerceAtLeast(0f)
         val innerHeight = (height - margin * 2f).coerceAtLeast(0f)
+
+        // 描边 / 阴影：几何取**外框**（整条进度条的轮廓），不随 pct_complete 变 ——
+        // 描边跟着填充头跑的话，进度一动整圈边就在抖，那不是任何人想要的效果。
+        //
+        // ⚠️ 这是 **Flue 扩展**：`WM_EFFECTS.md` §7 的支持矩阵里 progress 的
+        // Shadow / Outline / Glow 都是 `—`，所以带描边的进度条导到官方 WatchMaker /
+        // CloX / wftools 里只会画出没边的本体，不会报错也不会画错。`rounded` 在同一张
+        // 矩阵里也是 `—` 而 Flue 一直在画（见 [drawRounded]），所以这里不算新开先例。
+        //
+        // 顺序与 [drawShape] / [drawRounded] 一致：先描边、再阴影、最后本体
+        // （clox 的 z 序是描边 -2、阴影 -1）。
+        val progressRounded = watchShapeHasRoundedCorner(cornerType, radius)
+        resolveOutline(attrs, source)?.let { outline ->
+            drawRoundedOutline(canvas, width, height, radius, cornerType, progressRounded, outline, alpha)
+        }
+        resolveShadow(attrs, source)?.let { shadow ->
+            drawRoundedShadow(canvas, width, height, radius, cornerType, progressRounded, shadow, alpha)
+        }
+
         if (margin > 0f) {
             shapePaint.shader = null
             shapePaint.color = resolveColor(attrs["color4"], Color.BLACK, source)
@@ -4517,11 +4556,12 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         // running face is not.」——这里已经在 IO dispatcher 上、已经受
         // sourceGeneration 保护，是天然的导入期。先把全部属性原文编译好塞进缓存，
         // 首帧就是全命中，渲染线程不必现编译。
+        val expressionSources = definition.layers
+            .take(MAX_WATCH_LAYER_COUNT)
+            .flatMapTo(LinkedHashSet()) { layer -> layer.attributes.values }
+            .also { it += definition.rootAttributes.values }
         val expressionCompileReport = WatchmakerExpressionEvaluator.precompile(
-            sources = definition.layers
-                .take(MAX_WATCH_LAYER_COUNT)
-                .flatMapTo(LinkedHashSet()) { layer -> layer.attributes.values }
-                .also { it += definition.rootAttributes.values },
+            sources = expressionSources,
             scope = expressionScope,
         )
         return PreparedSource(
@@ -4560,6 +4600,9 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
                             WatchmakerTagResolver.requiresFastTicks(value)
                         }
                 },
+            // T-14：这张表盘有没有用到 {alat} 一族。位置权限只在真用得上的时候申请，
+            // 顺手把它算在导入期 —— 每帧扫一遍 66 个图层的属性显然不行。
+            usesLocationTags = expressionSources.any(WatchmakerTagResolver::usesLocationTags),
         )
     }
 
@@ -5508,7 +5551,8 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
             tag = normalized,
             now = now,
             snapshot = frameDataSnapshot,
-            userColor = source.definition.rootAttributes["ucolor_default"],
+            // color_switch_* 选中的色优先于表盘声明的默认色。
+            userColor = userColorOverride ?: source.definition.rootAttributes["ucolor_default"],
         )
     }
 
@@ -5595,6 +5639,19 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
                 source.exactFiles[key]
             } ?: reference.substringAfterLast('/').let { basename ->
                 source.uniqueBasenames[basename]
+            }.also { resolved ->
+                // T-13 的诊断口径：老师报「内置表盘编辑的图片全都显示不了」，但四条
+                // 加载链路查下来都是对的，所以缺的是「到底试了哪几个 key」这一手证据。
+                // 一次复现就能定位是路径多了一层、还是 basename 撞车被 uniqueBasenames
+                // 丢掉了。命中时不打，别把正常表盘的 logcat 冲掉。
+                if (resolved == null) {
+                    Log.w(
+                        TAG,
+                        "asset miss raw=$rawPath ref=$reference dir=$conventionalDirectory " +
+                            "candidates=$candidates basename=${reference.substringAfterLast('/')} " +
+                            "basenameKnown=${source.uniqueBasenames.containsKey(reference.substringAfterLast('/'))}",
+                    )
+                }
             }
         }
     }
@@ -5604,14 +5661,48 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         val action = WatchTapActionParser.parse(raw)
         val mapped = RectF(bounds)
         canvas.matrix.mapRect(mapped)
+        // opacity 要在这里就求值：命中仲裁发生在手指落下那一刻，那时候已经不在绘制
+        // 上下文里，拿不到 source 也拿不到图层 attrs 了。
+        val opacity = source?.let { prepared ->
+            attrs["opacity"]?.let { dynamicNumber(it, 100f, prepared) }
+        } ?: 100f
         // 原始动作名要一起留住：解析器会把 `widget_weather` 这类**可配置**名字短路成
         // 强类型动作（WatchTapAction.Weather），名字一丢，运行时就再也不知道该去
         // 用户映射表里查哪个键了 —— 于是设置里明明指了应用、点上去还报打不开。
-        if (!mapped.isEmpty) tapTargets += TapTarget(mapped, action, raw?.trim().orEmpty())
+        if (!mapped.isEmpty) {
+            tapTargets += TapTarget(mapped, action, raw?.trim().orEmpty(), opacity)
+        }
     }
 
+    /**
+     * 命中仲裁：**中心最近**者胜，而不是取最上层。
+     *
+     * 以前这里是 `tapTargets.asReversed().firstOrNull { it.bounds.contains(x, y) }` ——
+     * 取最上层包含该点的框。多页表盘里按钮几何是跨页重叠的（同一块屏幕区域，第 15 页
+     * 是秒表按钮、第 17 页是配色按钮），XML 里声明更晚的那个永远压在上面，于是在第 15
+     * 页点 START/STOP 实际触发的是第 17 页的 `color_switch_prev`。上游取的是中心距离最近
+     * 者，外加 50 设计单位的容半径（`wf_render.lua:2878-2903`），所以同样的表盘在上游是对的。
+     *
+     * 容半径要换算到像素：`tapTargets` 里的框已经过 `canvas.matrix` 映射，是 View 像素，
+     * 而 50 是设计空间（512×512）里的数。
+     */
     private fun dispatchTap(x: Float, y: Float) {
-        val target = tapTargets.asReversed().firstOrNull { it.bounds.contains(x, y) } ?: return
+        if (tapTargets.isEmpty()) return
+        val graceRadiusPx = WATCH_TAP_GRACE_DESIGN_UNITS *
+            ((frameCanvasScaleX + frameCanvasScaleY) / 2f).coerceAtLeast(0.0001f)
+        val candidates = tapTargets.map { candidate ->
+            WatchTapHitCandidate(
+                containsPoint = candidate.bounds.contains(x, y),
+                centerDistance = hypot(candidate.bounds.centerX() - x, candidate.bounds.centerY() - y),
+                opacity = candidate.opacity,
+            )
+        }
+        val index = selectNearestWatchTapHitIndex(candidates, graceRadiusPx) ?: return
+        val target = tapTargets[index]
+        if (target.action is WatchTapAction.ColorSwitch) {
+            applyWatchColorSwitch(target.action.direction)
+            return
+        }
         if (target.action is WatchTapAction.Script) {
             routeTapAction(target.action, target.rawAction)
             return
@@ -5625,6 +5716,76 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         } else {
             routeTapAction(target.action, target.rawAction)
         }
+    }
+
+    /**
+     * `color_switch_next` / `_prev` / `_select` —— 在 41 色强调色表里循环，重新发布
+     * `{ucolor}` / `{ucolor_b}` 并整帧重绘。
+     *
+     * 索引 0 保留给表盘自己的 `ucolor_default`，所以一圈是 42 档（上游 `wf_render.lua:2779-2803`
+     * 同样把默认色算作一档）。索引持久化到 SharedPreferences —— 上游存在脚本变量
+     * `__color_idx` 里，跟着表盘存档走；Flue 没有脚本变量的持久层，所以按表盘 key 存偏好。
+     */
+    private fun applyWatchColorSwitch(direction: Int) {
+        val prepared = source ?: return
+        val prefs = context.getSharedPreferences(WATCH_COLOR_SWITCH_PREFS, Context.MODE_PRIVATE)
+        val selection = selectWatchColor(
+            defaultColor = prepared.definition.rootAttributes["ucolor_default"],
+            currentIndex = prefs.getInt(prepared.rootCacheKey, 0),
+            direction = direction,
+        )
+        prefs.edit().putInt(prepared.rootCacheKey, selection.index).apply()
+        performHapticFeedback(HapticFeedbackConstants.CONTEXT_CLICK)
+        // 索引 0 = 回到表盘默认色，这时要把 override 摘掉而不是写死成默认色的字面量：
+        // 表盘刷新后 ucolor_default 可能变（作者改了 XML），override 不该把旧值钉住。
+        userColorOverride = selection.color.takeIf { selection.index != 0 }
+        // {ucolor} 归 STATIC 桶（WatchmakerTagBuckets.kt:96），追踪器认为它永不变，
+        // 依赖它的图层已经被烘死。invalidateAll() 把追踪器打回 pristine 才会重烘。
+        requestFullRepaint()
+    }
+
+    /** 载入表盘时恢复它上次选中的配色档位。索引越界（调色板改过）时回落到默认色。 */
+    private fun restoreWatchColorSwitchSelection(prepared: PreparedSource?) {
+        if (prepared == null) {
+            userColorOverride = null
+            return
+        }
+        val stored = context.getSharedPreferences(WATCH_COLOR_SWITCH_PREFS, Context.MODE_PRIVATE)
+            .getInt(prepared.rootCacheKey, 0)
+        userColorOverride = if (stored in 1..WATCH_COLOR_SWITCH_PALETTE.size) {
+            WATCH_COLOR_SWITCH_PALETTE[stored - 1]
+        } else {
+            null
+        }
+    }
+
+    /**
+     * T-14：表盘用到坐标 tag 时才申请位置权限。
+     *
+     * 以前唯一的运行时申请点在「设置 → 表盘天气 → 使用系统定位」里，没点过那一项的
+     * 用户，`{alat}` 一族就永远没有数据源 —— 这正是「经纬度变量读不出来」的一半原因。
+     *
+     * 一张表盘只弹一次（按 rootCacheKey 记账）：用户拒了就不该每次回表盘再问一遍。
+     * 拿不到 Activity 时安静跳过 —— 这个 View 也跑在小组件预览和编辑器缩略图里，
+     * 那些上下文下弹权限框是错的。
+     */
+    private fun requestLocationPermissionIfFaceNeedsIt(prepared: PreparedSource?) {
+        if (prepared == null || !prepared.usesLocationTags) return
+        if (WatchLocationPermissionPolicy.isGranted(context)) return
+        val activity = context.findHostActivity() ?: return
+        if (!locationPromptedFaceKeys.add(prepared.rootCacheKey)) return
+        WatchLocationPermissionPolicy.request(activity)
+    }
+
+    private fun Context.findHostActivity(): Activity? {
+        var current: Context = this
+        while (current is ContextWrapper) {
+            if (current is Activity) return current
+            val next = current.baseContext
+            if (next === current) break
+            current = next
+        }
+        return current as? Activity
     }
 
     /**
@@ -5706,6 +5867,11 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
             requestFullRepaint()
             return
         }
+        // 渲染器自己拥有的动作，不经宿主也不经 Intent：改 override + 整帧重绘就完事。
+        if (action is WatchTapAction.ColorSwitch) {
+            applyWatchColorSwitch(action.direction)
+            return
+        }
         if (action is WatchTapAction.Volume) {
             performHapticFeedback(HapticFeedbackConstants.CONTEXT_CLICK)
             val audio = context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
@@ -5780,6 +5946,8 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
             WatchTapAction.HeartRate -> null
             WatchTapAction.StopwatchStartStop -> null
             WatchTapAction.StopwatchReset -> null
+            // 上面那句 `if (action is ColorSwitch)` 已经处理掉了，这里只是让 when 穷尽。
+            is WatchTapAction.ColorSwitch -> null
             is WatchTapAction.Script -> null
             is WatchTapAction.AppLaunch -> {
                 val act = action.activityClass
@@ -5991,6 +6159,13 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         val renderPlanDiagnostics: WatchLayerGraphDiagnostics,
         val svgDocuments: Map<String, PreparedWatchSvgDocument<Path>>,
         val needsFastTicks: Boolean,
+        /**
+         * 这张表盘的属性里出现过 `{alat}` / `{alon}` / `{aalt}` 一族（T-14）。
+         *
+         * 导入期算一次。位置权限的引导只对这种表盘弹 —— 以前唯一的申请点在「设置 →
+         * 表盘天气」里，从没点过那一项的用户，坐标 tag 就永远没有数据源。
+         */
+        val usesLocationTags: Boolean = false,
     ) {
         /**
          * 声明画布换算出的设计空间尺寸，构造时算一次。
@@ -6272,6 +6447,14 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
          * 见 [launchUserMappedAction]。
          */
         val rawAction: String = "",
+        /**
+         * 求值后的 `opacity` 属性值（0–100 的原始刻度，**不是**最终 alpha）。
+         *
+         * 上游只把 `opacity` 恰为 `-1` 当成「这块热区不参与命中」（`wf_render.lua:2869-2877`
+         * 的 `tapEligible`）。`opacity=0` 仍然要参与 —— WM 生态里大量表盘用全透明图层
+         * 当隐形按钮，那是刻意的写法，不是失误。
+         */
+        val opacity: Float = 100f,
     )
 
     /** 已求值的描边参数（mode 一定不是 NONE，size/opacity 一定大于 0）。 */
@@ -6318,7 +6501,23 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
     )
 
     companion object {
+        private const val TAG = "WatchmakerFace"
         private const val DESIGN_SIZE = WatchmakerGeometry.DESIGN_SIZE
+
+        /**
+         * 命中仲裁的容半径，单位是**设计空间**（512×512）。
+         *
+         * 抄上游 `wf_render.lua:2878-2903` 的 `dist < 50`：框外 50 单位内的热区也算候选，
+         * 免得小按钮在手表上根本按不着。派发时要乘 `frameCanvasScale` 换到像素。
+         */
+        private const val WATCH_TAP_GRACE_DESIGN_UNITS = 50f
+
+        /**
+         * `color_switch_*` 的配色索引存这里，键是 `PreparedSource.rootCacheKey`（一张
+         * 表盘一档）。上游把索引存在脚本变量 `__color_idx` 里跟着存档走，Flue 没有脚本
+         * 变量的持久层，所以落到偏好文件。
+         */
+        private const val WATCH_COLOR_SWITCH_PREFS = "flue_watch_color_switch"
 
         /**
          * 同时在飞的素材解码上限。

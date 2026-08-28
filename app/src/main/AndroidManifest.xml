@@ -27,6 +27,14 @@
     <!-- Weather requests coarse location only after the user taps the system-location
          setting. Manual city search remains the no-permission fallback. -->
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+    <!-- 精确位置一起声明，但仍然是「用户点了才申请」。
+         两个理由：①Android 12+ 的系统弹窗只有在同一次请求里同时收到粗/精两个权限时，
+         才会给出「精确 / 大致」二选一；只声明粗的，用户连选精确的机会都没有。
+         ②GPS 与 passive provider 缺了 FINE 会抛 SecurityException，被 runCatching 吞掉
+         之后表现为定位一直等到超时（见 filterWatchWeatherLocationProvidersByPermission），
+         于是 {alat} / {alon} / {aalt} 永远拿不到数据源。
+         只授予粗定位时我们会主动把那两个 provider 筛掉，功能不依赖用户必须给精确位置。 -->
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <!-- Watch faces can show upcoming events through the {cex} / {cNxx} tags. The
          permission is requested only when the user taps that row in settings; until
          then those tags render as unavailable and nothing is queried. -->

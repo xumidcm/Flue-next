@@ -927,6 +927,10 @@ private fun nativeRingStableCoreFraction(config: NativeAppListConfig): Float =
  * 3. 中心附近 ≈ `k·t²`，二次起步，屏心那几个格子几乎不动 —— 弧才有「从中间鼓出去」
  *    的观感，而不是整张网平移。
  *
+ * 但 2 有个代价：位移侧靠 t > 1 继续加深，缩放侧的 t 已经夹在 1（[nativeRingChildVisual]），
+ * 于是收拢速度会超过缩小速度，相邻两圈的行距被压到小于图标本身 —— 图标叠图标。所以最终
+ * 结果再取一道 [nativeRingSpacingCeiling]（行距不得小于视觉图标高度）的上限。
+ *
  * 强度取鱼眼强度的一半（0..200% → 0..1）：100% 是出厂档，还留一倍的余量给老师往上调。
  *
  * **方屏恒为 0**（老师指定「上面下面左边右边都平铺」）。形状判定放在这条纯函数里而不是
@@ -942,7 +946,74 @@ internal fun nativeRingConvergenceFraction(
     val curvature = RING_MAX_CURVATURE * (strength / 2f)
     if (curvature <= 0f) return 0f
     val weighted = curvature * progress * progress
-    return weighted / (1f + weighted)
+    val barrel = weighted / (1f + weighted)
+    return minOf(barrel, nativeRingSpacingCeiling(progress, strength, config))
+}
+
+/**
+ * 收拢比例的**行距上限**：保证收完之后相邻两圈的间距还装得下画出来的图标。
+ *
+ * ## 为什么必须有这条上限
+ *
+ * 收拢只压位置、不压格距，压过头就是图标叠图标。而 `k·t²/(1+k·t²)` 这一族的 `t`
+ * **刻意不夹**（角上可到 1.8），缩放侧的 `t` 却夹到 1（见 [nativeRingChildVisual]）——
+ * 于是「收拢速度」在 t > 1 之后继续加深，「缩小速度」已经停住了。实算 454×454 / 4 列 /
+ * 强度 100%：行心间距被从 113.5 压到 51.6（−55%），而两行视觉半高之和是 58.7，
+ * **重叠约 7px**。列数越多、强度越大，重叠越深。这就是老师报的「圆屏星环顶上和底下
+ * 会有图标重叠」。
+ *
+ * ## 上限的形状
+ *
+ * 令 `core` 为中心稳定核占内切圆半径的比例（[nativeRingStableCoreFraction]），
+ * `A = core / (1 - core)`。收拢把「离核边缘的径向距离」`(A + t)` 映射成
+ * `(A + t)·(1 - f)`。要求这个映射相对原距离**至少保留 s 倍**（s = 一格里图标占的比例
+ * × 图标可能被画出的缩放），即 `(A + t)(1 - f) >= A + s·t`，解出来正是
+ *
+ * ```
+ * f <= t·(1 - s) / (A + t)
+ * ```
+ *
+ * 这条上限有三个好处：
+ *
+ * 1. **闭式、单调**：对 t 严格递增（A > 0 时），所以「越外圈收得越狠」这个观感不变，
+ *    只是被封了顶；夹 k 那种做法会把角上收拢从 43% 一路砍到 13%，弧基本消失；
+ * 2. `t → ∞` 时趋于 `1 - s`，映射退化成**等比缩放** —— 仍然单调，行距按 s 保留；
+ * 3. 只在 `barrel` 越过它时才生效，屏心那一片完全不受影响（barrel 在小 t 是二次的，
+ *    这条是线性的，小 t 恒有 barrel 更小）。
+ *
+ * s 里的「可能被画出的缩放」取 **1 与最小缩放的中值**：约束真正吃紧的是 t ≳ 0.6 那几圈，
+ * 那里缩放已经掉到 0.72 以下，用中值是偏保守的一侧；取最小缩放本身则偏乐观（相邻两行
+ * 里靠内那行明显大于最小缩放），实算只剩不到 1px 余量，浮点一抖就翻。
+ */
+private fun nativeRingSpacingCeiling(
+    radialProgress: Float,
+    strength: Float,
+    config: NativeAppListConfig,
+): Float {
+    val core = nativeRingStableCoreFraction(config)
+    // core 的上限夹在 0.75，不可能到 1；这里只是防除零。
+    if (core >= 1f) return 0f
+    val shoulder = core / (1f - core)
+    val iconCellRatio = nativeRingIconCellRatio(config)
+    val minimumScale = (1f - 0.42f * strength).coerceIn(0.16f, 1f)
+    val requiredStretch = (iconCellRatio * (1f + minimumScale) / 2f).coerceIn(0f, 1f)
+    val denominator = shoulder + radialProgress
+    if (denominator <= 0f) return 0f
+    return (radialProgress * (1f - requiredStretch) / denominator).coerceIn(0f, 1f)
+}
+
+/**
+ * 图标边长占格边长的比例。
+ *
+ * `ringCellSizePx` 为 0 表示「格边长按视口现算」（见 [nativeRingCellSizePx]），那时这里
+ * 拿不到真实格边长，退回 [RING_ICON_CELL_FRACTION] —— 那本来就是 `nativeRingIconSizePx`
+ * 在缩放 100% 时用的比例，两处同源。
+ */
+private fun nativeRingIconCellRatio(config: NativeAppListConfig): Float {
+    val cell = config.ringCellSizePx.takeIf { it.isFinite() && it > 0f }
+        ?: return RING_ICON_CELL_FRACTION
+    val icon = config.iconSizePx.toFloat().takeIf { it > 0f } ?: return RING_ICON_CELL_FRACTION
+    return (icon / cell).coerceIn(0f, 1f)
 }
 
 /** 星环收拢位移的两个分量。复用同一个对象，热路径不分配。 */

@@ -557,6 +557,35 @@ class WatchStoreParsingTest {
     }
 
     @Test
+    fun `rating submission response exposes the submitted rating immediately`() {
+        val summary = WatchStoreJsonParser.ratingSummary(
+            """{"success":true,"rating":4,"average":4.25,"count":8}""",
+        )
+
+        assertEquals(4, summary.mine)
+    }
+
+    @Test
+    fun `comments truncate an oversized unpaged response instead of failing the whole section`() {
+        val payload = buildString {
+            append("{\"data\":[")
+            repeat(501) { index ->
+                if (index > 0) append(',')
+                append(
+                    """{"id":"$index","content":"comment-$index","parent_comment_id":null,"created_at":"2026-01-01","user":{"id":"user-$index","username":"user_$index"}}""",
+                )
+            }
+            append("]}")
+        }
+
+        val comments = WatchStoreJsonParser.comments(payload)
+
+        assertEquals(500, comments.size)
+        assertEquals("0", comments.first().id)
+        assertEquals("499", comments.last().id)
+    }
+
+    @Test
     fun `favourites tolerate the missing screen type upstream forgets to send`() {
         // 上游那条查询 select 了 screen_type 却没放进响应，必填会直接解析失败。
         val list = WatchStoreJsonParser.favorites(

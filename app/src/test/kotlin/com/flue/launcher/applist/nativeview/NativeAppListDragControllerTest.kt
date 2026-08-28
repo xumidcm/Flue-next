@@ -167,6 +167,49 @@ class NativeAppListDragControllerTest {
     }
 
     @Test
+    fun `auto scroll keeps reorder preview active outside the folder core`() {
+        // 起拖必须先拿到严格命中的源（onDown 用 keyAt），所以 strictHitKey 在 onDown
+        // 时不能是 null；拖起来之后再把它清掉，模拟「指针落在图标核心区之外」。
+        val host = FakeDragHost().apply { hitKey = key("a") }
+        val scheduler = FakeDragScheduler()
+        val controller = NativeAppListDragController(
+            host = host,
+            scheduler = scheduler,
+            policy = policy,
+            allowFolderCreation = { true },
+        )
+        startDrag(controller, scheduler)
+        host.strictHitKey = null
+        host.reorderHitKey = key("b")
+
+        controller.onMove(10f, 50f, 800L)
+        assertEquals(1, host.previewMoveCount)
+
+        host.reorderHitKey = key("c")
+        scheduler.advanceTo(816L)
+        scheduler.runFrame()
+
+        assertEquals(2, host.previewMoveCount)
+    }
+
+    @Test
+    fun `auto scroll frames do not turn a moving pointer sample into a settled folder dwell`() {
+        val host = FakeDragHost().apply { hitKey = key("a") }
+        val scheduler = FakeDragScheduler()
+        val controller = NativeAppListDragController(host, scheduler, policy)
+        startDrag(controller, scheduler)
+
+        host.hitKey = key("b")
+        controller.onMove(10f, 50f, 800L)
+        assertEquals(null, host.folderHoverKey)
+
+        scheduler.advanceTo(1_100L)
+        scheduler.runFrame()
+
+        assertEquals(null, host.folderHoverKey)
+    }
+
+    @Test
     fun `drag auto scroll distance is stable across different frame intervals`() {
         fun scrollDistance(frameTimes: List<Long>): Float {
             val host = FakeDragHost().apply { hitKey = key("a") }

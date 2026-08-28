@@ -475,6 +475,34 @@ internal class NativeAppListRowView(
     fun positionTranslationXWithoutFlow(): Float =
         moveTranslationX + previewTranslationX + dragTranslationX
 
+    /**
+     * 空间布局算「这一格在屏幕上的什么位置」时该读的纵向位移：**不含重排预览**。
+     *
+     * ## 为什么不能读预览通道
+     *
+     * 心流的月牙横移是行 y 的函数（`nativeFlowCrescentTranslationX`），星环的收拢与鱼眼
+     * 缩放同理。`applyChildVisuals` 若拿 [positionTranslationYWithoutFlow]（含
+     * previewTranslationY）当输入，链路就闭环了：
+     *
+     *   预览位移 → 改 flowTranslationX → 改 iconCenterXInParentForHitTest()
+     *   → 拖拽命中到别的槽 → 新预览位移 → …
+     *
+     * 每帧走一遍，就是老师报的「心流布局拖动应用图标时整个列表会散掉」。月牙斜率在 454px
+     * 屏上能到 0.6 px/px，一次 100px 的避让能把图标横向甩出 60px。
+     *
+     * 预览位移本质上是**上一帧判定的结果**，把结果喂回判定的输入必然自激；而
+     * moveTranslation（RecyclerView 的 move 动画）、dragTranslation、contentTranslation
+     * （下拉画布）都不由拖拽判定产生，喂回来是稳定的，所以仍然计入。
+     *
+     * 这条与 `ui/common/ChordScale.kt` 开头那条铁律同源：只读布局值，不读被自己改过的值。
+     */
+    fun positionTranslationYWithoutPreviewOrFlow(): Float =
+        moveTranslationY + dragTranslationY + contentTranslationY
+
+    /** [positionTranslationYWithoutPreviewOrFlow] 的横向对应量。 */
+    fun positionTranslationXWithoutPreviewOrFlow(): Float =
+        moveTranslationX + dragTranslationX
+
     private fun applyCompositeTranslation() {
         translationX =
             moveTranslationX + previewTranslationX + dragTranslationX + flowTranslationX

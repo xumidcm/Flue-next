@@ -90,11 +90,15 @@ internal class NativeRingLayoutManager(
             val child = requireNotNull(getChildAt(index))
             val row = child as? NativeAppListRowView
             val positionTranslationX =
-                row?.positionTranslationXWithoutFlow() ?: child.translationX
+                row?.positionTranslationXWithoutPreviewOrFlow() ?: child.translationX
             val positionTranslationY =
-                row?.positionTranslationYWithoutFlow() ?: child.translationY
-            // 只读布局值（decorated 边界 + 拖拽位移），绝不读被 scale/translation 改过
+                row?.positionTranslationYWithoutPreviewOrFlow() ?: child.translationY
+            // 只读布局值（decorated 边界 + 拖拽 / 下拉位移），绝不读被 scale/translation 改过
             // 之后的边界 —— 那是帧率级自反馈环，ChordScale.kt 铁律一。
+            //
+            // **重排预览位移同样算「被自己改过的值」**：收拢与鱼眼都是格心坐标的函数，
+            // 一旦把预览位移喂回来，「预览 → 收拢 → 命中坐标 → 新预览」每帧走一遍。
+            // 铁律一在这里扩写为「也不能读预览位移」。
             val centerX = getDecoratedLeft(child) + getDecoratedMeasuredWidth(child) / 2f +
                 positionTranslationX
             val centerY = getDecoratedTop(child) + getDecoratedMeasuredHeight(child) / 2f +
@@ -142,6 +146,11 @@ internal class NativeRingLayoutManager(
                     itemHeight = row?.iconHeightForSafeGeometry()
                         ?.takeIf { it.isFinite() && it > 0f }
                         ?: getDecoratedMeasuredHeight(child).toFloat().coerceAtLeast(1f),
+                    // 图标尺寸的 getter 返回的是**布局值**（iconBounds，不含 visualScale）。
+                    // 鱼眼把边缘行画到 0.58 倍时，轮廓仍按 1.0 倍留位，边缘行会被多推进来
+                    // 约 40% —— 顶部/底部图标重叠的第三个成因。把这一帧真实的缩放交给
+                    // 适配器，让它按**画出来的**图标尺寸算内切余量。
+                    visualScale = visual.scale,
                     config = config,
                     output = safeGeometryScratch,
                 )

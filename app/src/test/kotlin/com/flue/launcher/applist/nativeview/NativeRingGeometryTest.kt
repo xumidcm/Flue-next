@@ -295,6 +295,30 @@ class NativeRingGeometryTest {
         assertEquals(1f, scaleAt(200f, 396f, config(fisheyeEnabled = false)), 0.001f)
     }
 
+    @Test
+    fun `adjacent edge rows keep at least their painted icon height`() {
+        val viewport = 454f
+        val cellSize = viewport / 4f
+        val iconSize = nativeRingIconSizePx(cellSize, 1f).toFloat()
+        val cfg = config(fisheyeStrength = 1f).copy(
+            ringCellSizePx = cellSize,
+            iconSizePx = iconSize.toInt(),
+        )
+        val x = cellSize / 2f
+        val outerY = 0f
+        val innerY = cellSize
+        val outerCenter = outerY + offsetAt(x, outerY, cfg, viewport, viewport).y
+        val innerCenter = innerY + offsetAt(x, innerY, cfg, viewport, viewport).y
+        val requiredDistance = iconSize * (
+            scaleAt(x, outerY, cfg) + scaleAt(x, innerY, cfg)
+            ) / 2f
+
+        assertTrue(
+            "相邻行中心距 ${innerCenter - outerCenter} 小于视觉图标高度 $requiredDistance",
+            innerCenter - outerCenter >= requiredDistance,
+        )
+    }
+
     private fun scaleAt(x: Float, y: Float, cfg: NativeAppListConfig) = nativeRingChildVisual(
         centerX = x,
         centerY = y,

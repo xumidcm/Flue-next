@@ -23,7 +23,6 @@ import com.flue.launcher.applist.model.AppItemKey
 import kotlin.math.abs
 import kotlin.math.cos
 import kotlin.math.hypot
-import kotlin.math.min
 import kotlin.math.roundToInt
 
 private const val NATIVE_DRAG_SETTLE_DURATION_MS = 130L
@@ -1557,6 +1556,14 @@ class NativeAppListView @JvmOverloads constructor(
         }
 
         override fun reorderKeyAt(x: Float, y: Float): AppItemKey? {
+            // 探针与 folderKeyAt 同源：都取**浮层图标中心**。
+            //
+            // 以前这条用裸手指坐标、folderKeyAt 用浮层图标中心，两个互斥判定看的不是
+            // 同一个点 —— 于是存在「既不合并也不避让」的死区（合并判定说手指在 A 的
+            // 核心区外，排序判定按另一个点算出的最近槽又是 A 自己）。空间布局里手指
+            // 与被拖图标中心的偏移就是抓取时的那一份，一格之内足以改变最近槽的归属。
+            val probeX = dragOverlayView?.iconCenterXInParentWithoutFlow() ?: x
+            val probeY = dragOverlayView?.iconCenterYInParentWithoutFlow() ?: y
             if (dragPreviewOrder.isNotEmpty()) {
                 // During a drag the hit test must run against the *fixed layout
                 // slots* (preview-exclusive coordinates), then map slot → the
@@ -1565,17 +1572,17 @@ class NativeAppListView @JvmOverloads constructor(
                 // coordinates, so a reorder's own preview displacement became
                 // the next hit test's input — a frame-rate feedback loop that
                 // read as the whole list convulsing while dragging.
-                return dragPreviewOrder.getOrNull(slotIndexAtPoint(x, y))
+                return dragPreviewOrder.getOrNull(slotIndexAtPoint(probeX, probeY))
             }
-            keyAtPoint(x, y)?.let { return it }
+            keyAtPoint(probeX, probeY)?.let { return it }
             val manager = layoutManager as? NativeSpatialAppListLayoutManager ?: return null
             val excludedPosition = draggedSourceKey
                 ?.let(::holderForKey)
                 ?.bindingAdapterPosition
                 ?: -1
             val position = manager.findNearestVisiblePosition(
-                x = x,
-                y = y,
+                x = probeX,
+                y = probeY,
                 maximumDistancePx = nativeSpatialReorderRadiusPx(currentConfig.value),
                 excludedPosition = excludedPosition,
             )
@@ -1612,24 +1619,30 @@ class NativeAppListView @JvmOverloads constructor(
             // 探针取拖拽浮层图标中心而不是裸手指坐标：LINEAR 下浮层 X 被钉在
             // 图标列，手指若按着行文字拖动，指针整程不与任何图标重叠，dwell
             // 永远武装不了。浮层中心才是用户眼里"正在拖的图标"所在。
+            // reorderKeyAt 用的是同一个探针，两条互斥判定必须看同一个点。
             val overlay = dragOverlayView
             val probeX = overlay?.iconCenterXInParentWithoutFlow() ?: x
             val probeY = overlay?.iconCenterYInParentWithoutFlow() ?: y
 
-            var bestRow: NativeAppListRowView? = null
             var bestKey: AppItemKey? = null
             var bestDistance = Float.MAX_VALUE
             for (index in childCount - 1 downTo 0) {
                 val child = getChildAt(index) as? NativeAppListRowView ?: continue
                 val holder = getChildViewHolder(child) as?
                     NativeAppListAdapter.AppItemViewHolder ?: continue
-                // 候选按 preview 前的固定槽位判定并反查原占位键：重排 preview
-                // 是零延迟抢槽的，悬停目标下一帧就被挪走；若按位移后坐标命中
-                // 当前显示键，候选键会被立即拔掉、dwell 计时永远走不完。
+                // 先找**最近的布局槽位**（iconCenter…ForHitTest 不含预览位移，所以在
+                // 预览动画期间是稳定的），再把槽位映射成**此刻显示在那里**的键。
+                //
+                // 映射源必须是 dragPreviewOrder，与 reorderKeyAt 同源。用
+                // dragPreviewOriginalOrder（= 适配器仍然绑着的键）会拿到一个已经挪走
+                // 的键：原始 [A,B,C,D] 拖 A 到位置 2 → 显示 [B,C,A,D]，槽位 1 眼看着
+                // 是 C，旧写法却返回 B —— 用户以为在跟 C 合并，实际跟 B 合并，而 A 腾出
+                // 的槽位 0 返回 source 被跳过，那块区域既不合并也不避让。这就是老师报的
+                // 「拖到别的图标以前的空位置也能组成文件夹」。
                 val position = holder.bindingAdapterPosition
                 val key = (
                     if (position != RecyclerView.NO_POSITION) {
-                        dragPreviewOriginalOrder.getOrNull(position)
+                        dragPreviewOrder.getOrNull(position)
                     } else {
                         null
                     }
@@ -1641,18 +1654,24 @@ class NativeAppListView @JvmOverloads constructor(
                 )
                 if (distance < bestDistance) {
                     bestDistance = distance
-                    bestRow = child
                     bestKey = key
                 }
             }
-            val row = bestRow ?: return null
             val key = bestKey ?: return null
-            // 核心半径门槛：扫过即武装会让路过的每个图标都闪一次 hover。
-            val coreRadius = min(
-                row.iconWidthForSafeGeometry(),
-                row.iconHeightForSafeGeometry(),
-            ) * 0.42f
-            if (bestDistance > coreRadius) return null
+            // 核心区门槛：扫过即武装会让路过的每个图标都闪一次 hover。
+            //
+            // 判定落在**显示该键的那一行**上，而不是占着那个布局槽位的那一行 ——
+            // 预览期间两者是不同的 View（槽位 1 的 holder 绑着 B，但显示在槽位 1 的是 C）。
+            // containsTransformedIconPoint 读的是 translation + scale 之后的真实图标框，
+            // 所以对「显示者」问才有意义。
+            //
+            // 同时它是 **scale-aware** 的，这是旧写法的第二个 bug：以前用
+            // iconWidthForSafeGeometry() * 0.42f 当半径，而那个 getter 返回布局值、
+            // 不含 visualScale，边缘行鱼眼缩到 0.58 时判定圈比看到的图标大约 1.7 倍，
+            // 擦边也会高亮。0.84 = 0.42 * 2，与旧的半径门槛在缩放 1.0 时完全等价。
+            val displayedRow = holderForKey(key)?.itemView as? NativeAppListRowView
+                ?: return null
+            if (!displayedRow.containsTransformedIconPoint(probeX, probeY, 0.84f)) return null
             val targetRow = nativeAdapter.rowForKey(key) ?: return null
             val sourceRow = draggedSourceKey
                 ?.let(nativeAdapter::rowForKey)
@@ -2112,8 +2131,11 @@ class NativeAppListView @JvmOverloads constructor(
     private fun applyChildVisual(child: View) {
         if (!usesHostChildVisualPass(activeLayoutStrategy)) return
         val rowView = child as? NativeAppListRowView
+        // 不含重排预览：圆屏列表的弦宽缩放与安全轮廓收边都是行心 y 的函数，读了预览
+        // 位移就成了「预览 → 收边/缩放 → 命中坐标 → 新预览」的帧率级自反馈环，与心流
+        // 那条同源（见 NativeAppListRowView.positionTranslationYWithoutPreviewOrFlow）。
         val positionTranslationY =
-            rowView?.positionTranslationYWithoutFlow() ?: child.translationY
+            rowView?.positionTranslationYWithoutPreviewOrFlow() ?: child.translationY
         val baseCenterY = child.top + child.height / 2f + positionTranslationY
         val visual = nativeLinearChildVisual(
             childCenterY = baseCenterY,
@@ -2122,16 +2144,32 @@ class NativeAppListView @JvmOverloads constructor(
             output = childVisualScratch,
             edgeCenterY = baseCenterY,
         )
+        // 圆屏列表的「曲线」：整行再乘一次弦宽缩放，行两端于是沿内切圆收进去。
+        // 乘而不是取代鱼眼缩放 —— 两者管的是不同的事（鱼眼是焦点强调，弦宽是圆屏裁切），
+        // 谁替换谁都会让另一项在圆屏上凭空失效。方屏时 nativeRoundChordScale 恒返回 1f。
+        //
+        // 提到安全轮廓之前算：轮廓要按**画出来的**图标尺寸留位，而画出来的倍数就是
+        // 鱼眼与弦宽的乘积。它只依赖 baseCenterY，提前算不改变结果。
+        val chordScale = nativeRoundChordScale(
+            childCenterY = baseCenterY,
+            viewportWidthPx = width.toFloat(),
+            viewportHeightPx = height.toFloat(),
+            deviceShape = currentConfig.value.deviceShape,
+        )
+        val childScale = visual.scale * chordScale
         if (rowView != null && currentConfig.value.deviceShape == NativeDeviceShape.ROUND) {
             val safe = roundGeometryAdapter.resolve(
-                centerX = rowView.iconCenterXInParentWithoutFlow(),
-                centerY = rowView.iconCenterYInParentWithoutFlow(),
+                centerX = rowView.iconCenterXInParentWithoutPreviewOrFlow(),
+                centerY = rowView.iconCenterYInParentWithoutPreviewOrFlow(),
                 viewportWidth = width.toFloat(),
                 viewportHeight = height.toFloat(),
                 itemWidth = rowView.iconWidthForSafeGeometry(),
                 itemHeight = rowView.iconHeightForSafeGeometry(),
                 config = currentConfig.value,
                 output = roundGeometryScratch,
+                // 图标尺寸的两个 getter 只给布局值；鱼眼 / 弦宽把边缘行画小之后，
+                // 轮廓仍按 1.0 倍留位会把边缘行多推进来，正是圆屏顶/底重叠的成因之一。
+                visualScale = childScale,
             )
             rowView.setFlowTranslation(
                 x = safe.translationX,
@@ -2144,16 +2182,6 @@ class NativeAppListView @JvmOverloads constructor(
         val centerPivotY = child.height / 2f
         if (child.pivotX != centerPivotX) child.pivotX = centerPivotX
         if (child.pivotY != centerPivotY) child.pivotY = centerPivotY
-        // 圆屏列表的「曲线」：整行再乘一次弦宽缩放，行两端于是沿内切圆收进去。
-        // 乘而不是取代鱼眼缩放 —— 两者管的是不同的事（鱼眼是焦点强调，弦宽是圆屏裁切），
-        // 谁替换谁都会让另一项在圆屏上凭空失效。方屏时 nativeRoundChordScale 恒返回 1f。
-        val chordScale = nativeRoundChordScale(
-            childCenterY = baseCenterY,
-            viewportWidthPx = width.toFloat(),
-            viewportHeightPx = height.toFloat(),
-            deviceShape = currentConfig.value.deviceShape,
-        )
-        val childScale = visual.scale * chordScale
         if (rowView != null) {
             rowView.setVisualScale(childScale)
         } else {

@@ -697,7 +697,7 @@ class NativeAppListRowViewBehaviorTest {
     }
 
     @Test
-    fun spatialFolderHitUsesOnlyTheLegacyCenterFortyTwoPercentRegion() {
+    fun spatialFolderHitTracksTheScaledRenderedIconCore() {
         val entries = (0 until 10).map { appEntry("component:grid-folder-$it") }
         val view = NativeAppListView(RuntimeEnvironment.getApplication()).apply {
             setConfig(
@@ -736,6 +736,92 @@ class NativeAppListRowViewBehaviorTest {
                 centerY,
             ),
         )
+        val targetRow = target as NativeAppListRowView
+        targetRow.setVisualScale(0.5f)
+        assertNull(
+            folderKeyAtOf(
+                view,
+                centerX + targetRow.iconWidthForSafeGeometry() * 0.30f,
+                centerY,
+            ),
+        )
+        view.release()
+    }
+
+    @Test
+    fun folderHitMapsTheCurrentPreviewSlotInsteadOfItsOriginalOccupant() {
+        val entries = (0 until 5).map { appEntry("component:preview-folder-$it") }
+        val view = NativeAppListView(RuntimeEnvironment.getApplication()).apply {
+            itemAnimator = null
+            setConfig(
+                drawingConfig().copy(
+                    presentation = NativeAppListPresentation.DENSE_GRID,
+                    denseGridColumns = 5,
+                    centerEdgeItems = false,
+                    fisheyeEnabled = false,
+                ),
+            )
+            setLayoutStrategy(DenseGridNativeAppListLayoutStrategy)
+            submit(
+                NativeAppListContent(
+                    snapshot = AppListSnapshot.create(1L, entries),
+                    iconsByKey = emptyMap(),
+                ),
+            )
+        }
+        measureAndLayout(view, width = 320, height = 160)
+        val host = dragHostOf(view)
+        setDraggedSourceKey(view, entries[0].key)
+        assertTrue(host.beginDragPreview(entries[0].key))
+        assertTrue(host.previewMove(entries[0].key, entries[2].key))
+        shadowOf(android.os.Looper.getMainLooper()).idleFor(Duration.ofMillis(300L))
+        val displayedTarget = (0 until view.childCount)
+            .map { view.getChildAt(it) as NativeAppListRowView }
+            .single { it.boundStableKeyOrNull() == entries[2].key }
+
+        assertEquals(
+            entries[2].key,
+            folderKeyAtOf(
+                view,
+                displayedTarget.iconCenterXInParentWithoutFlow(),
+                displayedTarget.iconCenterYInParentWithoutFlow(),
+            ),
+        )
+        view.release()
+    }
+
+    @Test
+    fun flowCurveDoesNotReadTheReorderPreviewTranslation() {
+        val entries = (0 until 12).map { appEntry("component:flow-preview-$it") }
+        val view = NativeAppListView(RuntimeEnvironment.getApplication()).apply {
+            setConfig(
+                drawingConfig().copy(
+                    presentation = NativeAppListPresentation.FLOW,
+                    flowColumns = 3,
+                    flowCellSizePx = 70f,
+                    flowCrescentBulgeFraction = 1.5f,
+                    centerEdgeItems = false,
+                    fisheyeEnabled = false,
+                    entryMotionEnabled = false,
+                ),
+            )
+            setLayoutStrategy(FlowNativeAppListLayoutStrategy)
+            submit(
+                NativeAppListContent(
+                    snapshot = AppListSnapshot.create(1L, entries),
+                    iconsByKey = emptyMap(),
+                ),
+            )
+        }
+        measureAndLayout(view, width = 320, height = 320)
+        val manager = view.layoutManager as NativeFlowLayoutManager
+        val row = requireNotNull(manager.findViewByPosition(0)) as NativeAppListRowView
+        val originalFlowX = row.translationX - row.previewTranslationX()
+
+        row.setPreviewTranslation(0f, 90f)
+        manager.reapplyChildVisuals()
+
+        assertEquals(originalFlowX, row.translationX - row.previewTranslationX(), 0.001f)
         view.release()
     }
 
@@ -3522,10 +3608,22 @@ class NativeAppListRowViewBehaviorTest {
     }
 
     private fun folderKeyAtOf(view: NativeAppListView, x: Float, y: Float): AppItemKey? {
+        return dragHostOf(view).folderKeyAt(x, y)
+    }
+
+    private fun dragHostOf(view: NativeAppListView): NativeAppListDragHost {
         val field = NativeAppListView::class.java
             .getDeclaredField("dragHost")
             .apply { isAccessible = true }
-        return (field.get(view) as NativeAppListDragHost).folderKeyAt(x, y)
+        return field.get(view) as NativeAppListDragHost
+    }
+
+    private fun setDraggedSourceKey(view: NativeAppListView, key: AppItemKey?) {
+        NativeAppListView::class.java
+            .getDeclaredField("draggedSourceKey")
+            .apply { isAccessible = true }
+            // AppItemKey is a value class, so the nullable field is lowered to its String value.
+            .set(view, key?.value)
     }
 
     private companion object {

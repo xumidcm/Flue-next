@@ -5004,7 +5004,15 @@ private fun LayerPropertiesEditor(
     var drafts by remember(layer.key, draftResetKey) {
         mutableStateOf(
             editableAttributes.associateWith { attribute ->
-                val text = layer.attributes[attribute].orEmpty()
+                // `path` 显示成「相对 images/ 的路径」。XML 里可能写着 images/foo.png
+                // （导入的外来表盘就这么写），照原样显示等于让作者接着把错误传下去 ——
+                // 规范里这个字段是约定目录**内部**的名字，多一层就变成 images/images/。
+                val raw = layer.attributes[attribute].orEmpty()
+                val text = if (attribute == "path") {
+                    normalizeWatchEditorAssetPath(layer.type, raw)
+                } else {
+                    raw
+                }
                 TextFieldValue(text, TextRange(text.length))
             },
         )
@@ -5013,8 +5021,13 @@ private fun LayerPropertiesEditor(
     // 六个颜色通道共用一个取色器，记住的是「正在给哪个属性取色」而不是布尔开关。
     var colorPickerAttribute by remember(layer.key) { mutableStateOf<String?>(null) }
 
-    fun liveValue(name: String, value: String): String? =
-        if (value.isEmpty() && name != "text") null else value
+    fun liveValue(name: String, value: String): String? = when {
+        value.isEmpty() && name != "text" -> null
+        // 写进 XML 前再规范化一次。刻意**不**回写 draft：正在打 `images/` 的时候把前缀
+        // 实时吃掉会让光标乱跳，所以显示留用户的原文，落盘的是剥好的值。
+        name == "path" -> normalizeWatchEditorAssetPath(layer.type, value)
+        else -> value
+    }
 
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Text(
@@ -7005,6 +7018,16 @@ internal val ROUNDED_STYLE_ATTRIBUTES =
  *
  * `margin` 排在 `radius` 前面是有意的：**只有 margin > 0 才画 color4 边框与 color3
  * 轨道**，所以「我的进度条没有底槽」这类问题的答案就在这一格，得让人先看到它。
+ *
+ * 描边与阴影两族是 **Flue 扩展**：`WM_EFFECTS.md` §7 的支持矩阵里 progress 的
+ * Shadow / Outline / Glow 都是 `—`，但 `rounded` 在同一张矩阵里也是 `—` 而 Flue 一直
+ * 在画，两边保持一致比守着一张我们已经不遵守的表更有用。渲染侧在
+ * `WatchmakerWatchFaceView.drawProgress` 里按外框画，导出到官方渲染器时这两族会被
+ * 忽略（不会画错，只是没有边和影）。
+ *
+ * **不给 shader**：progress 的填充段已经被 `color` → `color2` 渐变占着（规范 §7.6：
+ * 渐变只跨已填充那一段），shader 挂到同一个 Paint 上会把 color2 整个盖掉 —— 面板上
+ * 两个都能调、实际只有一个生效，比不给更糟。矩阵里 progress 的 shader 也是 `—`。
  */
 internal val PROGRESS_STYLE_ATTRIBUTES = listOf(
     "width",
@@ -7021,7 +7044,7 @@ internal val PROGRESS_STYLE_ATTRIBUTES = listOf(
     "outside_opacity",
     "alignment",
     "display",
-)
+) + OUTLINE_ATTRIBUTES + SHADOW_ATTRIBUTES
 
 /**
  * `ring`（规范 §7.3）。
@@ -7100,6 +7123,29 @@ internal fun editableAttributesFor(type: String): List<String> = buildList {
         "rounded" -> addAll(ROUNDED_STYLE_ATTRIBUTES)
         "progress" -> addAll(PROGRESS_STYLE_ATTRIBUTES)
         "ring" -> addAll(RING_STYLE_ATTRIBUTES)
+    }
+}
+
+/**
+ * 属性面板里 `path` 输入框的显示值：把任何约定目录前缀剥掉，只留「相对 `images/` 的路径」。
+ *
+ * 规范里 `path` 是**约定目录内部**的名字（`WM_FORMAT_1.0.md` §7.1「Filename inside
+ * `images/`」），所以 `images/` 这一层根本不该出现在这个字段里 —— 出现了就意味着官方
+ * 渲染器会去找 `images/images/foo.png`。写入侧一直是对的（[watchXmlAssetPath] 剥了），
+ * 但**面板显示**的是 XML 里的原文：导入的外来表盘若写了 `images/foo.png`，面板就照原样
+ * 显示，作者照着编辑等于把错误传下去。
+ *
+ * 三条规则：
+ * - `image_gif` 的序列帧用反引号分隔多段，**逐段**剥，不能整串当一个路径；
+ * - 含 `{` 的值是表达式（`path="{dynamic_image}"`），原样返回 —— 求值结果不在这里，
+ *   猜着剥只会把 tag 名切坏；
+ * - `video` 的约定目录是 `videos/`，其余都是 `images/`。
+ */
+internal fun normalizeWatchEditorAssetPath(layerType: String, rawPath: String): String {
+    if (rawPath.contains('{')) return rawPath
+    val directory = if (layerType.equals("video", ignoreCase = true)) "videos" else "images"
+    return rawPath.split('`').joinToString("`") { segment ->
+        if (segment.isBlank()) segment else watchXmlAssetPath(segment, directory)
     }
 }
 

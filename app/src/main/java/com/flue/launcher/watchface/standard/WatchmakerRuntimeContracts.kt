@@ -1964,7 +1964,11 @@ internal fun WatchTagResolution.expressionValue(): String? = when (this) {
  * [WatchTagResolution.renderedValue]，缺数据自然落成空串 / `--`。
  */
 internal fun WatchTagResolution.attributeExpressionValue(): String? = when (this) {
-    is WatchTagResolution.Resolved -> renderedValue
+    // 空串在**数值**语境里就是「没有值」：{aw3w} 一族刻意渲染成空白（见 resolve 里
+    // 那一段），可一旦有人把它代进算式，空串会让整条表达式失败、属性落回默认值 ——
+    // 那正是这个函数存在的理由，所以在这里一并收进中性 0。文本语境不经过这里，
+    // 空白照样是空白。
+    is WatchTagResolution.Resolved -> renderedValue.ifEmpty { MISSING_TAG_NEUTRAL_VALUE }
     is WatchTagResolution.Unavailable -> expressionFallback ?: MISSING_TAG_NEUTRAL_VALUE
     is WatchTagResolution.Unsupported -> MISSING_TAG_NEUTRAL_VALUE
 }
@@ -2310,6 +2314,39 @@ object WatchmakerTagResolver {
     fun requiresFastTicks(raw: String): Boolean =
         fastTickTagPattern.containsMatchIn(raw) || watchCounterRequiresFrameTicks(raw)
 
+    /**
+     * `WM_TAGS.md` §Location 的全部标签。
+     *
+     * 与 `WatchFeatureDetector.LOCATION_TAGS` 是同一份名单，只是用途不同：detector
+     * 拿它算导出包的 `features`，这里拿它判断「这张表盘要不要一次位置权限引导」。
+     * 两份必须逐字相同，`WatchmakerStudioTagValuesTest` 里有一条断言钉住 ——
+     * 漂移的后果是「市场上标着用了定位、运行时却从不申请权限」。
+     *
+     * {aw3w*} 也算在内：three-word 地址本身就是坐标的另一种写法，接上服务后同样要定位。
+     */
+    val LOCATION_TAGS: Set<String> = setOf(
+        "aalt", "alat", "alatd", "alatdd", "alon", "alond", "alondd",
+        "aw3w", "aw3w1", "aw3w2", "aw3w3",
+    )
+
+    /**
+     * 表盘文本（watch.xml 全文或单个属性）里是否用到位置标签。
+     *
+     * 不能只认「整个花括号就是一个标签」：表盘里坐标常混在算式中
+     * （`rotation="{alat*2}"`），所以进花括号之后再逐个抓标识符 —— 与
+     * `WatchFeatureDetector.tagIdentifiers` 同一口径。也不能直接对全文做子串搜索：
+     * `{alangcode}` 里就含 `ala`，而花括号外的字面文本 `alat` 只是普通文字。
+     */
+    private val BRACED_GROUP = Regex("""\{([^\{\}]*)\}""")
+    private val TAG_IDENTIFIER = Regex("""[A-Za-z_][A-Za-z0-9_]*""")
+
+    fun usesLocationTags(raw: String): Boolean =
+        BRACED_GROUP.findAll(raw).any { braced ->
+            TAG_IDENTIFIER.findAll(braced.groupValues[1]).any { identifier ->
+                identifier.value.lowercase(Locale.ROOT) in LOCATION_TAGS
+            }
+        }
+
     fun resolve(
         tag: String,
         now: Calendar,
@@ -2567,15 +2604,38 @@ object WatchmakerTagResolver {
                 ?.let { "${it.roundToInt()}° ${compassBearing(it, sixteenWay = true)}" }
 
             // ── 位置。复用天气那份已授权的定位，不另外申请权限。
-            "alat" -> snapshot.latitude?.let(::renderCoordinate)
-            "alon" -> snapshot.longitude?.let(::renderCoordinate)
-            "alatd" -> snapshot.latitude?.let { renderOneDecimal(abs(it)) }
-            "alond" -> snapshot.longitude?.let { renderOneDecimal(abs(it)) }
-            "alatdd" -> snapshot.latitude
-                ?.let { "${renderOneDecimal(abs(it))}°${if (it < 0) "S" else "N"}" }
-            "alondd" -> snapshot.longitude
-                ?.let { "${renderOneDecimal(abs(it))}°${if (it < 0) "W" else "E"}" }
-            "aalt" -> snapshot.altitudeMeters?.let { renderCompactNumber(it.toFloat()) }
+            //
+            // **没有定位数据时给 0，不给 `--`**。上游 clox 写的是
+            // `WF.location.latitude or 0`（`wf_tagdefs.lua:483-495`），无 fix 时
+            // {alat} 就是 `0`、{alatd} 是 `"0.0"`、{alatdd} 是 `"0.0°N"`、{aalt} 是 `0`。
+            // 早先这里走 `?.let{}` 落到 Unavailable，于是同一张表盘在 clox 上显示 `0`、
+            // 在 Flue 上显示 `--`，用户只能报「经纬度变量读不出来」；更糟的是 `--` 与
+            // 「不认识这个 tag」是同一个外观，连排查方向都被指错。逐位照上游才叫兼容。
+            //
+            // 权限/数据源本身的缺口另有两条：渲染层的授权引导见
+            // [WatchLocationPermissionPolicy]，{aalt} 的数据源见
+            // `WatchWeatherRepository.fetchOpenMeteo` 里的 `elevation`。
+            "alat" -> renderCoordinate(locationDegreesOrZero(snapshot.latitude))
+            "alon" -> renderCoordinate(locationDegreesOrZero(snapshot.longitude))
+            // 固定一位小数，**不能走 renderOneDecimal** —— 那条路经 renderCompactNumber
+            // 把 `.0` 吃掉，`52.0` 会渲染成 `52`。见 [renderFixedOneDecimal]。
+            "alatd" -> renderFixedOneDecimal(abs(locationDegreesOrZero(snapshot.latitude)))
+            "alond" -> renderFixedOneDecimal(abs(locationDegreesOrZero(snapshot.longitude)))
+            "alatdd" -> locationDegreesOrZero(snapshot.latitude).let { degrees ->
+                "${renderFixedOneDecimal(abs(degrees))}°${if (degrees < 0) "S" else "N"}"
+            }
+            "alondd" -> locationDegreesOrZero(snapshot.longitude).let { degrees ->
+                "${renderFixedOneDecimal(abs(degrees))}°${if (degrees < 0) "W" else "E"}"
+            }
+            // 海拔照旧走 Float：地球海拔跨度 ±9 km，Float 的有效位远够用，
+            // 而经纬度不行（见 [renderCoordinate]）。
+            "aalt" -> renderCompactNumber(locationDegreesOrZero(snapshot.altitudeMeters).toFloat())
+
+            // what3words 要第三方服务与 API key，Flue 永远拿不到值。给**空串**而不是
+            // `--`：上游引擎把没有值的变量登记成静态 ""（`wf_expr.lua` 的
+            // `engine:activate`），而表盘上一个居中的 `--` 看着像功能坏了，空白才读作
+            // 「这项没配」。仍留在 knownUnavailableTags 里，词表语义不变。
+            "aw3w", "aw3w1", "aw3w2", "aw3w3" -> ""
 
             // ── 风。规范说 {wws} 是 mph 或 m/s，我们统一 m/s（数据源直接要 m/s）。
             "wws" -> weather?.windSpeedMetersPerSecond?.let { renderOneDecimal(it) }
@@ -3066,8 +3126,42 @@ object WatchmakerTagResolver {
     private fun roundToOneDecimal(value: Float): Float =
         if (value.isFinite()) (value * 10f).roundToInt() / 10f else value
 
-    /** 经纬度本体保留完整精度（规范示例 51.5074 / -0.1278）。 */
-    private fun renderCoordinate(value: Double): String = renderCompactNumber(value.toFloat())
+    /**
+     * 经纬度本体保留完整精度（规范示例 51.5074 / -0.1278）。
+     *
+     * **不能先窄化成 Float**：Float 只有约 7 位有效十进制位，`116.397428` 会变成
+     * `116.39743`。经度小数第 6 位大约是 0.1 米量级 —— 表盘把坐标直接印在屏幕上，
+     * 我们没有资格替它改数值。整数时仍去掉 `.0`，与 clox 的 `tostring(0)` = `"0"` 对齐。
+     */
+    private fun renderCoordinate(value: Double): String =
+        if (value.isFinite() && value == value.toLong().toDouble()) {
+            value.toLong().toString()
+        } else {
+            value.toString()
+        }
+
+    /**
+     * 位置类字段的取值：缺失或非有限一律当 0。
+     *
+     * 「缺失即 0」的理由见 {alat} 那一段；顺带把 NaN / Inf 也收进同一个出口 ——
+     * [WatchDataSnapshot] 是纯数据类，谁都能塞进一个 NaN，而 `%.1f` 会老实地
+     * 渲染出 `NaN`，那比 `--` 更难看懂。
+     */
+    private fun locationDegreesOrZero(value: Double?): Double =
+        value?.takeIf(Double::isFinite) ?: 0.0
+
+    /**
+     * 固定一位小数，**位数不会因为值是整数而变少**。
+     *
+     * 不能复用 [renderOneDecimal]：那条路经 [renderCompactNumber] 把 `.0` 吃掉，
+     * `52.0` 渲染成 `52`。上游是 `fmt("%.1f", …)`（`wf_tagdefs.lua:487-489`），位数固定，
+     * 而 {alatd} 这一族常被位图字体按固定宽度排版（一个字符一个槽），少一位整块错位。
+     *
+     * Locale 锁 US：跟随系统会在德语/法语环境下把小数点写成逗号（`52,0`），
+     * 而表盘和它的表达式都只认 `.`。
+     */
+    private fun renderFixedOneDecimal(value: Double): String =
+        String.format(Locale.US, "%.1f", locationDegreesOrZero(value))
 
     /** 占比，一位小数。分母缺失或为 0 时返回 null 而不是 0 —— 那是「不知道」，不是「0%」。 */
     private fun percentOf(part: Long?, total: Long?): String? {

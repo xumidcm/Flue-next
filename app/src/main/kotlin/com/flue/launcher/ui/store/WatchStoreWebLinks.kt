@@ -132,6 +132,16 @@ internal fun StoreWebLinks(
  *
  * 全部走 [WatchStoreWebActivity]（C1 宿主），不外跳浏览器：外部浏览器没有登录 cookie，
  * 而这些页面（dashboard / profile）恰恰要登录态。
+ *
+ * ## T-11：版本门**不在这里**
+ *
+ * 内置 WebView 版本过低的外跳判定放在 [WatchStoreWebActivity] 的 `onCreate` 里，这三个
+ * 构造函数保持原样指向宿主。理由是覆盖面：`EXTRA_URL` 也可能来自别的 App 发来的 Intent，
+ * 只在按钮这一侧拦是拦不住的，而单点拦截不会漏。
+ *
+ * 判定函数本身是 [flueWebViewUsable]（[WatchStoreWebCapability] 里的独立文件）。T-42 要做
+ * 「网页版按钮的显隐」时用同一个 —— 那一条是**藏按钮**，和这里的**照常发 Intent、宿主自己
+ * 外跳**是两件事，不要把它提前塞进这三个函数里。
  */
 internal fun storeWebPageIntent(
     context: Context,

@@ -192,5 +192,8 @@ internal fun nativeRingIconSizePx(cellSizePx: Float, scale: Float): Int {
  *
  * 0.86 是「圆和圆之间看得出一道缝，但网格仍然读作铺满」的那一档：再大圆就贴上了，
  * 再小就退化成普通稀疏网格，星环那种「密到铺满屏」的观感消失。
+ *
+ * 不是 private：[nativeRingConvergenceFraction] 的行距上限要用它当兜底比例
+ * （config 里 `ringCellSizePx` 为 0 时算不出真实比例），两处必须是同一个数。
  */
-private const val RING_ICON_CELL_FRACTION = 0.86f
+internal const val RING_ICON_CELL_FRACTION = 0.86f
