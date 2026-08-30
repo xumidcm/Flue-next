@@ -54,6 +54,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -86,6 +87,8 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.NotificationsNone
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
@@ -173,10 +176,13 @@ import com.flue.launcher.ui.store.storeChordBlock
 import com.flue.launcher.ui.store.StoreWebLinkRow
 import com.flue.launcher.ui.store.StoreWebLinks
 import com.flue.launcher.ui.store.WatchStoreCreatorsOverlay
+import com.flue.launcher.ui.store.WatchStoreDetailBackTarget
+import com.flue.launcher.ui.store.WatchStoreDetailOrigin
 import com.flue.launcher.ui.store.WatchStoreProfileOverlay
 import com.flue.launcher.ui.store.WatchStoreBaseUrlDialog
 import com.flue.launcher.ui.store.WatchStoreWebActivity
 import com.flue.launcher.ui.store.storeWebPageIntent
+import com.flue.launcher.ui.store.watchStoreDetailBackTarget
 import com.flue.launcher.ui.store.storeWebWatchFaceIntent
 import com.flue.launcher.ui.store.storeWebCreatorIntent
 import com.flue.launcher.ui.store.WatchStoreCollectionsOverlay
@@ -641,6 +647,8 @@ private fun WatchStoreScreen(
     var favoritesVisible by remember { mutableStateOf(false) }
     var collectionsVisible by remember { mutableStateOf(false) }
     var creatorUsernameToOpen by remember { mutableStateOf<String?>(null) }
+    var creatorInitialBackToList by remember { mutableStateOf(false) }
+    var detailOrigin by remember { mutableStateOf<WatchStoreDetailOrigin>(WatchStoreDetailOrigin.Browse) }
     // 铃铛红点：未读数只在本页可见期间拉，且由 WatchStoreUnreadCounter 做 30 秒节流。
     // 手表电量敏感 —— 常驻轮询是不能接受的，红点晚半分钟亮没有代价。
     val unreadCounter = remember(notificationApi) { WatchStoreUnreadCounter.of(notificationApi) }
@@ -741,13 +749,29 @@ private fun WatchStoreScreen(
      * overlay frame otherwise renders with the previous request's error or
      * with loading=false and flashes "无法加载表盘" before the effect runs.
      */
-    fun openDetail(id: String) {
+    fun openDetail(
+        id: String,
+        origin: WatchStoreDetailOrigin = WatchStoreDetailOrigin.Browse,
+    ) {
         selectedDetail = null
         detailError = null
         detailLoading = true
         lastDetailId = id
         selectedId = id
+        detailOrigin = origin
         installedActionError = null
+    }
+
+    fun closeDetail() {
+        val target = watchStoreDetailBackTarget(detailOrigin)
+        selectedId = null
+        installedActionError = null
+        detailOrigin = WatchStoreDetailOrigin.Browse
+        if (target is WatchStoreDetailBackTarget.Creator) {
+            creatorUsernameToOpen = target.username
+            creatorInitialBackToList = true
+            creatorsVisible = true
+        }
     }
 
     suspend fun cleanObsoleteMarketRevisions(
@@ -948,8 +972,7 @@ private fun WatchStoreScreen(
 
     BackHandler {
         if (selectedId != null) {
-            selectedId = null
-            installedActionError = null
+            closeDetail()
         } else {
             onBack()
         }
@@ -1708,10 +1731,7 @@ private fun WatchStoreScreen(
                     error = detailError,
                     downloadState = transientState ?: persistentInstallState(overlayId),
                     actionError = installedActionError,
-                    onBack = {
-                        selectedId = null
-                        installedActionError = null
-                    },
+                    onBack = ::closeDetail,
                     onRetryDetail = {
                         detailError = null
                         detailLoading = true
@@ -1742,6 +1762,7 @@ private fun WatchStoreScreen(
                     featureFlags = featureFlags,
                     onOpenCreator = { username ->
                         creatorUsernameToOpen = username
+                        creatorInitialBackToList = false
                         creatorsVisible = true
                     },
                     onRequestLogin = requestLogin,
@@ -1909,10 +1930,12 @@ private fun WatchStoreScreen(
                 repository = repository,
                 api = notificationApi,
                 initialUsername = creatorUsernameToOpen,
-                onOpenWatchFace = { id ->
+                initialUsernameBackToList = creatorInitialBackToList,
+                onOpenWatchFace = { id, username ->
                     creatorUsernameToOpen = null
+                    creatorInitialBackToList = false
                     creatorsVisible = false
-                    openDetail(id)
+                    openDetail(id, WatchStoreDetailOrigin.Creator(username))
                 },
                 onOpenWebList = { openWebPage(WatchStoreWebPage.CREATORS) },
                 onOpenWebListExternal = { openExternalPage(WatchStoreWebPage.CREATORS) },
@@ -1927,6 +1950,7 @@ private fun WatchStoreScreen(
                 },
                 onDismiss = {
                     creatorUsernameToOpen = null
+                    creatorInitialBackToList = false
                     creatorsVisible = false
                 },
             )
@@ -2214,12 +2238,14 @@ private fun StoreHeader(
             IconButton(onClick = onOpenNotifications, modifier = Modifier.size(40.dp)) {
                 Box {
                     Icon(
-                        // miuix 官方 extended.* 全表里没有铃铛（已逐个核对），项目自绘的
-                        // 这一份本来就是按 MIUIX 规范（24dp 视口 / 1.5dp 线宽 / 圆端点）画的。
-                        imageVector = FlueMiuixIcons.Notification,
+                        imageVector = Icons.Rounded.NotificationsNone,
                         contentDescription = stringResource(R.string.watch_store_notifications),
                         tint = style.titleColor,
-                        modifier = Modifier.size(20.dp),
+                        // Material 的铃铛在 24dp 视口内左右留白比 MIUIX 网格更多，
+                        // 用更大的绘制框做光学补偿，并微微上移对齐相邻图标的视觉中心。
+                        modifier = Modifier
+                            .size(23.dp)
+                            .offset(y = (-0.5).dp),
                     )
                     if (hasUnreadNotifications) {
                         Box(
@@ -2463,7 +2489,7 @@ private fun StoreOverflowMenu(
                         // 通知排在最前：它是「有新东西」的入口，比管理类的项更急。
                         onOpenNotifications?.let { open ->
                             StoreOverflowItem(
-                                icon = FlueMiuixIcons.Notification,
+                                icon = Icons.Rounded.NotificationsNone,
                                 label = stringResource(R.string.watch_store_notifications),
                             ) {
                                 expanded = false

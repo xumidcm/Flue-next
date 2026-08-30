@@ -5192,6 +5192,43 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         }
     }
 
+    /** Loads every bitmap-font page before a one-shot offscreen preview render. */
+    suspend fun prewarmBitmapFontAtlases() {
+        if (disposed) return
+        val prepared = source ?: return
+        val fonts = prepared.bitmapFonts.values
+            .filterNotNull()
+            .distinctBy { it.file.absolutePath }
+        for (font in fonts) {
+            for ((pageIndex, path) in font.pageAssetPaths.withIndex()) {
+                if (disposed) return
+                val resolved = resolveAsset(path, prepared, conventionalDirectory = "images") ?: continue
+                val key = "${resolved.cacheRevision}\u0000decode=$MAX_FONT_ATLAS_DECODE_DIMENSION_PX"
+                val cached = synchronized(cacheLock) {
+                    fontAtlasCache[key]?.takeUnless(Bitmap::isRecycled)
+                }
+                if (cached != null) {
+                    font.pageBitmaps[pageIndex] = cached
+                    continue
+                }
+                val decoded = withContext(Dispatchers.IO) {
+                    decodeBitmapSafely(resolved.file, MAX_FONT_ATLAS_DECODE_DIMENSION_PX)
+                } ?: continue
+                var adopted: Bitmap? = null
+                synchronized(cacheLock) {
+                    if (!disposed) {
+                        adopted = fontAtlasCache[key]?.takeUnless(Bitmap::isRecycled) ?: decoded.also {
+                            putFontAtlasLocked(key, it)
+                            bitmapFailures.remove(key)
+                        }
+                    }
+                }
+                if (adopted !== decoded && !decoded.isRecycled) decoded.recycle()
+                adopted?.let { font.pageBitmaps[pageIndex] = it }
+            }
+        }
+    }
+
     /**
      * 每个视频图层的（首帧缓存键，文件）对。只解析、不解码。
      *
@@ -5482,10 +5519,7 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
             if (previous !== bitmap) retireBitmapAfterRender(previous)
         }
         fontAtlasCacheBytes += bitmap.safeAllocationByteCount()
-        while (
-            fontAtlasCache.size > MAX_FONT_ATLAS_CACHE_ENTRIES ||
-            (fontAtlasCache.size > 1 && fontAtlasCacheBytes > MAX_FONT_ATLAS_CACHE_BYTES)
-        ) {
+        while (WatchmakerFontAtlasCachePolicy.shouldEvict(fontAtlasCache.size, fontAtlasCacheBytes)) {
             val iterator = fontAtlasCache.entries.iterator()
             if (!iterator.hasNext()) break
             val eldest = iterator.next().value
@@ -6972,12 +7006,10 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         /**
          * 位图字体图集的独立预算（见 [fontAtlasCache]）。
          *
-         * 一张表盘通常只有 1~2 张图集，4 条足够；字节上限按「一张不降采样的
-         * 2048² ARGB_8888 = 16MB」留了余量，这样即便是最大的图集也不会一进来
-         * 就把自己前一张挤掉 —— 挤掉就得重解，那正是要根治的乒乓。
+         * 一些数字表盘会为时、分、日期和电量分别打包图集，活动工作集可达到 6 张
+         * 以上；条目上限必须容纳整套工作集，否则即使总字节很小也会按绘制顺序循环
+         * 驱逐并重解。字节上限仍保留 24MB，避免病态素材无限占用内存。
          */
-        private const val MAX_FONT_ATLAS_CACHE_ENTRIES = 4
-        private const val MAX_FONT_ATLAS_CACHE_BYTES = 24L * 1024L * 1024L
         private const val MAX_MOVIE_CACHE_ENTRIES = 4
 
         /**

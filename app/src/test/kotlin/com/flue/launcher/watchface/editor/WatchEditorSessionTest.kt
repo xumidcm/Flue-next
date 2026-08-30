@@ -22,6 +22,18 @@ class WatchEditorSessionTest {
     )
 
     @Test
+    fun writePreviewImageCreatesBothNormalAndDimVariants() = withTemporaryDirectory { root ->
+        WatchEditorSession.createBlank(File(root, "cache")).use { session ->
+            val preview = byteArrayOf(1, 2, 3, 4)
+
+            session.writePreviewImage(preview)
+
+            assertTrue(preview.contentEquals(File(session.draftDirectory, "preview.jpg").readBytes()))
+            assertTrue(preview.contentEquals(File(session.draftDirectory, "preview_dim.jpg").readBytes()))
+        }
+    }
+
+    @Test
     fun protectedExportWritesPxmlAndEncryptedImageTwinWithoutPlainImage() =
         withTemporaryDirectory { root ->
             WatchEditorSession.createBlank(File(root, "cache")).use { session ->

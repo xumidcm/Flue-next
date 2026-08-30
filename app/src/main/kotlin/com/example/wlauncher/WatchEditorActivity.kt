@@ -505,6 +505,7 @@ private fun WatchEditorRoute(
     suspend fun refreshDraftPreview(active: WatchEditorSession) {
         val renderer = previewRenderer ?: return
         withContext(Dispatchers.Main.immediate) {
+            runCatching { renderer.prewarmBitmapFontAtlases() }
             runCatching { renderer.prewarmVideoFirstFrames() }
         }
         // 渲染必须在主线程（读 View 持有的解码缓存），压缩再切 IO。
@@ -515,7 +516,21 @@ private fun WatchEditorRoute(
             runCatching {
                 val stream = java.io.ByteArrayOutputStream()
                 bitmap.compress(android.graphics.Bitmap.CompressFormat.JPEG, 92, stream)
-                active.writePreviewImage(stream.toByteArray())
+                val dimBitmap = android.graphics.Bitmap.createBitmap(
+                    bitmap.width,
+                    bitmap.height,
+                    android.graphics.Bitmap.Config.ARGB_8888,
+                )
+                try {
+                    val dimCanvas = android.graphics.Canvas(dimBitmap)
+                    dimCanvas.drawBitmap(bitmap, 0f, 0f, null)
+                    dimCanvas.drawColor(0x52000000, android.graphics.PorterDuff.Mode.SRC_OVER)
+                    val dimStream = java.io.ByteArrayOutputStream()
+                    dimBitmap.compress(android.graphics.Bitmap.CompressFormat.JPEG, 90, dimStream)
+                    active.writePreviewImage(stream.toByteArray(), dimStream.toByteArray())
+                } finally {
+                    dimBitmap.recycle()
+                }
             }
             bitmap.recycle()
         }

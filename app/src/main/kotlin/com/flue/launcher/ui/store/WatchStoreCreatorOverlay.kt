@@ -66,7 +66,8 @@ fun WatchStoreCreatorsOverlay(
     repository: WatchStoreRepository,
     api: HttpWatchStoreApi,
     initialUsername: String? = null,
-    onOpenWatchFace: (String) -> Unit,
+    initialUsernameBackToList: Boolean = false,
+    onOpenWatchFace: (String, String) -> Unit,
     onOpenWebList: () -> Unit,
     onOpenWebListExternal: () -> Unit,
     onOpenWebCreator: (String) -> Unit,
@@ -80,7 +81,7 @@ fun WatchStoreCreatorsOverlay(
     // 以前这里只看 selectedUsername，于是从详情进来按返回会落到一张本来没打开过的
     // 「优秀创作者」列表上（老师报的问题）。
     BackHandler {
-        if (selectedUsername != null && initialUsername == null) {
+        if (selectedUsername != null && (initialUsername == null || initialUsernameBackToList)) {
             selectedUsername = null
         } else {
             onDismiss()
@@ -101,13 +102,14 @@ fun WatchStoreCreatorsOverlay(
             repository = repository,
             api = api,
             username = selectedUsername!!,
-            onOpenWatchFace = onOpenWatchFace,
+            onOpenWatchFace = { id -> onOpenWatchFace(id, selectedUsername!!) },
             onOpenWeb = { onOpenWebCreator(selectedUsername!!) },
             onOpenWebExternal = { onOpenWebCreatorExternal(selectedUsername!!) },
             // When opened from a watch-face detail, the creator page is a child
             // route. Back must reveal that detail instead of the top-creators list.
             onBack = {
-                if (initialUsername != null) onDismiss() else selectedUsername = null
+                if (initialUsername != null && !initialUsernameBackToList) onDismiss()
+                else selectedUsername = null
             },
         )
     }

@@ -265,7 +265,8 @@ internal fun sideScreenMediaCardLayoutSpec(): MediaCardLayoutSpec =
 internal fun sideScreenContentAllowsVerticalScroll(
     showMusicCard: Boolean,
     showNotificationPreview: Boolean,
-): Boolean = showMusicCard || showNotificationPreview
+    expandedShortcutGrid: Boolean = false,
+): Boolean = showMusicCard || showNotificationPreview || expandedShortcutGrid
 
 /**
  * 负一屏挂不挂弹性回弹。
@@ -281,9 +282,11 @@ internal fun sideScreenContentAllowsVerticalScroll(
 internal fun sideScreenContentUsesElasticOverscroll(
     showMusicCard: Boolean,
     showNotificationPreview: Boolean,
+    expandedShortcutGrid: Boolean = false,
 ): Boolean = sideScreenContentAllowsVerticalScroll(
     showMusicCard = showMusicCard,
     showNotificationPreview = showNotificationPreview,
+    expandedShortcutGrid = expandedShortcutGrid,
 )
 
 internal data class MediaMarqueeSpec(

@@ -36,10 +36,11 @@ class MediaCardLayoutTest {
     }
 
     @Test
-    fun `side screen allows vertical scrolling when a card can extend past the viewport`() {
-        assertEquals(true, sideScreenContentAllowsVerticalScroll(showMusicCard = true, showNotificationPreview = false))
-        assertEquals(true, sideScreenContentAllowsVerticalScroll(showMusicCard = false, showNotificationPreview = true))
-        assertEquals(false, sideScreenContentAllowsVerticalScroll(showMusicCard = false, showNotificationPreview = false))
+    fun `side screen allows vertical scrolling for cards or the expanded shortcut grid`() {
+        assertEquals(true, sideScreenContentAllowsVerticalScroll(showMusicCard = true, showNotificationPreview = false, expandedShortcutGrid = false))
+        assertEquals(true, sideScreenContentAllowsVerticalScroll(showMusicCard = false, showNotificationPreview = true, expandedShortcutGrid = false))
+        assertEquals(true, sideScreenContentAllowsVerticalScroll(showMusicCard = false, showNotificationPreview = false, expandedShortcutGrid = true))
+        assertEquals(false, sideScreenContentAllowsVerticalScroll(showMusicCard = false, showNotificationPreview = false, expandedShortcutGrid = false))
     }
 
     @Test
@@ -48,19 +49,19 @@ class MediaCardLayoutTest {
         // 音乐卡」那一格 —— 它是默认状态，原实现在这一格丢了橡皮筋。
         assertEquals(
             true,
-            sideScreenContentUsesElasticOverscroll(showMusicCard = true, showNotificationPreview = false),
+            sideScreenContentUsesElasticOverscroll(showMusicCard = true, showNotificationPreview = false, expandedShortcutGrid = false),
         )
         assertEquals(
             true,
-            sideScreenContentUsesElasticOverscroll(showMusicCard = false, showNotificationPreview = true),
+            sideScreenContentUsesElasticOverscroll(showMusicCard = false, showNotificationPreview = true, expandedShortcutGrid = false),
         )
         assertEquals(
             true,
-            sideScreenContentUsesElasticOverscroll(showMusicCard = true, showNotificationPreview = true),
+            sideScreenContentUsesElasticOverscroll(showMusicCard = true, showNotificationPreview = true, expandedShortcutGrid = false),
         )
         assertEquals(
-            false,
-            sideScreenContentUsesElasticOverscroll(showMusicCard = false, showNotificationPreview = false),
+            true,
+            sideScreenContentUsesElasticOverscroll(showMusicCard = false, showNotificationPreview = false, expandedShortcutGrid = true),
         )
     }
 
@@ -72,10 +73,12 @@ class MediaCardLayoutTest {
                     sideScreenContentAllowsVerticalScroll(
                         showMusicCard = music,
                         showNotificationPreview = preview,
+                        expandedShortcutGrid = true,
                     ),
                     sideScreenContentUsesElasticOverscroll(
                         showMusicCard = music,
                         showNotificationPreview = preview,
+                        expandedShortcutGrid = true,
                     ),
                 )
             }

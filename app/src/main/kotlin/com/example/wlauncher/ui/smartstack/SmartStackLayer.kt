@@ -564,14 +564,16 @@ fun SmartStackLayer(
     val stepSnapshot = rememberStepSnapshot(showSteps, stepPermissionGranted)
     val slotCenters = remember { mutableStateMapOf<Int, Offset>() }
     val showNotificationPreview = notificationsEnabled && !showMusicCard
-    val usesElasticOverscroll = sideScreenContentUsesElasticOverscroll(
-        showMusicCard = showMusicCard,
-        showNotificationPreview = showNotificationPreview,
-    )
-    val canOpenNotificationsFromSide = showNotificationPreview
     // 通知横幅占一行时保留 4x2；关闭通知后利用空出的高度扩成 4x3。
     val effectiveShortcutRows = if (showNotificationPreview) 2 else 3
     val effectiveShortcutColumns = 4
+    val expandedShortcutGrid = effectiveShortcutRows >= 3
+    val usesElasticOverscroll = sideScreenContentUsesElasticOverscroll(
+        showMusicCard = showMusicCard,
+        showNotificationPreview = showNotificationPreview,
+        expandedShortcutGrid = expandedShortcutGrid,
+    )
+    val canOpenNotificationsFromSide = showNotificationPreview
     val visibleShortcutCount = effectiveShortcutRows * effectiveShortcutColumns
     LaunchedEffect(visibleShortcutCount) { slotCenters.clear() }
     val context = LocalContext.current
@@ -792,6 +794,7 @@ fun SmartStackLayer(
         val verticalScrollEnabled = sideScreenContentAllowsVerticalScroll(
             showMusicCard = showMusicCard,
             showNotificationPreview = showNotificationPreview,
+            expandedShortcutGrid = expandedShortcutGrid,
         )
         val bottomSafePadding = 18.dp
 
@@ -2170,11 +2173,20 @@ private val QuickDockIconShape = RoundedCornerShape(percent = 28)
  * 的那条内容宽度），三者左右边缘对齐才是一条竖直线。上一轮误把宽度改成
  * 「贴着图标条」，dock 就比横幅窄了一圈——老师要的不是这个。
  *
- * 要加长的是**纵向**：图标封顶放宽到 64dp、行距和内边距同步加大，两行
- * 图标撑起来的高度比原先高约 30dp，横向仍然铺满 contentWidth。
+ * 要加长的是**纵向**：4x2 保留 64dp / 14dp，关闭通知后的 4x3 放宽到
+ * 68dp / 18dp；横向仍然铺满 contentWidth。
  */
-private val QUICK_DOCK_MAX_ICON = 64.dp
-private val QUICK_DOCK_ICON_SPACING = 14.dp
+internal data class SideScreenShortcutGridSpec(
+    val maxIconSizeDp: Int,
+    val spacingDp: Int,
+)
+
+internal fun sideScreenShortcutGridSpec(rows: Int): SideScreenShortcutGridSpec =
+    if (rows >= 3) {
+        SideScreenShortcutGridSpec(maxIconSizeDp = 68, spacingDp = 18)
+    } else {
+        SideScreenShortcutGridSpec(maxIconSizeDp = 64, spacingDp = 14)
+    }
 
 /** 纵向内边距单独给，比横向大一档，dock 才「高」起来而不是「胖」起来。 */
 private val QUICK_DOCK_PADDING_HORIZONTAL = 12.dp
@@ -2199,7 +2211,8 @@ private val QUICK_DOCK_PADDING_VERTICAL = 18.dp
     val dragThresholdPx = with(density) { 10.dp.toPx() }
     val dropThresholdPx = with(density) { 68.dp.toPx() }
     val visibleSlots = remember(items.size) { items.indices.toSet() }
-    val iconSpacing = QUICK_DOCK_ICON_SPACING
+    val gridSpec = remember(rows) { sideScreenShortcutGridSpec(rows) }
+    val iconSpacing = gridSpec.spacingDp.dp
     var draggingSlot by remember { mutableStateOf<Int?>(null) }
     var pressedSlot by remember { mutableStateOf<Int?>(null) }
     var dragOffset by remember { mutableStateOf(Offset.Zero) }
@@ -2228,7 +2241,7 @@ private val QUICK_DOCK_PADDING_VERTICAL = 18.dp
     run {
         val usable = dockWidth - QUICK_DOCK_PADDING_HORIZONTAL * 2 -
             iconSpacing * (columns - 1)
-        val iconSize = (usable / columns).coerceAtMost(QUICK_DOCK_MAX_ICON)
+        val iconSize = (usable / columns).coerceAtMost(gridSpec.maxIconSizeDp.dp)
         Column(
             Modifier
                 .width(dockWidth)

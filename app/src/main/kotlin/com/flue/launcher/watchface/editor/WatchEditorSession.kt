@@ -824,14 +824,13 @@ class WatchEditorSession private constructor(
      * 会让存在 preview_dim.jpg 的老包在暗色档位下仍显示旧图。
      */
     @Synchronized
-    fun writePreviewImage(bytes: ByteArray) {
+    fun writePreviewImage(bytes: ByteArray, dimBytes: ByteArray = bytes) {
         ensureOpen()
         require(bytes.isNotEmpty()) { "预览图内容为空" }
+        require(dimBytes.isNotEmpty()) { "暗色预览图内容为空" }
         val parent = watchXmlFile.parentFile ?: throw WatchEditorException("草稿目录结构异常")
         writeAtomically(File(parent, "preview.jpg"), bytes)
-        // 只在原包已有 dim 变体时才覆盖，避免给没有它的表盘凭空加文件。
-        val dim = File(parent, "preview_dim.jpg")
-        if (dim.isFile) writeAtomically(dim, bytes)
+        writeAtomically(File(parent, "preview_dim.jpg"), dimBytes)
     }
 
     /**

@@ -9,6 +9,48 @@ import org.junit.Test
 
 class ScaleBlurModifierTest {
     @Test
+    fun preparedBackdropRecordingIsReusedUntilItsVisualInputsChange() {
+        val state = PreparedBackdropRecordState()
+
+        assertTrue(
+            state.shouldRecord(
+                width = 408,
+                height = 502,
+                frameGeneration = 7L,
+                scale = 1.22f,
+                translationYPx = 0f,
+            ),
+        )
+        assertFalse(
+            state.shouldRecord(
+                width = 408,
+                height = 502,
+                frameGeneration = 7L,
+                scale = 1.22f,
+                translationYPx = 0f,
+            ),
+        )
+        assertTrue(
+            state.shouldRecord(
+                width = 408,
+                height = 502,
+                frameGeneration = 8L,
+                scale = 1.22f,
+                translationYPx = 0f,
+            ),
+        )
+        assertTrue(
+            state.shouldRecord(
+                width = 408,
+                height = 502,
+                frameGeneration = 8L,
+                scale = 1.20f,
+                translationYPx = 3f,
+            ),
+        )
+    }
+
+    @Test
     fun liveBackdropContentIsSkippedOnlyWhenOverlayHasCapturedFrame() {
         assertFalse(
             shouldDrawLiveBackdropContent(

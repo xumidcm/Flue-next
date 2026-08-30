@@ -10,6 +10,24 @@ import org.junit.Test
 
 class WatchStoreInteractionPolicyTest {
     @Test
+    fun `detail opened from creator returns to that creator`() {
+        val origin = WatchStoreDetailOrigin.Creator("alice")
+
+        assertEquals(
+            WatchStoreDetailBackTarget.Creator("alice"),
+            watchStoreDetailBackTarget(origin),
+        )
+    }
+
+    @Test
+    fun `detail opened from browse returns to browse`() {
+        assertEquals(
+            WatchStoreDetailBackTarget.Browse,
+            watchStoreDetailBackTarget(WatchStoreDetailOrigin.Browse),
+        )
+    }
+
+    @Test
     fun `signed out overflow menu replaces management actions with login`() {
         assertEquals(
             listOf(WatchStoreAccountMenuAction.LOGIN_OR_REGISTER),

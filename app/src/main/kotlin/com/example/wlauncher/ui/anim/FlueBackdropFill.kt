@@ -150,6 +150,48 @@ private class BackdropCaptureState {
     var capturedPixelCopyGeneration: Long = Long.MIN_VALUE
     /** 上次重录九宫格镜像层时的 progress；变化小于阈值就不重录。 */
     var recordedProgress: Float = Float.NaN
+    val preparedRecordState = PreparedBackdropRecordState()
+}
+
+/**
+ * Cache key for the API 31+ prepared-frame path.
+ *
+ * RecyclerView scrolling invalidates the launcher root on every frame. The
+ * watch-face backdrop sits below the opaque app-list plate, so re-recording
+ * its full-screen bitmap for an unchanged settled geometry only creates HWUI
+ * buffers and native garbage. Keep primitive fields here so the check itself
+ * remains allocation-free in the draw hot path.
+ */
+internal class PreparedBackdropRecordState {
+    private var width = -1
+    private var height = -1
+    private var frameGeneration = Long.MIN_VALUE
+    private var scale = Float.NaN
+    private var translationYPx = Float.NaN
+
+    fun shouldRecord(
+        width: Int,
+        height: Int,
+        frameGeneration: Long,
+        scale: Float,
+        translationYPx: Float,
+    ): Boolean {
+        if (
+            this.width == width &&
+            this.height == height &&
+            this.frameGeneration == frameGeneration &&
+            this.scale == scale &&
+            this.translationYPx == translationYPx
+        ) {
+            return false
+        }
+        this.width = width
+        this.height = height
+        this.frameGeneration = frameGeneration
+        this.scale = scale
+        this.translationYPx = translationYPx
+        return true
+    }
 }
 
 /**
@@ -360,15 +402,25 @@ internal fun Modifier.flueBackdropFill(
             val preparedTranslationY =
                 (contentTranslationYFraction?.invoke() ?: (0.03f * p)) * size.height
             drawRect(Color(preparedHardwareFrames.fallbackArgb))
-            magnifiedLayer.record(this, layoutDirection, layerSize) {
-                drawLegacyBackdropCover(
-                    image = preparedHardwareFrames.clear,
-                    frames = preparedHardwareFrames,
-                    layerSize = layerSize,
-                    contentScale = preparedScale,
+            if (
+                captureState.preparedRecordState.shouldRecord(
+                    width = layerSize.width,
+                    height = layerSize.height,
+                    frameGeneration = preparedHardwareFrames.capturedGeneration,
+                    scale = preparedScale,
                     translationYPx = preparedTranslationY,
-                    alpha = 1f,
                 )
+            ) {
+                magnifiedLayer.record(this, layoutDirection, layerSize) {
+                    drawLegacyBackdropCover(
+                        image = preparedHardwareFrames.clear,
+                        frames = preparedHardwareFrames,
+                        layerSize = layerSize,
+                        contentScale = preparedScale,
+                        translationYPx = preparedTranslationY,
+                        alpha = 1f,
+                    )
+                }
             }
             val requestedBlurDp = contentBlurRadiusDp?.invoke()
                 ?.takeIf(Float::isFinite)
