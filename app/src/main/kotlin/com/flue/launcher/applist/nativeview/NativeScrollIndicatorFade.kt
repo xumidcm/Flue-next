@@ -26,8 +26,8 @@ internal const val NATIVE_SCROLL_INDICATOR_FADE_IN_MS = 110L
  */
 internal const val NATIVE_SCROLL_INDICATOR_HOLD_MS = 700L
 
-/** 淡出时长。比淡入长,退场要柔和。 */
-internal const val NATIVE_SCROLL_INDICATOR_FADE_OUT_MS = 320L
+/** 淡出时长。比淡入长,退场要柔和，同时保持在 200-300ms 的响应窗口内。 */
+internal const val NATIVE_SCROLL_INDICATOR_FADE_OUT_MS = 260L
 
 /**
  * 惯性(SETTLING)状态仍算「在动」的新鲜窗口。

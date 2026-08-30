@@ -617,6 +617,46 @@ class NativeAppListRowViewBehaviorTest {
     }
 
     @Test
+    fun scrollIndicatorFrameDriverSettlesWithoutWaitingForAListDraw() {
+        val entries = (0 until 30).map { appEntry("component:indicator-frame-$it") }
+        val view = NativeAppListView(RuntimeEnvironment.getApplication()).apply {
+            setConfig(drawingConfig())
+            submit(
+                NativeAppListContent(
+                    snapshot = AppListSnapshot.create(1L, entries),
+                    iconsByKey = emptyMap(),
+                ),
+            )
+        }
+        val activity = Robolectric.buildActivity(Activity::class.java).setup().get()
+        activity.setContentView(view)
+        view.measure(
+            View.MeasureSpec.makeMeasureSpec(320, View.MeasureSpec.EXACTLY),
+            View.MeasureSpec.makeMeasureSpec(320, View.MeasureSpec.EXACTLY),
+        )
+        view.layout(0, 0, 320, 320)
+
+        dispatch(view, MotionEvent.ACTION_DOWN, x = 160f, y = 160f, eventTime = 0L)
+        // The frame driver must advance its own clock. This idle window must
+        // return even if no RecyclerView draw callback is delivered.
+        shadowOf(android.os.Looper.getMainLooper()).idleFor(
+            Duration.ofMillis(NATIVE_SCROLL_INDICATOR_FADE_IN_MS + 32L),
+        )
+
+        dispatch(view, MotionEvent.ACTION_UP, x = 160f, y = 160f, eventTime = 200L)
+        shadowOf(android.os.Looper.getMainLooper()).idleFor(
+            Duration.ofMillis(
+                NATIVE_SCROLL_INDICATOR_HOLD_MS +
+                    NATIVE_SCROLL_INDICATOR_FADE_OUT_MS +
+                    32L,
+            ),
+        )
+
+        view.release()
+        activity.finish()
+    }
+
+    @Test
     fun spatialVisualsFollowTheDisplayedPositionDuringAMoveAnimation() {
         val entries = (0 until 20).map { appEntry("component:visual-move-$it") }
         val config = drawingConfig().copy(
@@ -1561,6 +1601,133 @@ class NativeAppListRowViewBehaviorTest {
             ),
         )
         assertEquals(0f, view.getChildAt(0).translationY, 0f)
+        view.release()
+        activity.finish()
+    }
+
+    @Test
+    fun roundLinearDragMovesTheAdjacentRowWhenThePointerStopsAtTheirMidpoint() {
+        val entries = listOf(
+            appEntry(key = "component:round-linear-a"),
+            appEntry(key = "component:round-linear-b"),
+            appEntry(key = "component:round-linear-c"),
+        )
+        val commands = mutableListOf<AppListCommand>()
+        val view = NativeAppListView(RuntimeEnvironment.getApplication()).apply {
+            onCommand = commands::add
+            setConfig(
+                drawingConfig().copy(
+                    presentation = NativeAppListPresentation.LINEAR,
+                    deviceShape = NativeDeviceShape.ROUND,
+                    centerEdgeItems = false,
+                    allowFolderCreation = false,
+                    fisheyeEnabled = false,
+                    entryMotionEnabled = false,
+                ),
+            )
+            submit(
+                NativeAppListContent(
+                    snapshot = AppListSnapshot.create(1L, entries),
+                    iconsByKey = emptyMap(),
+                ),
+            )
+        }
+        val activity = Robolectric.buildActivity(Activity::class.java).setup().get()
+        activity.setContentView(view)
+        measureAndLayout(view, width = 100, height = 120)
+
+        val source = requireNotNull(view.layoutManager?.findViewByPosition(0))
+            as NativeAppListRowView
+        val target = requireNotNull(view.layoutManager?.findViewByPosition(1))
+            as NativeAppListRowView
+        val sourceX = source.iconCenterXInParentForHitTest()
+        val sourceY = source.iconCenterYInParentForHitTest()
+        val targetY = target.iconCenterYInParentForHitTest()
+        val midpointY = (sourceY + targetY) / 2f
+        val betweenAdjacentRowsY = midpointY + 4f
+
+        dispatch(view, MotionEvent.ACTION_DOWN, x = sourceX, y = sourceY, eventTime = 0L)
+        shadowOf(android.os.Looper.getMainLooper()).idleFor(Duration.ofMillis(620L))
+        dispatch(view, MotionEvent.ACTION_MOVE, x = sourceX, y = betweenAdjacentRowsY, eventTime = 621L)
+        dispatch(view, MotionEvent.ACTION_MOVE, x = sourceX, y = betweenAdjacentRowsY, eventTime = 640L)
+
+        val centers = (0 until view.childCount).joinToString { index ->
+            val row = view.getChildAt(index) as NativeAppListRowView
+            "${row.boundStableKeyOrNull()?.value}:layout=${row.top + row.height / 2f}," +
+                "hit=${row.iconCenterYInParentForHitTest()},preview=${row.previewTranslationY()}"
+        }
+        assertEquals(
+            "source=$sourceY target=$targetY midpoint=$midpointY sample=$betweenAdjacentRowsY centers=$centers",
+            listOf(entries[1].key, entries[0].key, entries[2].key),
+            dragPreviewOrderOf(view),
+        )
+        assertTrue(commands.contains(AppListCommand.DismissActions))
+
+        dispatch(view, MotionEvent.ACTION_CANCEL, x = sourceX, y = betweenAdjacentRowsY, eventTime = 641L)
+        view.release()
+        activity.finish()
+    }
+
+    @Test
+    fun roundLinearDragReleasesTheAdjacentRowWhenPointerLeavesTheGap() {
+        val entries = listOf(
+            appEntry(key = "component:round-linear-gap-a"),
+            appEntry(key = "component:round-linear-gap-b"),
+            appEntry(key = "component:round-linear-gap-c"),
+        )
+        val commands = mutableListOf<AppListCommand>()
+        val view = NativeAppListView(RuntimeEnvironment.getApplication()).apply {
+            onCommand = commands::add
+            setConfig(
+                drawingConfig().copy(
+                    presentation = NativeAppListPresentation.LINEAR,
+                    deviceShape = NativeDeviceShape.ROUND,
+                    centerEdgeItems = false,
+                    allowFolderCreation = false,
+                    fisheyeEnabled = false,
+                    entryMotionEnabled = false,
+                ),
+            )
+            submit(
+                NativeAppListContent(
+                    snapshot = AppListSnapshot.create(1L, entries),
+                    iconsByKey = emptyMap(),
+                ),
+            )
+        }
+        val activity = Robolectric.buildActivity(Activity::class.java).setup().get()
+        activity.setContentView(view)
+        measureAndLayout(view, width = 100, height = 120)
+
+        val source = requireNotNull(view.layoutManager?.findViewByPosition(0))
+            as NativeAppListRowView
+        val target = requireNotNull(view.layoutManager?.findViewByPosition(1))
+            as NativeAppListRowView
+        val sourceX = source.iconCenterXInParentForHitTest()
+        val sourceY = source.iconCenterYInParentForHitTest()
+        val targetY = target.iconCenterYInParentForHitTest()
+        val midpointY = (sourceY + targetY) / 2f
+        val gapY = midpointY + 8f
+
+        dispatch(view, MotionEvent.ACTION_DOWN, x = sourceX, y = sourceY, eventTime = 0L)
+        shadowOf(android.os.Looper.getMainLooper()).idleFor(Duration.ofMillis(620L))
+        dispatch(view, MotionEvent.ACTION_MOVE, x = sourceX, y = gapY, eventTime = 621L)
+        dispatch(view, MotionEvent.ACTION_MOVE, x = sourceX, y = gapY, eventTime = 640L)
+        assertEquals(
+            listOf(entries[1].key, entries[0].key, entries[2].key),
+            dragPreviewOrderOf(view),
+        )
+
+        // Move back toward the gap's other side without first crossing the
+        // source's current virtual slot. The neighbour must yield immediately.
+        dispatch(view, MotionEvent.ACTION_MOVE, x = sourceX, y = midpointY + 3f, eventTime = 660L)
+
+        assertEquals(
+            listOf(entries[0].key, entries[1].key, entries[2].key),
+            dragPreviewOrderOf(view),
+        )
+
+        dispatch(view, MotionEvent.ACTION_CANCEL, x = sourceX, y = midpointY + 3f, eventTime = 661L)
         view.release()
         activity.finish()
     }
@@ -3213,6 +3380,18 @@ class NativeAppListRowViewBehaviorTest {
         assertTrue(row.containsTransformedIconPoint(72f, 90f, centerFraction = 0.64f))
         assertFalse(row.containsTransformedIconPoint(76f, 90f, centerFraction = 0.64f))
         assertFalse(row.containsTransformedIconPoint(Float.NaN, 90f, centerFraction = 0.64f))
+    }
+
+    @Test
+    fun reorderHitCenterTracksTheRenderedIconWhenTheLinearRowIsScaled() {
+        val row = NativeAppListRowView(RuntimeEnvironment.getApplication())
+        row.bind(boundRow(null), resolvedDrawingConfig())
+        measureAndLayout(row)
+        row.setVisualScale(0.5f)
+
+        // The icon is laid out at x=14, but the row's centered transform pivot
+        // moves its rendered centre to x=32 when scaleX is 0.5.
+        assertEquals(32f, row.iconCenterXInParentForHitTest(), 0.001f)
     }
 
     @Test

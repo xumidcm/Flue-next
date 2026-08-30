@@ -41,6 +41,13 @@ internal object WatchStaticFlatten {
         if (layer.isGroup) return false
         val type = layer.type.trim().lowercase(Locale.ROOT)
         val attrs = layer.attributes
+        // Bitmap-font glyphs are backed by asynchronously decoded atlas pages.
+        // Keeping them in a baked segment can expose the segment while an atlas
+        // replacement is still settling, which produces a one-frame text blink.
+        // Keep the surrounding static artwork bakeable and draw these glyphs live.
+        if (type.startsWith("text") && attrs["font"]?.trim()?.startsWith("bm:", true) == true) {
+            return false
+        }
         // 3. 视频图层由 TextureView 承载，根本不在 Canvas 上。
         if (type == "video") return false
         // Script globals/functions can mutate on every on_millisecond or tap.

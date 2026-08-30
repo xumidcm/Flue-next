@@ -118,6 +118,11 @@ class NativeScrollIndicatorFadeTest {
         assertTrue("同样 16ms 里淡入($stepIn) 应走得比淡出($stepOut) 多", stepIn > stepOut)
     }
 
+    @Test
+    fun `fade out stays within the responsive watch window`() {
+        assertTrue(NATIVE_SCROLL_INDICATOR_FADE_OUT_MS in 200L..300L)
+    }
+
     /** 走满时长正好到位,不多不少。 */
     @Test
     fun `a full duration lands exactly on the target`() {

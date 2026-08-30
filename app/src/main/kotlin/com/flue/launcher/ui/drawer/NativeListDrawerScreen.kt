@@ -535,18 +535,6 @@ internal fun nativeListDrawerConfig(request: NativeListDrawerConfigRequest): Nat
     val ringIconSizePx = nativeRingIconSizePx(cellSizePx = ringCellSizePx, scale = scale)
     val scaledIconSizeDp = (request.iconSizeDp * scale).coerceIn(24f, 128f)
     val scaledVerticalPaddingDp = (10f * scale).coerceIn(4f, 24f)
-    // 圆屏列表（LINEAR）的纵向行距单独收紧。
-    //
-    // 10dp 的上下行距在方屏合适；圆屏上下两端要让给弧形边框，结果中段只有约三行
-    // 保持「正常间距」，其余全被鱼眼压缩 + 圆内软钳堆到上下两角（老师截图：上下
-    // 图标叠成一摞，「只能正常显示三个，上下间隔太远」）。行距收一半后中段能站住
-    // 四五行，边缘的堆积也随之减轻。只动 LINEAR：其余布局的纵向间距是格子几何的
-    // 事，不归行距管。
-    val linearVerticalPaddingDp = if (request.isRoundDevice) {
-        (5f * scale).coerceIn(2f, 12f)
-    } else {
-        scaledVerticalPaddingDp
-    }
     val scaledHorizontalPaddingDp = (16f * scale).coerceIn(10f, 32f)
     val scaledIconTextGapDp = (14f * scale).coerceIn(8f, 28f)
     val scaledTextSizeSp = (16f * scale).coerceIn(10f, 32f)
@@ -555,7 +543,7 @@ internal fun nativeListDrawerConfig(request: NativeListDrawerConfigRequest): Nat
         ?: honeycombIconSizePx.takeIf { it > 0 }
         ?: (scaledIconSizeDp * density).roundToInt()
         .coerceAtLeast(1)
-    val verticalPaddingPx = (linearVerticalPaddingDp * density).roundToInt().coerceAtLeast(0)
+    val verticalPaddingPx = (scaledVerticalPaddingDp * density).roundToInt().coerceAtLeast(0)
     val horizontalPaddingPx = (scaledHorizontalPaddingDp * density).roundToInt().coerceAtLeast(0)
     val honeycombCellSizePx = if (request.presentation == NativeAppListPresentation.HONEYCOMB) {
         iconSizePx * 1.02f

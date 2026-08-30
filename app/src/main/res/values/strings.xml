@@ -1222,6 +1222,7 @@
     <string name="watch_store_profile_avatar_unreadable">这张图读不出来，换一张试试</string>
     <string name="watch_store_profile_avatar_too_large">压缩后仍超过 2MB，换一张试试</string>
     <string name="watch_store_profile_change_password">修改密码</string>
+    <string name="watch_store_profile_change_password_action">点击修改</string>
     <string name="watch_store_profile_current_password">当前密码</string>
     <string name="watch_store_profile_new_password">新密码</string>
     <string name="watch_store_profile_password_changed">密码已更新</string>

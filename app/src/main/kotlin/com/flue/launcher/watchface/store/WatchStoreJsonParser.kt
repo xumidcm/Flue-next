@@ -415,6 +415,7 @@ internal object WatchStoreJsonParser {
             authorId = user?.let { optionalString(it, "id", MAX_URL_LENGTH) }.orEmpty(),
             authorUsername = user?.let { optionalString(it, "username", MAX_NAME_LENGTH) }.orEmpty(),
             authorAvatarUrl = user?.let { optionalStringOrNull(it, "avatar_url", MAX_URL_LENGTH) },
+            authorAvatarVersion = user?.optLong("avatar_version", 0L) ?: 0L,
         )
     }
 

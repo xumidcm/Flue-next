@@ -46,3 +46,16 @@ internal fun nativeRoundChordScale(
         viewportWidth = viewportWidthPx,
     )
 }
+
+/** LINEAR round-screen rows always receive the chord transform at draw time. */
+internal fun nativeRoundLinearRowScale(
+    childCenterY: Float,
+    viewportWidthPx: Float,
+    viewportHeightPx: Float,
+    fisheyeEnabled: Boolean,
+): Float = nativeRoundChordScale(
+    childCenterY = childCenterY,
+    viewportWidthPx = viewportWidthPx,
+    viewportHeightPx = viewportHeightPx,
+    deviceShape = NativeDeviceShape.ROUND,
+)

@@ -28,6 +28,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -52,6 +53,7 @@ import com.flue.launcher.ui.style.FlueAlertDialog
 import com.flue.launcher.ui.style.FlueLoadingIndicator
 import com.flue.launcher.ui.style.FlueSettingsRow
 import com.flue.launcher.ui.theme.LauncherTheme
+import com.flue.launcher.ui.theme.WatchColors
 import com.flue.launcher.watchStoreSocialErrorMessage
 import com.flue.launcher.watchface.store.HttpWatchStoreApi
 import com.flue.launcher.watchface.store.WatchStoreAccount
@@ -105,6 +107,7 @@ fun WatchStoreProfileOverlay(
 
     var account by remember(cached) { mutableStateOf(cached?.toProfileAccountSnapshot()) }
     var avatarUrl by remember { mutableStateOf(cached?.avatarUrl) }
+    var avatarVersion by remember { mutableLongStateOf(cached?.avatarVersion ?: 0L) }
     var loading by remember { mutableStateOf(true) }
     var loadError by remember { mutableStateOf<String?>(null) }
     /** 非空时盖一层转圈 + 文案（上传头像 / 提交资料）。 */
@@ -124,12 +127,22 @@ fun WatchStoreProfileOverlay(
     LaunchedEffect(token) {
         loading = true
         loadError = null
-        runCatching { withContext(Dispatchers.IO) { api.getAccount(token) } }
-            .onSuccess { fetched ->
+        runCatching {
+            val fetched = withContext(Dispatchers.IO) { api.getAccount(token) }
+            val version = withContext(Dispatchers.IO) {
+                StoreAuthorAvatars.invalidate(fetched.username)
+                val previous = authStore.read()?.avatarUrl
+                val persisted = authStore.writeProfile(fetched)
+                listOfNotNull(previous, fetched.avatarUrl).distinct().forEach {
+                    repository.invalidateSiteImage(it)
+                }
+                persisted?.avatarVersion
+            }
+            fetched to version
+        }.onSuccess { (fetched, version) ->
                 account = fetched
                 avatarUrl = fetched.avatarUrl
-                // 快照刷新一次：下次进来首屏就是最新的。
-                withContext(Dispatchers.IO) { authStore.writeProfile(fetched) }
+                avatarVersion = version ?: (avatarVersion + 1L)
             }
             .onFailure { error ->
                 error.throwIfCancellation()
@@ -146,11 +159,21 @@ fun WatchStoreProfileOverlay(
     fun submit(update: WatchStoreProfileUpdate) {
         busyMessage = context.getString(R.string.watch_store_profile_saving)
         scope.launch {
-            runCatching { withContext(Dispatchers.IO) { api.updateProfile(token, update) } }
-                .onSuccess { updated ->
+            runCatching {
+                val updated = withContext(Dispatchers.IO) { api.updateProfile(token, update) }
+                val version = withContext(Dispatchers.IO) {
+                    val previous = authStore.read()?.avatarUrl
+                    val persisted = authStore.writeProfile(updated)
+                    listOfNotNull(previous, updated.avatarUrl).distinct().forEach {
+                        repository.invalidateSiteImage(it)
+                    }
+                    persisted?.avatarVersion
+                }
+                updated to version
+            }.onSuccess { (updated, version) ->
                     account = updated
                     avatarUrl = updated.avatarUrl
-                    withContext(Dispatchers.IO) { authStore.writeProfile(updated) }
+                    avatarVersion = version ?: (avatarVersion + 1L)
                     notice = context.getString(R.string.watch_store_profile_saved)
                 }
                 .onFailure { error ->
@@ -193,6 +216,7 @@ fun WatchStoreProfileOverlay(
                         avatarUrl = avatarUrl,
                         name = username,
                         size = 76.dp,
+                        avatarVersion = avatarVersion,
                         onClick = { imagePicker.launch(AVATAR_PICKER_MIME_TYPES) },
                         onLongClick = {
                             browserRequest = InternalFileBrowserRequest(
@@ -261,7 +285,7 @@ fun WatchStoreProfileOverlay(
             )
             ProfileValueRow(
                 label = stringResource(R.string.watch_store_profile_change_password),
-                value = null,
+                value = stringResource(R.string.watch_store_profile_change_password_action),
                 onClick = { passwordVisible = true },
             )
             Spacer(Modifier.height(2.dp))
@@ -277,7 +301,7 @@ fun WatchStoreProfileOverlay(
             ) {
                 Text(
                     stringResource(R.string.watch_store_logout),
-                    color = LauncherTheme.style.secondaryTextColor,
+                    color = WatchColors.ActiveRed,
                 )
             }
         }
@@ -402,10 +426,17 @@ fun WatchStoreProfileOverlay(
                                 // 上游回的是新地址。它可能与旧地址同名（覆盖上传），所以
                                 // 即便字符串没变也要让头像重新取一次 —— 这里靠 remember key
                                 // 变化做不到，交给下面的 avatarUrl 赋值 + 缓存写入。
-                                avatarUrl = uploadedUrl ?: avatarUrl
-                                withContext(Dispatchers.IO) {
-                                    authStore.writeAvatarUrl(uploadedUrl)
+                                val previousAvatarUrl = avatarUrl
+                                val nextVersion = withContext(Dispatchers.IO) {
+                                    StoreAuthorAvatars.invalidate(username)
+                                    val version = authStore.writeAvatarUrl(uploadedUrl)
+                                    listOfNotNull(previousAvatarUrl, uploadedUrl).distinct().forEach {
+                                        repository.invalidateSiteImage(it)
+                                    }
+                                    version
                                 }
+                                avatarUrl = uploadedUrl ?: previousAvatarUrl
+                                avatarVersion = nextVersion
                                 notice = context.getString(R.string.watch_store_profile_saved)
                             }.onFailure { error ->
                                 error.throwIfCancellation()

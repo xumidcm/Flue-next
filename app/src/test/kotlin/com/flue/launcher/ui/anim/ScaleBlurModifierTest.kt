@@ -9,6 +9,42 @@ import org.junit.Test
 
 class ScaleBlurModifierTest {
     @Test
+    fun liveBackdropContentIsSkippedOnlyWhenOverlayHasCapturedFrame() {
+        assertFalse(
+            shouldDrawLiveBackdropContent(
+                overlayActive = true,
+                hardwareCaptureRequired = false,
+                capturedFrameAvailable = true,
+            ),
+        )
+        assertTrue(
+            shouldDrawLiveBackdropContent(
+                overlayActive = true,
+                hardwareCaptureRequired = false,
+                capturedFrameAvailable = false,
+            ),
+        )
+        assertTrue(
+            shouldDrawLiveBackdropContent(
+                overlayActive = false,
+                hardwareCaptureRequired = true,
+                capturedFrameAvailable = true,
+            ),
+        )
+    }
+
+    @Test
+    fun hardwareCaptureDoesNotDrawLiveBackdropWhileTheFrozenFrameIsPending() {
+        assertFalse(
+            shouldDrawLiveBackdropContent(
+                overlayActive = true,
+                hardwareCaptureRequired = true,
+                capturedFrameAvailable = false,
+            ),
+        )
+    }
+
+    @Test
     fun android12FallsBackToLegacyBlurWhenAdvancedMaterialIsDisabled() {
         assertEquals(OverlayBlurBackend.LEGACY, overlayBlurBackend(30, advancedMaterialEnabled = true))
         assertEquals(OverlayBlurBackend.SYSTEM, overlayBlurBackend(31, advancedMaterialEnabled = true))

@@ -1,6 +1,7 @@
 package com.flue.launcher.ui.store
 
 import com.flue.launcher.watchface.store.WatchStoreComment
+import com.flue.launcher.watchface.store.WatchStoreAuthSession
 import com.flue.launcher.watchface.store.WatchStoreFeatureFlags
 
 internal data class WatchStoreSocialDetailVisibility(
@@ -192,6 +193,16 @@ internal fun mergeEditedWatchStoreComment(
     original: WatchStoreComment,
     response: WatchStoreComment,
 ): WatchStoreComment = original.copy(content = response.content)
+
+/** Fills the sparse POST response with the current account's identity immediately. */
+internal fun enrichPostedWatchStoreComment(
+    posted: WatchStoreComment,
+    session: WatchStoreAuthSession,
+): WatchStoreComment = posted.copy(
+    authorUsername = session.username,
+    authorAvatarUrl = session.avatarUrl,
+    authorAvatarVersion = session.avatarVersion,
+)
 
 /**
  * 删掉一条评论之后本地该剩下什么：**整棵子树都要砍**。

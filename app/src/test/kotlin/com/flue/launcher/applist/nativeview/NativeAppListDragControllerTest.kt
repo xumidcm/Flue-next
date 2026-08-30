@@ -19,6 +19,34 @@ class NativeAppListDragControllerTest {
     )
 
     @Test
+    fun `reorder midpoint tie follows the drag direction`() {
+        assertTrue(
+            nativeReorderTiePrefersForwardCandidate(
+                candidateDistance = 50f,
+                bestDistance = 50f,
+                candidateCenterX = 10f,
+                candidateCenterY = 200f,
+                bestCenterX = 10f,
+                bestCenterY = 100f,
+                directionX = 0f,
+                directionY = 1f,
+            ),
+        )
+        assertTrue(
+            nativeReorderTiePrefersForwardCandidate(
+                candidateDistance = 50f,
+                bestDistance = 50f,
+                candidateCenterX = 10f,
+                candidateCenterY = 100f,
+                bestCenterX = 10f,
+                bestCenterY = 200f,
+                directionX = 0f,
+                directionY = -1f,
+            ),
+        )
+    }
+
+    @Test
     fun `scheduled long press owns menu and release emits stable key command`() {
         val host = FakeDragHost()
         val scheduler = FakeDragScheduler()
@@ -111,6 +139,105 @@ class NativeAppListDragControllerTest {
         assertEquals(
             listOf(AppListCommand.Move(key("a"), beforeKey = key("c"))),
             host.commands.filterIsInstance<AppListCommand.Move>(),
+        )
+    }
+
+    @Test
+    fun `failed reorder preview can retry the same target without leaving it`() {
+        val host = FakeDragHost().apply {
+            previewMoveResults = ArrayDeque(listOf(false, true))
+        }
+        val scheduler = FakeDragScheduler()
+        val controller = NativeAppListDragController(
+            host = host,
+            scheduler = scheduler,
+            policy = policy,
+            allowFolderCreation = { false },
+        )
+        startDrag(controller, scheduler)
+
+        host.hitKey = key("b")
+        controller.onMove(10f, 150f, 700L)
+        controller.onMove(10f, 150f, 701L)
+
+        assertEquals(2, host.previewMoveCount)
+    }
+
+    @Test
+    fun `accepted reorder can revisit the same target after the pointer reverses`() {
+        val host = FakeDragHost()
+        val scheduler = FakeDragScheduler()
+        val controller = NativeAppListDragController(
+            host = host,
+            scheduler = scheduler,
+            policy = policy,
+            allowFolderCreation = { false },
+        )
+        startDrag(controller, scheduler)
+
+        host.hitKey = key("b")
+        controller.onMove(10f, 150f, 700L)
+        controller.onMove(10f, 149f, 701L)
+        controller.onMove(10f, 148f, 702L)
+
+        assertEquals(
+            "a reversed pointer direction may revisit the current target once",
+            2,
+            host.previewMoveCount,
+        )
+    }
+
+    @Test
+    fun `reorder hit test uses the latest dragged pointer position`() {
+        val host = FakeDragHost().apply {
+            keys = listOf(key("a"), key("b"), key("c"))
+            reorderKeyByDraggedPointer = { _, y ->
+                if (y < 200f) key("b") else key("c")
+            }
+        }
+        val scheduler = FakeDragScheduler()
+        val controller = NativeAppListDragController(
+            host = host,
+            scheduler = scheduler,
+            policy = policy,
+            allowFolderCreation = { false },
+        )
+        startDrag(controller, scheduler)
+
+        controller.onMove(10f, 150f, 630L)
+        controller.onMove(10f, 220f, 640L)
+
+        assertEquals(2, host.previewMoveCount)
+        controller.onUp(10f, 220f, 641L)
+        assertEquals(
+            AppListCommand.Move(key("a"), beforeKey = null),
+            host.commands.last(),
+        )
+    }
+
+    @Test
+    fun `release hit test uses the latest dragged pointer position`() {
+        val host = FakeDragHost().apply {
+            keys = listOf(key("a"), key("b"), key("c"))
+            reorderKeyByDraggedPointer = { _, y ->
+                if (y < 200f) key("b") else key("c")
+            }
+        }
+        val scheduler = FakeDragScheduler()
+        val controller = NativeAppListDragController(
+            host = host,
+            scheduler = scheduler,
+            policy = policy,
+            allowFolderCreation = { false },
+        )
+        startDrag(controller, scheduler)
+
+        controller.onMove(10f, 150f, 630L)
+        controller.onUp(10f, 220f, 631L)
+
+        assertEquals(
+            AppListCommand.Move(key("a"), beforeKey = null),
+            host.commands.last(),
         )
     }
 
@@ -208,6 +335,26 @@ class NativeAppListDragControllerTest {
         scheduler.runFrame()
 
         assertEquals(null, host.folderHoverKey)
+    }
+
+    @Test
+    fun `folder poll still previews the latest reorder target after the candidate moved`() {
+        val host = FakeDragHost().apply { hitKey = key("a") }
+        val scheduler = FakeDragScheduler()
+        val controller = NativeAppListDragController(host, scheduler, policy)
+        startDrag(controller, scheduler)
+
+        host.hitKey = key("b")
+        controller.onMove(10f, 150f, 700L)
+        assertEquals(1, host.previewMoveCount)
+
+        // Auto-scroll/layout can move the icon under the stationary pointer
+        // before the dwell poll runs. The poll must not discard that new
+        // reorder target merely because its original folder candidate expired.
+        host.hitKey = key("c")
+        scheduler.advanceTo(1_200L)
+
+        assertEquals(2, host.previewMoveCount)
     }
 
     @Test
@@ -630,12 +777,15 @@ class NativeAppListDragControllerTest {
         val scrollDeltas = mutableListOf<Float>()
         var draggingKey: AppItemKey? = null
         var dragPointerX = 0f
+        var dragPointerY = 0f
         var folderHoverKey: AppItemKey? = null
         var longClickSuppressed = false
         var endDragCount = 0
         var hapticCount = 0
         var currentKeysReadCount = 0
         var previewMoveCount = 0
+        var previewMoveResults: ArrayDeque<Boolean> = ArrayDeque()
+        var reorderKeyByDraggedPointer: ((Float, Float) -> AppItemKey?)? = null
         var folderPlanAllowed = true
         var previewBeginAllowed = true
         var beginDragCount = 0
@@ -652,7 +802,8 @@ class NativeAppListDragControllerTest {
 
         override val viewportHeightPx: Float = 400f
         override fun keyAt(x: Float, y: Float): AppItemKey? = strictHitKey
-        override fun reorderKeyAt(x: Float, y: Float): AppItemKey? = reorderHitKey
+        override fun reorderKeyAt(x: Float, y: Float): AppItemKey? =
+            reorderKeyByDraggedPointer?.invoke(dragPointerX, dragPointerY) ?: reorderHitKey
         override fun folderKeyAt(x: Float, y: Float): AppItemKey? = strictHitKey
         override fun currentKeys(): List<AppItemKey> {
             currentKeysReadCount++
@@ -674,7 +825,7 @@ class NativeAppListDragControllerTest {
             previewBeginAllowed && dragPreview.begin(source, keys)
         override fun previewMove(source: AppItemKey, target: AppItemKey): Boolean {
             previewMoveCount++
-            return dragPreview.moveTo(target) != null
+            return previewMoveResults.removeFirstOrNull() ?: (dragPreview.moveTo(target) != null)
         }
         override fun finishDragPreview(commit: Boolean): AppListCommand.Move? {
             finishPreviewCalls += commit
@@ -733,8 +884,12 @@ class NativeAppListDragControllerTest {
             beginDragCount++
             draggingKey = key
             dragPointerX = pointerX
+            dragPointerY = pointerY
         }
-        override fun updateDrag(pointerX: Float, pointerY: Float) { dragPointerX = pointerX }
+        override fun updateDrag(pointerX: Float, pointerY: Float) {
+            dragPointerX = pointerX
+            dragPointerY = pointerY
+        }
         override fun endDrag(committed: Boolean) { draggingKey = null; endDragCount++ }
         override fun setFolderHover(key: AppItemKey?) { folderHoverKey = key }
         override fun scrollBy(deltaPx: Float) { scrollDeltas += deltaPx }

@@ -87,4 +87,50 @@ class JbWatchAnimationTest {
         assertEquals(WatchTextAnimationPhase.ENTERING, secondCycle.phase)
         assertTrue(jbLayerRequiresFrameTicks(layer))
     }
+
+    // jbLayerCandidatesKey 是绘制路径零磁盘命中的相等判据：它与 resolveJbWatchPath
+    // 必须选中同一个候选文件，两边一旦漂移，缓存会命中在错误的图上。这里对齐
+    // jbAnimationFrameIndex 的选择规则做锚定。
+    @Test
+    fun candidatesKeyMatchesResolveRulesForFrameSequences() {
+        val frames = listOf("a.png", "b.png", "c.png", "d.png", "e.png")
+        val layer = JbWatchLayer(
+            type = "image",
+            path = "a.png`b.png`c.png`d.png`e.png",
+            pathFrames = frames,
+            gifDelay = 70,
+        )
+
+        for (timelineMs in longArrayOf(0L, 69L, 70L, 349L, 1_774_886_400_350L)) {
+            val expected = frames[
+                jbAnimationFrameIndex(
+                    frameCount = frames.size,
+                    timelineMs = timelineMs,
+                    delayMs = 70L,
+                ),
+            ]
+            assertEquals(expected, jbLayerCandidatesKey(layer, timelineMs))
+        }
+    }
+
+    @Test
+    fun candidatesKeyFallsBackToDefaultDelayAndRawPath() {
+        val frames = listOf("x.png", "y.png")
+        val delayed = JbWatchLayer(
+            type = "image",
+            path = "x.png`y.png",
+            pathFrames = frames,
+            // gifDelay=0 时与 resolveJbWatchPath 一样退到 50ms。
+            gifDelay = 0,
+        )
+        assertEquals("y.png", jbLayerCandidatesKey(delayed, 50L))
+        assertEquals("x.png", jbLayerCandidatesKey(delayed, 49L))
+
+        // pathFrames 为空时按原始路径本身作为唯一候选，单帧层在任何时刻指纹不变。
+        val single = JbWatchLayer(type = "image", path = "images/background.png")
+        assertEquals("images/background.png", jbLayerCandidatesKey(single, 0L))
+        assertEquals("images/background.png", jbLayerCandidatesKey(single, 123_456L))
+
+        assertEquals("", jbLayerCandidatesKey(JbWatchLayer(type = "image"), 0L))
+    }
 }

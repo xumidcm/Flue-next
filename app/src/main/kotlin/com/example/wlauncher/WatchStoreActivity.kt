@@ -188,6 +188,7 @@ import com.flue.launcher.ui.store.favoriteCountAfterToggle
 import com.flue.launcher.ui.store.isOwnWatchStoreComment
 import com.flue.launcher.ui.store.WatchStoreAccountMenuAction
 import com.flue.launcher.ui.store.commentsAfterWatchStoreCommentDeletion
+import com.flue.launcher.ui.store.enrichPostedWatchStoreComment
 import com.flue.launcher.ui.store.mergeEditedWatchStoreComment
 import com.flue.launcher.ui.store.visibleWatchStoreReplies
 import com.flue.launcher.ui.store.flueWebViewUsable
@@ -547,13 +548,15 @@ private fun WatchStoreScreen(
     var selectedId by remember { mutableStateOf<String?>(null) }
     var lastDetailId by remember { mutableStateOf<String?>(null) }
     var selectedDetail by remember { mutableStateOf<WatchStoreWatchFaceDetail?>(null) }
+    val notificationApi = api
+    val notificationAuthStore = remember { WatchStoreAuthStore(context) }
+    var notificationSession by remember { mutableStateOf(notificationAuthStore.read()) }
     // ── C5/G5：网页版入口 + C3 的下载回流 ─────────────────────────────────────
     //
     // 宿主用 `StartActivityForResult` 起：网页里点「下载」时，宿主认出表盘 id 就把它
     // setResult 回来（自己**不装**），这里再走商店既有的下载/安装流程 —— 那条路带着
     // 安装事务日志、目录对账与失败回滚，复制一份到 WebView 侧迟早两边行为分叉。
     var pendingWebInstallId by remember { mutableStateOf<String?>(null) }
-    var pendingWebLogin by remember { mutableStateOf<Pair<String, String>?>(null) }
     val webHost = rememberLauncherForActivityResult(
         ActivityResultContracts.StartActivityForResult(),
     ) { result ->
@@ -568,7 +571,9 @@ private fun WatchStoreScreen(
             val token = data.getStringExtra(WatchStoreWebActivity.EXTRA_LOGIN_TOKEN)
             val username = data.getStringExtra(WatchStoreWebActivity.EXTRA_LOGIN_USERNAME)
             if (!token.isNullOrBlank() && !username.isNullOrBlank()) {
-                pendingWebLogin = token to username
+                // Result 回调就是登录完成的边界：同步写入共享会话并立即更新 Compose，
+                // 不再把状态交给下一轮 LaunchedEffect 才落地。
+                notificationSession = notificationAuthStore.write(token, username)
             }
         }
     }
@@ -638,18 +643,7 @@ private fun WatchStoreScreen(
     var creatorUsernameToOpen by remember { mutableStateOf<String?>(null) }
     // 铃铛红点：未读数只在本页可见期间拉，且由 WatchStoreUnreadCounter 做 30 秒节流。
     // 手表电量敏感 —— 常驻轮询是不能接受的，红点晚半分钟亮没有代价。
-    val notificationApi = api
-    val notificationAuthStore = remember { WatchStoreAuthStore(context) }
     val unreadCounter = remember(notificationApi) { WatchStoreUnreadCounter.of(notificationApi) }
-    var notificationSession by remember { mutableStateOf(notificationAuthStore.read()) }
-    LaunchedEffect(pendingWebLogin) {
-        val login = pendingWebLogin ?: return@LaunchedEffect
-        pendingWebLogin = null
-        withContext(Dispatchers.IO) {
-            notificationAuthStore.write(login.first, login.second)
-        }
-        notificationSession = withContext(Dispatchers.IO) { notificationAuthStore.read() }
-    }
     /**
      * 自己的 `user.id`。
      *
@@ -685,8 +679,8 @@ private fun WatchStoreScreen(
     //
     // 新增的登录入口复用的就是这一层覆层（`loginFormRequested` 只改它的落地页），所以
     // `myUploadsVisible` 已经把它盖住了，不需要再往 key 里加一个可见性状态。
-    LaunchedEffect(myUploadsVisible, uploadVisible) {
-        if (!myUploadsVisible && !uploadVisible) {
+    LaunchedEffect(myUploadsVisible, uploadVisible, profileVisible) {
+        if (!myUploadsVisible && !uploadVisible && !profileVisible) {
             loginFormRequested = false
             notificationSession = withContext(Dispatchers.IO) { notificationAuthStore.read() }
         }
@@ -1742,6 +1736,9 @@ private fun WatchStoreScreen(
                     onOpenWebExternal = { openExternalWatchFace(overlayId) },
                     sessionToken = notificationSession?.token,
                     sessionAuthorId = notificationAccountId,
+                    sessionUsername = notificationSession?.username,
+                    sessionAvatarUrl = notificationSession?.avatarUrl,
+                    sessionAvatarVersion = notificationSession?.avatarVersion ?: 0L,
                     featureFlags = featureFlags,
                     onOpenCreator = { username ->
                         creatorUsernameToOpen = username
@@ -3144,6 +3141,9 @@ private fun WatchFaceDetailPage(
     sessionToken: String? = null,
     /** 自己的 `user.id`。评论的归属判断只认它，见 [isOwnWatchStoreComment]。 */
     sessionAuthorId: String? = null,
+    sessionUsername: String? = null,
+    sessionAvatarUrl: String? = null,
+    sessionAvatarVersion: Long = 0L,
     featureFlags: WatchStoreFeatureFlags = WatchStoreFeatureFlags(),
     onOpenCreator: (String) -> Unit = {},
     /** 未登录时点收藏 / 评分 / 举报，弹提示之后由它把人带到登录表单。 */
@@ -3409,6 +3409,9 @@ private fun WatchFaceDetailPage(
                                 summary = summary,
                                 sessionToken = sessionToken,
                                 sessionAuthorId = sessionAuthorId,
+                                sessionUsername = sessionUsername,
+                                sessionAvatarUrl = sessionAvatarUrl,
+                                sessionAvatarVersion = sessionAvatarVersion,
                                 featureFlags = featureFlags,
                                 onOpenCreator = onOpenCreator,
                                 onRequestLogin = onRequestLogin,
@@ -3741,6 +3744,9 @@ private fun WatchStoreSocialDetailSection(
     summary: WatchStoreWatchFace?,
     sessionToken: String?,
     sessionAuthorId: String?,
+    sessionUsername: String?,
+    sessionAvatarUrl: String?,
+    sessionAvatarVersion: Long,
     featureFlags: WatchStoreFeatureFlags,
     onOpenCreator: (String) -> Unit,
     onRequestLogin: () -> Unit,
@@ -3820,7 +3826,10 @@ private fun WatchStoreSocialDetailSection(
                             .distinct()
                             .forEach { author ->
                                 if (!StoreAuthorAvatars.isResolved(author)) {
-                                    StoreAuthorAvatars.resolve(api, author)
+                                    val resolved = StoreAuthorAvatars.resolveSnapshot(api, author)
+                                    // 同 URL 覆盖上传时，作者缓存版本会变化；同时清掉仓库里的
+                                    // 旧 Bitmap，避免 Compose 重组后仍从 URL 缓存拿回旧图。
+                                    resolved?.url?.let { repository.invalidateSiteImage(it) }
                                 }
                             }
                         authorAvatarRevision++
@@ -3858,7 +3867,14 @@ private fun WatchStoreSocialDetailSection(
                     api.postComment(token, remoteId, content, replyTo)
                 }
             }.onSuccess { posted ->
-                comments = comments + posted
+                val currentSession = WatchStoreAuthSession(
+                    token = token,
+                    username = sessionUsername ?: posted.authorUsername,
+                    expiresAtEpochMs = Long.MAX_VALUE,
+                    avatarUrl = sessionAvatarUrl,
+                    avatarVersion = sessionAvatarVersion,
+                )
+                comments = comments + enrichPostedWatchStoreComment(posted, currentSession)
                 draft = ""
                 replyTo = null
             }.onFailure { failure ->
@@ -4757,11 +4773,18 @@ private fun WatchStoreCommentRow(
                 comment.authorAvatarUrl?.takeIf { it.isNotBlank() }
                     ?: StoreAuthorAvatars.cached(comment.authorUsername)
             }
+            val resolvedAvatarVersion = remember(comment.authorUsername, avatarRevision) {
+                maxOf(
+                    comment.authorAvatarVersion,
+                    StoreAuthorAvatars.cachedVersion(comment.authorUsername),
+                )
+            }
             StoreAvatar(
                 repository = repository,
                 avatarUrl = resolvedAvatar,
                 name = comment.authorUsername,
                 size = 24.dp,
+                avatarVersion = resolvedAvatarVersion,
                 onClick = { onOpenCreator(comment.authorUsername) },
             )
             Spacer(Modifier.width(6.dp))
@@ -6763,7 +6786,7 @@ private fun StoreUploadOverlay(
                                     scope.launch(Dispatchers.IO) { credentialStore.clear() }
                                 }
                             },
-                        ) { Text(stringResource(R.string.watch_store_logout), color = style.accentColor) }
+                        ) { Text(stringResource(R.string.watch_store_logout), color = WatchColors.ActiveRed) }
                     }
                     Text(
                         stringResource(R.string.watch_store_upload_source),

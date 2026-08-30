@@ -1742,6 +1742,10 @@ fun LauncherScreen(vm: LauncherViewModel) {
             overlayGestureTarget == OverlayGestureTarget.ControlCenter ||
             screenState == ScreenState.ControlCenter
         val sideSceneOverlayActive = sideScreenVisible || widgetPageVisible || controlCenterVisible
+        // Watchmaker is rendered underneath these layers. Once any overlay
+        // owns the gesture, freeze its clocks/media until the settle completes
+        // so the backdrop is not composited with a second live frame.
+        val watchFaceOverlayTransitionActive = sideSceneOverlayActive || appListGestureDriven
         val appListLayerRaised = screenState == ScreenState.Apps ||
             appListGestureDriven ||
             // 打断转场时补位：prevState 尚未回写的那一帧靠它顶住 zIndex，
@@ -2105,7 +2109,9 @@ fun LauncherScreen(vm: LauncherViewModel) {
                         // 表盘的 GraphicsLayer 在部分设备上会录到空层，表现为下拉
                         // 时直接变黑；PixelCopy 同时让内置图片/视频也不再切缩略图。
                         hardwareCaptureRequired =
-                            Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && blurEnabled,
+                            Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
+                                (blurEnabled || watchFaceOverlayTransitionActive),
+                        freezeLiveContentWhenCaptured = watchFaceOverlayTransitionActive,
                         advancedMaterialEnabled = blurEnabled,
                     )
                     // API 31+ 由 scaleBlurAlpha / RenderEffect 实时模糊；
@@ -2201,6 +2207,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
                                 textEntryAnimationEnabled = watchFaceTextEntryAnimation,
                                 textExitAnimationEnabled = watchFaceTextExitAnimation,
                                 textExitAnimationActive = textExitAnimationActive,
+                                overlayTransitionActive = watchFaceOverlayTransitionActive,
                             )
                             if (watchFaceBottomFadeEnabled) {
                                 WatchFaceBottomFadeOverlay(

@@ -266,6 +266,7 @@ data class WatchStoreComment(
     val authorUsername: String,
     /** Relative site image path; validate through the shared site-image loader before fetching. */
     val authorAvatarUrl: String? = null,
+    val authorAvatarVersion: Long = 0L,
 )
 
 /** `GET /watchfaces/:id/rating` 的公开汇总 + 自己那一票（`GET /my/watchfaces/:id/rating`）。 */

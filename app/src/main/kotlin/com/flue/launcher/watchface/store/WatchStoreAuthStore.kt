@@ -2,6 +2,8 @@ package com.flue.launcher.watchface.store
 
 import android.content.Context
 import android.content.SharedPreferences
+import android.util.Base64
+import org.json.JSONObject
 
 /** A stored community-store login session. Passwords are never persisted. */
 data class WatchStoreAuthSession(
@@ -19,13 +21,14 @@ data class WatchStoreAuthSession(
     val language: String = "",
     /** 相对 API 路径，取用前照样要过 URL 校验。 */
     val avatarUrl: String? = null,
+    /** 头像内容的本地失效版本；URL 不变时也能强制重新取图。 */
+    val avatarVersion: Long = 0L,
 )
 
 /**
  * SharedPreferences-backed token island for the community store. Only the JWT,
- * the username and a conservative local expiry are stored. The local expiry is
- * one hour earlier than the server's 7-day token lifetime, so an almost-expired
- * token never starts a large upload that is doomed to fail with 401.
+ * the username and the server-provided expiry are stored. Passwords never cross
+ * this boundary.
  */
 class WatchStoreAuthStore(context: Context) {
     private val preferences: SharedPreferences =
@@ -48,6 +51,7 @@ class WatchStoreAuthStore(context: Context) {
             timezone = preferences.getString(KEY_TIMEZONE, null).orEmpty(),
             language = preferences.getString(KEY_LANGUAGE, null).orEmpty(),
             avatarUrl = preferences.getString(KEY_AVATAR_URL, null)?.takeIf(String::isNotBlank),
+            avatarVersion = preferences.getLong(KEY_AVATAR_VERSION, 0L),
         )
     }
 
@@ -56,15 +60,36 @@ class WatchStoreAuthStore(context: Context) {
         username: String,
         loginAtEpochMs: Long = System.currentTimeMillis(),
     ): WatchStoreAuthSession {
+        val sameUser = preferences.getString(KEY_USERNAME, null) == username
+        val expiresAt = jwtExpiryEpochMs(token)
+            ?: (loginAtEpochMs + TOKEN_LIFETIME_MS - EXPIRY_SAFETY_MARGIN_MS)
         val session = WatchStoreAuthSession(
             token = token,
             username = username,
-            expiresAtEpochMs = loginAtEpochMs + TOKEN_LIFETIME_MS - EXPIRY_SAFETY_MARGIN_MS,
+            expiresAtEpochMs = expiresAt,
+            description = if (sameUser) preferences.getString(KEY_DESCRIPTION, null).orEmpty() else "",
+            timezone = if (sameUser) preferences.getString(KEY_TIMEZONE, null).orEmpty() else "",
+            language = if (sameUser) preferences.getString(KEY_LANGUAGE, null).orEmpty() else "",
+            avatarUrl = if (sameUser) {
+                preferences.getString(KEY_AVATAR_URL, null)?.takeIf(String::isNotBlank)
+            } else {
+                null
+            },
+            avatarVersion = if (sameUser) preferences.getLong(KEY_AVATAR_VERSION, 0L) else 0L,
         )
         preferences.edit()
             .putString(KEY_TOKEN, session.token)
             .putString(KEY_USERNAME, session.username)
             .putLong(KEY_EXPIRES_AT, session.expiresAtEpochMs)
+            .putLong(KEY_AVATAR_VERSION, session.avatarVersion)
+            .apply {
+                if (!sameUser) {
+                    remove(KEY_DESCRIPTION)
+                    remove(KEY_TIMEZONE)
+                    remove(KEY_LANGUAGE)
+                    remove(KEY_AVATAR_URL)
+                }
+            }
             .apply()
         return session
     }
@@ -74,14 +99,19 @@ class WatchStoreAuthStore(context: Context) {
      *
      * 没有会话时什么都不做 —— 资料属于某一次登录，不该独立存在。
      */
-    fun writeProfile(account: WatchStoreAccount, nowEpochMs: Long = System.currentTimeMillis()) {
-        val session = read(nowEpochMs) ?: return
+    fun writeProfile(
+        account: WatchStoreAccount,
+        nowEpochMs: Long = System.currentTimeMillis(),
+    ): WatchStoreAuthSession? {
+        val session = read(nowEpochMs) ?: return null
         // 用户名理论上不会变，但换号之后旧资料绝不能留在新会话上。
-        if (!account.username.equals(session.username, ignoreCase = false)) return
+        if (!account.username.equals(session.username, ignoreCase = false)) return null
+        val nextAvatarVersion = session.avatarVersion + 1L
         preferences.edit()
             .putString(KEY_DESCRIPTION, account.description)
             .putString(KEY_TIMEZONE, account.timezone)
             .putString(KEY_LANGUAGE, account.language)
+            .putLong(KEY_AVATAR_VERSION, nextAvatarVersion)
             .apply {
                 if (account.avatarUrl.isNullOrBlank()) {
                     remove(KEY_AVATAR_URL)
@@ -90,15 +120,19 @@ class WatchStoreAuthStore(context: Context) {
                 }
             }
             .apply()
+        return read(nowEpochMs)
     }
 
-    /** 只更新头像地址（上传完头像之后）。 */
-    fun writeAvatarUrl(avatarUrl: String?) {
+    /** 只更新头像地址（上传完头像之后），即使地址不变也递增版本。 */
+    fun writeAvatarUrl(avatarUrl: String?): Long {
+        val nextAvatarVersion = preferences.getLong(KEY_AVATAR_VERSION, 0L) + 1L
         preferences.edit()
+            .putLong(KEY_AVATAR_VERSION, nextAvatarVersion)
             .apply {
                 if (avatarUrl.isNullOrBlank()) remove(KEY_AVATAR_URL) else putString(KEY_AVATAR_URL, avatarUrl)
             }
             .apply()
+        return nextAvatarVersion
     }
 
     fun clear() {
@@ -110,6 +144,7 @@ class WatchStoreAuthStore(context: Context) {
             .remove(KEY_TIMEZONE)
             .remove(KEY_LANGUAGE)
             .remove(KEY_AVATAR_URL)
+            .remove(KEY_AVATAR_VERSION)
             .apply()
     }
 
@@ -122,11 +157,24 @@ class WatchStoreAuthStore(context: Context) {
         const val KEY_TIMEZONE = "profile_timezone"
         const val KEY_LANGUAGE = "profile_language"
         const val KEY_AVATAR_URL = "profile_avatar_url"
+        const val KEY_AVATAR_VERSION = "profile_avatar_version"
 
         /** The service issues 7-day JWTs. */
         const val TOKEN_LIFETIME_MS = 7L * 24L * 60L * 60L * 1_000L
 
         /** Treat tokens as dead one hour early. */
         const val EXPIRY_SAFETY_MARGIN_MS = 60L * 60L * 1_000L
+
+        private fun jwtExpiryEpochMs(token: String): Long? = runCatching {
+            val parts = token.split('.')
+            require(parts.size == 3)
+            val payload = String(
+                Base64.decode(parts[1], Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING),
+                Charsets.UTF_8,
+            )
+            val seconds = JSONObject(payload).optLong("exp", 0L)
+            require(seconds > 0L)
+            Math.multiplyExact(seconds, 1_000L)
+        }.getOrNull()
     }
 }

@@ -578,12 +578,12 @@ internal class NativeAppListRowView(
 
     fun iconCenterXInParentWithoutFlow(): Float {
         ensureGeometry()
-        return left + iconBounds.centerX() + positionTranslationXWithoutFlow()
+        return transformedIconCenterX(positionTranslationXWithoutFlow())
     }
 
     fun iconCenterYInParentWithoutFlow(): Float {
         ensureGeometry()
-        return top + iconBounds.centerY() + positionTranslationYWithoutFlow()
+        return transformedIconCenterY(positionTranslationYWithoutFlow())
     }
 
     fun iconCenterXInParentWithoutPreviewOrFlow(): Float {
@@ -609,21 +609,45 @@ internal class NativeAppListRowView(
      */
     fun iconCenterXInParentForHitTest(): Float {
         ensureGeometry()
-        return left + iconBounds.centerX() +
-            moveTranslationX + dragTranslationX + flowTranslationX
+        return transformedIconCenterX(
+            moveTranslationX + dragTranslationX + flowTranslationX,
+        )
     }
 
     /** [iconCenterXInParentForHitTest] 的纵向对应量（月牙也有纵向分量时一并计入）。 */
     fun iconCenterYInParentForHitTest(): Float {
         ensureGeometry()
-        return top + iconBounds.centerY() +
-            moveTranslationY + dragTranslationY + contentTranslationY + flowTranslationY
+        return transformedIconCenterY(
+            moveTranslationY + dragTranslationY + contentTranslationY + flowTranslationY,
+        )
     }
 
     fun iconCenterYInParentWithoutPreviewOrFlow(): Float {
         ensureGeometry()
         return top + iconBounds.centerY() +
             moveTranslationY + dragTranslationY + contentTranslationY
+    }
+
+    /**
+     * Projects the icon centre through the row's current RenderNode transform.
+     *
+     * Reorder hit testing must agree with what the user sees, including the
+     * chord scale on round linear rows. Preview translation is intentionally
+     * supplied by the caller and is omitted from the hit-test callers so the
+     * virtual slot map stays stable while neighbours animate.
+     */
+    private fun transformedIconCenterX(translationXWithoutPreview: Float): Float {
+        ensureCenteredTransformPivot()
+        val scale = scaleX.takeIf { it.isFinite() } ?: 1f
+        return left + translationXWithoutPreview + pivotX +
+            (iconBounds.centerX() - pivotX) * scale
+    }
+
+    private fun transformedIconCenterY(translationYWithoutPreview: Float): Float {
+        ensureCenteredTransformPivot()
+        val scale = scaleY.takeIf { it.isFinite() } ?: 1f
+        return top + translationYWithoutPreview + pivotY +
+            (iconBounds.centerY() - pivotY) * scale
     }
 
     fun iconWidthForSafeGeometry(): Float {

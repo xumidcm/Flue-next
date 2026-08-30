@@ -663,28 +663,46 @@ private fun drawJbBitmapLayer(
         animationElapsedMs = animationElapsedMs,
         luaRuntime = luaRuntime,
     )
-    val dayFile = resolveJbWatchPath(
-        rootDir = face.rootDir,
-        layer = resolvedPathLayer,
-        nowMillis = animationElapsedMs,
-        assetRevision = face.assetRevision,
-    )
-    val nightFile = if (
-        dayFile != null &&
-        layer.type == "image_cond" &&
+    // 高频重绘路径（needsHighRefresh 时 30Hz × 每层）不能每帧都走磁盘：下面这段先按
+    // 「解析后候选路径 + 昼夜标志」查已解析帧缓存，命中就直接复用上一次的 File 与
+    // 解码帧，把 resolveJbWatchPath 的逐候选 isFile stat、decode 的 lastModified/
+    // length stat、以及夜间文件回退时的 parent.listFiles() 全部挡在缓存未命中之后。
+    // 候选串是纯 CPU 计算（模板求值本来就要做），磁盘访问只在模板真变了才发生。
+    val frameCacheKey = jbLastVisualFrameKey(face, layerIndex)
+    val wantNight = layer.type == "image_cond" &&
         layer.weatherNight.equals("Y", ignoreCase = true) &&
         isJbWeatherNight(dataSnapshot)
-    ) {
-        resolveJbNightWeatherFile(dayFile)
+    val candidatesKey = jbLayerCandidatesKey(resolvedPathLayer, animationElapsedMs)
+    val cachedVisual = JbWatchLastVisualFrameCache.get(frameCacheKey)
+    val dayFile: File?
+    val nightFile: File?
+    val frame: JbWatchVisualFrame?
+    if (cachedVisual != null && cachedVisual.matches(candidatesKey, wantNight)) {
+        dayFile = cachedVisual.dayFile
+        nightFile = cachedVisual.nightFile
+        frame = cachedVisual.frame
     } else {
-        null
+        dayFile = resolveJbWatchPath(
+            rootDir = face.rootDir,
+            layer = resolvedPathLayer,
+            nowMillis = animationElapsedMs,
+            assetRevision = face.assetRevision,
+        )
+        nightFile = if (dayFile != null && wantNight) resolveJbNightWeatherFile(dayFile) else null
+        val file = nightFile ?: dayFile
+        val decodedFrame = file?.let { JbWatchVisualFrame.decode(it) }
+        if (decodedFrame != null) {
+            JbWatchLastVisualFrameCache.put(
+                frameCacheKey,
+                JbWatchResolvedVisual(candidatesKey, wantNight, dayFile, nightFile, decodedFrame),
+            )
+            frame = decodedFrame
+        } else {
+            // 解析失败沿用上一帧已解码画面，避免背景在两个有效帧之间闪黑。
+            frame = cachedVisual?.frame
+        }
     }
-    val file = nightFile ?: dayFile
-    val frameCacheKey = jbLastVisualFrameKey(face, layerIndex)
-    val decodedFrame = file?.let { JbWatchVisualFrame.decode(it) }
-    val frame = decodedFrame?.also { JbWatchLastVisualFrameCache.put(frameCacheKey, it) }
-        ?: JbWatchLastVisualFrameCache.get(frameCacheKey)
-        ?: return
+    if (frame == null) return
     val movie = frame.movie
     val bitmap = frame.bitmap
     val nativeWidth = frame.width
@@ -1742,7 +1760,18 @@ private fun prewarmJbInitialVisualFrames(face: JbWatchFace) {
             .mapNotNull { file -> JbWatchVisualFrame.decode(file) }
             .firstOrNull()
             ?.let { frame ->
-                JbWatchLastVisualFrameCache.put(jbLastVisualFrameKey(face, layerIndex), frame)
+                // 预热用空快照解析、无夜间分支；首帧绘制若解析出不同候选会自然 miss
+                // 后重解析一次，然后回到零磁盘命中路径。
+                JbWatchLastVisualFrameCache.put(
+                    jbLastVisualFrameKey(face, layerIndex),
+                    JbWatchResolvedVisual(
+                        candidatesKey = jbLayerCandidatesKey(resolvedLayer, 0L),
+                        wantNight = false,
+                        dayFile = null,
+                        nightFile = null,
+                        frame = frame,
+                    ),
+                )
             }
     }
 }
@@ -1760,6 +1789,49 @@ private fun jbLastVisualFrameKey(face: JbWatchFace, layerIndex: Int): String = b
 }
 
 /**
+ * 一个图层一次解析成功后的完整视觉产物。
+ *
+ * [candidatesKey] 是「解析后路径模板 → 本帧该用的候选文件」的纯 CPU 指纹，与
+ * [jbLayerCandidatesKey] 同一套规则；绘制时指纹与昼夜标志都没变，就可以直接复用
+ * [dayFile]/[nightFile]/[frame]，把逐候选 `isFile`、`lastModified/length` stat 和
+ * 夜间回退的 `listFiles()` 全部挡在缓存未命中之后。
+ */
+private class JbWatchResolvedVisual(
+    val candidatesKey: String,
+    val wantNight: Boolean,
+    val dayFile: File?,
+    val nightFile: File?,
+    val frame: JbWatchVisualFrame,
+) {
+    fun matches(candidatesKey: String, wantNight: Boolean): Boolean =
+        this.candidatesKey == candidatesKey && this.wantNight == wantNight
+}
+
+/**
+ * 与 [resolveJbWatchPath] 同一套候选规则的纯 CPU 版：模板已解析（[JbWatchLayer.path]
+ * 是解析后字符串）的前提下，算出「本帧该用哪个候选文件」的字符串指纹。多候选时按
+ * `gifDelay` 取帧序号，与 [resolveJbWatchPath] 逐位一致 —— 两边一旦漂移，缓存会命中
+ * 在错误的文件上。
+ */
+internal fun jbLayerCandidatesKey(layer: JbWatchLayer, animationElapsedMs: Long): String {
+    val normalized = layer.path?.trim().orEmpty()
+    if (normalized.isEmpty()) return ""
+    val parsedPaths = layer.pathFrames.ifEmpty { parsePaths(normalized) }
+    val candidates = if (parsedPaths.size > 1) {
+        val frameDelayMs = layer.gifDelay.takeIf { it > 0 } ?: 50
+        val frameIndex = jbAnimationFrameIndex(
+            frameCount = parsedPaths.size,
+            timelineMs = animationElapsedMs,
+            delayMs = frameDelayMs.toLong(),
+        )
+        listOf(parsedPaths[frameIndex])
+    } else {
+        parsedPaths.ifEmpty { listOf(normalized) }
+    }
+    return candidates.first()
+}
+
+/**
  * A dynamic JB path can briefly point at a frame that has not finished being
  * extracted yet. Keep the last successfully decoded visual for that exact
  * face/layer so the watch background never falls through to its black root
@@ -1772,22 +1844,23 @@ private fun jbLastVisualFrameKey(face: JbWatchFace, layerIndex: Int): String = b
  */
 private object JbWatchLastVisualFrameCache {
     private const val MAX_CACHE_BYTES = 12 * 1024 * 1024
-    private val cache = object : LruCache<String, JbWatchVisualFrame>(MAX_CACHE_BYTES) {
-        override fun sizeOf(key: String, value: JbWatchVisualFrame): Int =
-            value.bitmap?.byteCount ?: DEFAULT_JB_GIF_FRAME_COST_BYTES
+    private val cache = object : LruCache<String, JbWatchResolvedVisual>(MAX_CACHE_BYTES) {
+        override fun sizeOf(key: String, value: JbWatchResolvedVisual): Int =
+            value.frame.bitmap?.byteCount ?: DEFAULT_JB_GIF_FRAME_COST_BYTES
     }
 
-    fun get(key: String): JbWatchVisualFrame? = synchronized(cache) {
-        cache.get(key)?.takeIf { frame ->
+    fun get(key: String): JbWatchResolvedVisual? = synchronized(cache) {
+        cache.get(key)?.takeIf { resolved ->
+            val frame = resolved.frame
             frame.width > 0 &&
                 frame.height > 0 &&
                 (frame.bitmap?.isRecycled != true)
         }
     }
 
-    fun put(key: String, frame: JbWatchVisualFrame) {
+    fun put(key: String, value: JbWatchResolvedVisual) {
         synchronized(cache) {
-            cache.put(key, frame)
+            cache.put(key, value)
         }
     }
 }

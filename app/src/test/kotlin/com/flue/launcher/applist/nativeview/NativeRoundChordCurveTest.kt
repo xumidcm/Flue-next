@@ -109,6 +109,20 @@ class NativeRoundChordCurveTest {
         )
     }
 
+    @Test
+    fun roundLinearRowsUseChordScaleEvenWhenFisheyeIsDisabled() {
+        assertEquals(
+            0.8660254f,
+            nativeRoundLinearRowScale(
+                childCenterY = 300f,
+                viewportWidthPx = 400f,
+                viewportHeightPx = 400f,
+                fisheyeEnabled = false,
+            ),
+            0.0005f,
+        )
+    }
+
     /** 视口还没测出来 / 输入非有限时退回 1f —— 首帧不能把行缩掉。 */
     @Test
     fun fallsBackToOneBeforeTheViewportIsKnown() {

@@ -1186,6 +1186,7 @@
     <string name="watch_store_profile_avatar_unreadable">この画像は読み込めません。別の画像を選んでください</string>
     <string name="watch_store_profile_avatar_too_large">圧縮しても 2MB を超えます。別の画像を選んでください</string>
     <string name="watch_store_profile_change_password">パスワードを変更</string>
+    <string name="watch_store_profile_change_password_action">タップして変更</string>
     <string name="watch_store_profile_current_password">現在のパスワード</string>
     <string name="watch_store_profile_new_password">新しいパスワード</string>
     <string name="watch_store_profile_password_changed">パスワードを更新しました</string>

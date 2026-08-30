@@ -86,6 +86,66 @@ import java.util.Locale
 import org.json.JSONObject
 import org.json.JSONTokener
 
+internal data class WatchStoreWebLoginIdentity(
+    val token: String,
+    val username: String,
+    val expiresAtEpochMs: Long,
+)
+
+/** Collects JWT-shaped values from both Web Storage and the WebView cookie jar. */
+internal fun watchStoreWebLoginTokenCandidates(
+    localStorageRaw: String?,
+    cookieHeader: String?,
+): List<String> {
+    val candidates = LinkedHashSet<String>()
+    runCatching { JSONTokener(localStorageRaw.orEmpty()).nextValue() as? String }
+        .getOrNull()
+        ?.trim()
+        ?.takeIf(::looksLikeWatchStoreJwt)
+        ?.let(candidates::add)
+
+    cookieHeader.orEmpty().split(';').forEach { part ->
+        val equals = part.indexOf('=')
+        if (equals <= 0) return@forEach
+        val rawValue = part.substring(equals + 1).trim()
+        val value = (runCatching { Uri.decode(rawValue) }.getOrNull() ?: rawValue)
+            .removeSurrounding("\"")
+            .trim()
+        if (looksLikeWatchStoreJwt(value)) candidates.add(value)
+    }
+    return candidates.toList()
+}
+
+/** Validates a same-origin WebView token before importing it into the native session. */
+internal fun parseWatchStoreWebLoginToken(
+    token: String,
+    nowEpochMs: Long = System.currentTimeMillis(),
+): WatchStoreWebLoginIdentity {
+    val normalized = token.trim()
+    val parts = normalized.split('.')
+    require(parts.size == 3 && parts.all(String::isNotEmpty)) { "网页登录令牌无效" }
+    val payload = String(
+        Base64.decode(
+            parts[1],
+            Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING,
+        ),
+        Charsets.UTF_8,
+    )
+    val tokenPayload = JSONObject(payload)
+    val expSeconds = tokenPayload.optLong("exp", 0L)
+    require(expSeconds > nowEpochMs / 1_000L) { "网页登录令牌已过期" }
+    val username = tokenPayload.optString("username").trim()
+    require(username.isNotEmpty()) { "网页登录用户信息缺失" }
+    return WatchStoreWebLoginIdentity(
+        token = normalized,
+        username = username,
+        expiresAtEpochMs = Math.multiplyExact(expSeconds, 1_000L),
+    )
+}
+
+private fun looksLikeWatchStoreJwt(value: String): Boolean =
+    value.split('.').size == 3 && value.split('.').all(String::isNotEmpty)
+
 /**
  * C1 — 网页版兜底的 WebView 宿主。
  *
@@ -309,30 +369,28 @@ class WatchStoreWebActivity : FlueComponentActivity() {
                 require(WatchStoreUrlPolicy.isSameWebSite(siteBase, currentUrl)) {
                     "网页登录页面不属于当前市场"
                 }
-                val token = (JSONTokener(raw).nextValue() as? String).orEmpty().trim()
-                require(token.split('.').size == 3) { "网页登录令牌无效" }
-                val encodedPayload = token.split('.')[1]
-                val decoded = String(
-                    Base64.decode(encodedPayload, Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING),
-                    Charsets.UTF_8,
-                )
-                val tokenPayload = JSONObject(decoded)
-                val exp = tokenPayload.optLong("exp", 0L)
-                require(exp > System.currentTimeMillis() / 1_000L) { "网页登录令牌已过期" }
-                val username = tokenPayload.optString("username").trim()
-                require(username.isNotEmpty()) { "网页登录用户信息缺失" }
+                // HttpOnly 登录态不会出现在 localStorage，也不会被 JS 读到；CookieManager
+                // 是 WebView 能提供给宿主的读取入口。origin 已在上面确认后才读它。
+                val cookieHeader = CookieManager.getInstance().getCookie(currentUrl.toASCIIString())
+                val identity = watchStoreWebLoginTokenCandidates(raw, cookieHeader)
+                    .asSequence()
+                    .mapNotNull { candidate ->
+                        runCatching { parseWatchStoreWebLoginToken(candidate) }.getOrNull()
+                    }
+                    .firstOrNull()
+                    ?: error("网页登录令牌缺失或无效")
                 // 成功也要说一声：一 finish 就回到商店，没有提示的话分不清
                 // 「导入了」还是「按钮没反应」（失败分支有 Toast，成功一直哑着）。
                 Toast.makeText(
                     this,
-                    getString(R.string.watch_store_login_web_imported_fmt, username),
+                    getString(R.string.watch_store_login_web_imported_fmt, identity.username),
                     Toast.LENGTH_SHORT,
                 ).show()
                 setResult(
                     RESULT_OK,
                     Intent()
-                        .putExtra(EXTRA_LOGIN_TOKEN, token)
-                        .putExtra(EXTRA_LOGIN_USERNAME, username),
+                        .putExtra(EXTRA_LOGIN_TOKEN, identity.token)
+                        .putExtra(EXTRA_LOGIN_USERNAME, identity.username),
                 )
                 finish()
             }.onFailure {

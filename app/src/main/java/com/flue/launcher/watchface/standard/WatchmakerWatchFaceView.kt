@@ -18,6 +18,8 @@ import android.graphics.RectF
 import android.graphics.Typeface
 import android.media.AudioManager
 import android.media.MediaMetadataRetriever
+import android.os.Handler
+import android.os.Looper
 import android.os.SystemClock
 import android.provider.AlarmClock
 import android.provider.MediaStore
@@ -58,6 +60,7 @@ import kotlinx.coroutines.withContext
 import java.io.File
 import java.security.MessageDigest
 import java.util.Calendar
+import java.util.IdentityHashMap
 import java.util.Locale
 import kotlin.math.cos
 import kotlin.math.hypot
@@ -217,6 +220,9 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
     private var editorAnimatedImageLayerIndex: Int? = null
     private var editorAnimationInteractionFrozen = false
     private var editorAnimationFrozenElapsedMs = 0L
+    /** Launcher overlay transitions keep the last composed frame stable. */
+    private var overlayRenderFrozen = false
+    private var overlayFrozenElapsedMs = 0L
     /**
      * 编辑器预览的统一播放/暂停。一个开关同时管住序列帧(image_gif)、视频图层
      * 和重力景深:暂停时三者都停在当前帧/当前位移,恢复时从同一位置继续,不跳回
@@ -240,6 +246,9 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
     private var tickPosted = false
     private var dataProvider: WatchDataProvider = EmptyWatchDataProvider
     private var frameDataSnapshot = WatchDataSnapshot()
+    private val frameTagResolutionCache = WatchmakerFrameTagResolutionCache()
+    /** Caps synchronous static baking so a complex face cannot monopolize one frame. */
+    private val flattenBakeBudget = WatchmakerFrameBudget(MAX_FLATTEN_BAKE_BUDGET_NANOS)
 
     /** 上次取快照的时刻（wall clock）；同 tick 时间窗内复用，见 [refreshFrameDataSnapshot]。 */
     private var frameDataSnapshotAtMs = 0L
@@ -256,6 +265,7 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
     private fun refreshFrameDataSnapshot(nowMs: Long) {
         if (nowMs - frameDataSnapshotAtMs < SNAPSHOT_REUSE_WINDOW_MS) return
         frameDataSnapshotAtMs = nowMs
+        frameTagResolutionCache.beginFrame(nowMs)
         frameDataSnapshot = runCatching { dataProvider.snapshot(nowMs) }
             .getOrDefault(WatchDataSnapshot())
     }
@@ -766,6 +776,9 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
      * 一张表盘的图集通常只有 1~2 张，给它自己一档预算，两边就都不会再互相驱逐。
      */
     private val fontAtlasCache = LinkedHashMap<String, Bitmap>(4, 0.75f, true)
+    /** Retired bitmaps wait for two UI frames before RenderThread ownership is released. */
+    private val pendingBitmapRetirements = IdentityHashMap<Bitmap, WatchmakerBitmapLease>()
+    private val bitmapRetirementHandler = Handler(Looper.getMainLooper())
     private val movieCache = LinkedHashMap<String, Movie>(4, 0.75f, true)
     /**
      * 帧序列图层上一次成功画出的位图，按图层的完整 path 表达式索引。
@@ -942,6 +955,8 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         // 瞬间跳回 XML 里的旧位置。
         editorAnimationInteractionFrozen = primary.editorAnimationInteractionFrozen
         editorAnimationFrozenElapsedMs = primary.editorAnimationFrozenElapsedMs
+        setOverlayRenderFrozen(primary.overlayRenderFrozen)
+        overlayFrozenElapsedMs = primary.overlayFrozenElapsedMs
         if (primary.liveTransformLayerIndex >= 0) {
             setLiveLayerTransform(
                 layerIndex = primary.liveTransformLayerIndex,
@@ -974,6 +989,7 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
     ) {
         if (disposed) return
         require(descriptor.isWatchmaker) { "Watchmaker view requires a standard .watch descriptor" }
+        frameTagResolutionCache.clear()
         onRenderReadyCallback = onRenderReady
         val enteringFace = isFaceVisible && !faceVisible
         val enablingAnimation = isFaceVisible && textEntryAnimationEnabled && !this.textEntryAnimationEnabled
@@ -1012,7 +1028,11 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
             // 自己的 requestFullRepaint()，不需要这里代劳。
             //
             // 慢桶取值真变了也不会漏：poll() 每拍都无条件比对，变化由它置位。
-            if (enteringFace || enablingAnimation) requestFullRepaint() else invalidate()
+            if (enteringFace || enablingAnimation) {
+                requestFullRepaint()
+            } else if (!overlayRenderFrozen) {
+                invalidate()
+            }
             if (
                 loadedDescriptorKey == descriptor.stableKey &&
                 loadedRefreshToken == refreshToken
@@ -1149,7 +1169,7 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         // The animation flag changes how existing layers are drawn; it must not
         // invalidate baked static segments. A plain invalidate keeps the cache
         // and starts/ends the fast tick cadence without rebuilding every bitmap.
-        if (!disposed) invalidate()
+        if (!disposed && !overlayRenderFrozen) invalidate()
     }
 
     fun setWatchDataProvider(provider: WatchDataProvider?) {
@@ -1172,6 +1192,8 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         if (!enabled) {
             smoothedGyroscopeX = 0f
             smoothedGyroscopeY = 0f
+            gravityBackdropFrame?.let(::retireBitmapAfterRender)
+            gravityBackdropBlurFrame?.let(::retireBitmapAfterRender)
             gravityBackdropFrame = null
             gravityBackdropBlurFrame = null
             gravityBackdropBlurPrepared = false
@@ -1191,6 +1213,8 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         if (gravityBackdropBlurEnabled == enabled) return
         gravityBackdropBlurEnabled = enabled
         if (!enabled) {
+            gravityBackdropFrame?.let(::retireBitmapAfterRender)
+            gravityBackdropBlurFrame?.let(::retireBitmapAfterRender)
             gravityBackdropFrame = null
             gravityBackdropBlurFrame = null
             gravityBackdropBlurPrepared = false
@@ -1229,6 +1253,31 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         editorAnimationInteractionFrozen = frozen
         cancelTicks()
         if (!disposed) {
+            scheduleTicks()
+            requestFullRepaint()
+        }
+    }
+
+    /**
+     * Pauses the dynamic renderer while Compose animates a launcher overlay.
+     *
+     * The overlay backdrop owns the captured pixels. This view therefore only
+     * freezes clocks and media, avoiding a second full watch-face render on
+     * every gesture frame. Asset completion may still update caches, but it
+     * must not invalidate the frozen display list until resume.
+     */
+    internal fun setOverlayRenderFrozen(frozen: Boolean) {
+        if (disposed || overlayRenderFrozen == frozen) return
+        val now = SystemClock.uptimeMillis()
+        if (frozen) {
+            overlayFrozenElapsedMs = animatedImageElapsedMs()
+            overlayRenderFrozen = true
+            cancelTicks()
+        } else {
+            overlayRenderFrozen = false
+            if (editorPreviewPlaying && !editorAnimationInteractionFrozen) {
+                frameStartedAtUptimeMs = now - overlayFrozenElapsedMs
+            }
             scheduleTicks()
             requestFullRepaint()
         }
@@ -1288,6 +1337,8 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
     private fun animatedImageElapsedMs(): Long =
         if (!editorPreviewPlaying) {
             editorPreviewPausedElapsedMs
+        } else if (overlayRenderFrozen) {
+            overlayFrozenElapsedMs
         } else if (editorAnimationInteractionFrozen) {
             editorAnimationFrozenElapsedMs
         } else {
@@ -1295,7 +1346,8 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         }
 
     private fun shouldAnimateImageLayer(layerIndex: Int): Boolean =
-        !editorAnimationPlaybackLimited || editorAnimatedImageLayerIndex == layerIndex
+        !overlayRenderFrozen &&
+            (!editorAnimationPlaybackLimited || editorAnimatedImageLayerIndex == layerIndex)
 
     fun dispose() {
         if (disposed) return
@@ -1315,23 +1367,8 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         assetGenerationJob.cancel()
         mainScope.cancel()
         cancelTicks()
+        clearAssetCaches()
         synchronized(cacheLock) {
-            bitmapCache.values.forEach { bitmap -> if (!bitmap.isRecycled) bitmap.recycle() }
-            bitmapCache.clear()
-            bitmapCacheBytes = 0L
-            animatedBitmapCache.values.forEach { bitmap -> if (!bitmap.isRecycled) bitmap.recycle() }
-            animatedBitmapCache.clear()
-            animatedBitmapCacheBytes = 0L
-            fontAtlasCache.values.forEach { bitmap -> if (!bitmap.isRecycled) bitmap.recycle() }
-            fontAtlasCache.clear()
-            fontAtlasCacheBytes = 0L
-            movieCache.clear()
-            bitmapLoading.clear()
-            movieLoading.clear()
-            movieFailures.clear()
-            bitmapFailures.clear()
-            typefaceLoading.clear()
-            typefaceCache.clear()
             activeAssetLoads.clear()
         }
         longPressAction = null
@@ -1346,17 +1383,17 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         source?.clearRuntimeCaches()
         source = null
         sourceTransitionFrame?.let { frame ->
-            if (!frame.isRecycled) frame.recycle()
+            retireBitmapAfterRender(frame)
         }
         sourceTransitionFrame = null
         sourceTransitionGeneration = -1L
         sourceTransitionStartedAtUptimeMs = 0L
         gravityBackdropFrame?.let { frame ->
-            if (!frame.isRecycled) frame.recycle()
+            retireBitmapAfterRender(frame)
         }
         gravityBackdropFrame = null
         gravityBackdropBlurFrame?.let { frame ->
-            if (!frame.isRecycled) frame.recycle()
+            retireBitmapAfterRender(frame)
         }
         gravityBackdropBlurFrame = null
         gravityBackdropBlurPrepared = false
@@ -1420,18 +1457,20 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         // 预暖只吃剩下的，永远不会把可见内容的解码挤掉。也刻意只挂在 onDraw 上 ——
         // 另外三个 [drawPreparedSource] 调用点都是 [withFullRenderPlan] 的离屏一次性
         // 出图，那里暖缓存没有下一帧可言。
-        warmOpacityGatedImages(prepared)
-        val gyroEnabledForSource = gravityParallaxEnabled && prepared.hasGyroParallax
-        if (!editorPreviewPlaying) {
-            // 预览暂停:定格在暂停那一刻的视角,不再向新的传感器读数插值。
-            // 直接赋值而非插值,否则暂停后画面还会继续缓慢滑动一小段。
-            smoothedGyroscopeX = editorPreviewPausedGyroX
-            smoothedGyroscopeY = editorPreviewPausedGyroY
-        } else {
-            val rawGyroX = if (gyroEnabledForSource) frameDataSnapshot.gyroscopeX ?: 0f else 0f
-            val rawGyroY = if (gyroEnabledForSource) frameDataSnapshot.gyroscopeY ?: 0f else 0f
-            smoothedGyroscopeX += (rawGyroX - smoothedGyroscopeX) * 0.18f
-            smoothedGyroscopeY += (rawGyroY - smoothedGyroscopeY) * 0.18f
+        if (!overlayRenderFrozen) {
+            warmOpacityGatedImages(prepared)
+            val gyroEnabledForSource = gravityParallaxEnabled && prepared.hasGyroParallax
+            if (!editorPreviewPlaying) {
+                // 预览暂停:定格在暂停那一刻的视角,不再向新的传感器读数插值。
+                // 直接赋值而非插值,否则暂停后画面还会继续缓慢滑动一小段。
+                smoothedGyroscopeX = editorPreviewPausedGyroX
+                smoothedGyroscopeY = editorPreviewPausedGyroY
+            } else {
+                val rawGyroX = if (gyroEnabledForSource) frameDataSnapshot.gyroscopeX ?: 0f else 0f
+                val rawGyroY = if (gyroEnabledForSource) frameDataSnapshot.gyroscopeY ?: 0f else 0f
+                smoothedGyroscopeX += (rawGyroX - smoothedGyroscopeX) * 0.18f
+                smoothedGyroscopeY += (rawGyroY - smoothedGyroscopeY) * 0.18f
+            }
         }
         trackVisualAssetReadiness = false
 
@@ -1589,6 +1628,7 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         transitionOverlayListener?.invoke(frame != null)
         // As above, an outgoing hardware display list may still own [previous].
         // Releasing the Kotlin reference is safer than eager recycle().
+        if (previous != null && previous !== frame) retireBitmapAfterRender(previous)
     }
 
     /**
@@ -1720,7 +1760,11 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         extentW: Float,
         extentH: Float,
     ): List<WatchFlattenSegment>? {
-        if (prepared.flattenSegments.isEmpty() || flattenBakingSuppressed) return null
+        if (
+            prepared.flattenSegments.isEmpty() ||
+            flattenBakingSuppressed ||
+            overlayRenderFrozen
+        ) return null
         // 编辑器里图层随时被实时变换/选中高亮改写，烘了就会看到"改了没反应"。
         if (editorLiveTransformActive() || editorAnimationPlaybackLimited) return null
         val width = extentW.toInt()
@@ -1804,6 +1848,7 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         width: Int,
         height: Int,
     ) {
+        flattenBakeBudget.start()
         val bytesPerSegment = width.toLong() * height.toLong() * 4L
         if (bytesPerSegment <= 0L || bytesPerSegment > MAX_FLATTEN_SEGMENT_BYTES) {
             prepared.bakedSegmentsUnavailable = true
@@ -1817,9 +1862,14 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         // 的两种零产出：配额用完了（正常，下一帧继续）与试了却全失败（卡住，停手）。
         var attempted = 0
         var quotaHit = false
+        var budgetHit = false
         for (segment in prepared.flattenSegments) {
             if (bakedThisFrame >= MAX_SEGMENT_BAKES_PER_FRAME) {
                 quotaHit = true
+                break
+            }
+            if (!flattenBakeBudget.hasTimeRemaining()) {
+                budgetHit = true
                 break
             }
             if (budget < bytesPerSegment) break
@@ -1839,6 +1889,11 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
             flattenBakeAssetMiss = false
             for (index in segment.fromIndex..segment.toIndex) {
                 val item = prepared.renderPlan.getOrNull(index) ?: continue
+                if (!flattenBakeBudget.hasTimeRemaining()) {
+                    ok = false
+                    budgetHit = true
+                    break
+                }
                 // 段内层按定义不含快依赖，陀螺仪传 0 即可。
                 // baseScale 传 1：离屏位图是设计空间尺寸，画布基变换是合成回主
                 // Canvas 时才施加的，这里不能把它算进字形缩放。
@@ -1862,11 +1917,17 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
                 }
                 budget -= bytesPerSegment
                 bakedThisFrame++
+            } else if (!bitmap.isRecycled) {
+                // This bitmap has never been handed to the display list: it is
+                // safe to release immediately when the frame budget interrupts
+                // an offscreen bake.
+                bitmap.recycle()
             }
         }
         flattenBakeAssetMiss = false
         // 一个都没烘出来（预算不够 / 分配失败 / 逐层绘制抛异常）：记下来，别每帧重试。
-        prepared.bakedSegmentsUnavailable = prepared.bakedSegmentBitmaps.isEmpty()
+        prepared.bakedSegmentsUnavailable =
+            !budgetHit && !quotaHit && prepared.bakedSegmentBitmaps.isEmpty()
         // 卡住判据：**动手试过**却一个都没成。
         //
         // 三种零产出要分开看：段表已经烘满（attempted == 0，没活干）、被每帧配额
@@ -1875,7 +1936,16 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         // 一直为真，每帧都白试一次分配。quotaHit 在当前配额（>0）下必然伴随
         // bakedThisFrame > 0，留着是防配额被改成 0 时误判。
         prepared.bakedSegmentBakeStalled =
-            attempted > 0 && !quotaHit && bakedThisFrame == 0
+            attempted > 0 && !quotaHit && !budgetHit && bakedThisFrame == 0
+        if (
+            (budgetHit || quotaHit) &&
+            !prepared.bakedSegmentsUnavailable &&
+            prepared.bakedSegmentBitmaps.size < prepared.flattenSegments.size
+        ) {
+            // Static faces may have no tick to request the next frame. Continue
+            // only when this invocation stopped for a normal frame bound.
+            postInvalidateOnAnimation()
+        }
     }
 
     private fun drawRenderItem(
@@ -4911,6 +4981,10 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
             val previousFrame = primaryCache.entries
                 .lastOrNull { (cachedKey, bitmap) -> cachedKey.startsWith(assetPrefix) && !bitmap.isRecycled }
                 ?.value
+            // Do not start new image/font decodes while an overlay owns the
+            // frame. Existing in-flight work may finish and populate caches,
+            // but the next visible frame is requested only after resume.
+            if (overlayRenderFrozen) return previousFrame
             bitmapFailures[key]?.let { failure ->
                 val inCooldown = failure.generation == bindGeneration &&
                     SystemClock.uptimeMillis() - failure.failedAtUptimeMs < BITMAP_FAILURE_RETRY_MS
@@ -4976,10 +5050,9 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
                                                     }
                                                     if (
                                                         staleBitmap !== result &&
-                                                        staleBitmap !in lastDrawnFrameByLayer.values &&
-                                                        !staleBitmap.isRecycled
+                                                        staleBitmap !in lastDrawnFrameByLayer.values
                                                     ) {
-                                                        staleBitmap.recycle()
+                                                        retireBitmapAfterRender(staleBitmap)
                                                     }
                                                 }
                                             }
@@ -5003,7 +5076,7 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
                                         }
                                     }
                                 }
-                                if (currentRequest && !disposed) invalidate()
+                                if (currentRequest && !disposed && !overlayRenderFrozen) invalidate()
                             }
                         } finally {
                             // Cancellation can happen after decode but before the main-thread
@@ -5028,6 +5101,7 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
                 if (inCooldown) return null
                 movieFailures.remove(key)
             }
+            if (overlayRenderFrozen) return null
             // 同 requestBitmap：缓存没命中且不在失败冷却 = 素材尚未就绪，这一段
             // 现在烘出来会缺东西。
             flattenBakeAssetMiss = true
@@ -5066,7 +5140,7 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
                                     )
                                 }
                             }
-                            if (generation == bindGeneration && !disposed) invalidate()
+                            if (generation == bindGeneration && !disposed && !overlayRenderFrozen) invalidate()
                         }
                     }
                     job.invokeOnCompletion { finishAssetLoad(claim) }
@@ -5201,7 +5275,7 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
                                         }
                                     }
                                 }
-                                if (currentRequest && !disposed) invalidate()
+                                if (currentRequest && !disposed && !overlayRenderFrozen) invalidate()
                             }
                         } finally {
                             decoded?.let { bitmap -> if (!bitmap.isRecycled) bitmap.recycle() }
@@ -5254,7 +5328,7 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
                                     )
                                 }
                             }
-                            if (currentRequest && generation == bindGeneration && !disposed) invalidate()
+                            if (currentRequest && generation == bindGeneration && !disposed && !overlayRenderFrozen) invalidate()
                         }
                     }
                     job.invokeOnCompletion { finishAssetLoad(claim) }
@@ -5346,9 +5420,7 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
     private fun putBitmapLocked(key: String, bitmap: Bitmap) {
         bitmapCache.put(key, bitmap)?.let { previous ->
             bitmapCacheBytes -= previous.safeAllocationByteCount()
-            if (previous !== bitmap && previous !in lastDrawnFrameByLayer.values && !previous.isRecycled) {
-                previous.recycle()
-            }
+            if (previous !== bitmap) retireBitmapAfterRender(previous)
         }
         bitmapCacheBytes += bitmap.safeAllocationByteCount()
         while (
@@ -5360,7 +5432,7 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
             val eldest = iterator.next().value
             iterator.remove()
             bitmapCacheBytes -= eldest.safeAllocationByteCount()
-            if (!eldest.isRecycled) eldest.recycle()
+            retireBitmapAfterRender(eldest)
         }
     }
 
@@ -5379,9 +5451,7 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
     private fun putAnimatedBitmapLocked(key: String, bitmap: Bitmap) {
         animatedBitmapCache.put(key, bitmap)?.let { previous ->
             animatedBitmapCacheBytes -= previous.safeAllocationByteCount()
-            if (previous !== bitmap && previous !in lastDrawnFrameByLayer.values && !previous.isRecycled) {
-                previous.recycle()
-            }
+            if (previous !== bitmap) retireBitmapAfterRender(previous)
         }
         animatedBitmapCacheBytes += bitmap.safeAllocationByteCount()
         while (
@@ -5394,7 +5464,7 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
             val eldest = iterator.next().value
             iterator.remove()
             animatedBitmapCacheBytes -= eldest.safeAllocationByteCount()
-            if (eldest !in lastDrawnFrameByLayer.values && !eldest.isRecycled) eldest.recycle()
+            retireBitmapAfterRender(eldest)
         }
     }
 
@@ -5409,9 +5479,7 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
     private fun putFontAtlasLocked(key: String, bitmap: Bitmap) {
         fontAtlasCache.put(key, bitmap)?.let { previous ->
             fontAtlasCacheBytes -= previous.safeAllocationByteCount()
-            if (previous !== bitmap && previous !in lastDrawnFrameByLayer.values && !previous.isRecycled) {
-                previous.recycle()
-            }
+            if (previous !== bitmap) retireBitmapAfterRender(previous)
         }
         fontAtlasCacheBytes += bitmap.safeAllocationByteCount()
         while (
@@ -5423,7 +5491,7 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
             val eldest = iterator.next().value
             iterator.remove()
             fontAtlasCacheBytes -= eldest.safeAllocationByteCount()
-            if (eldest !in lastDrawnFrameByLayer.values && !eldest.isRecycled) eldest.recycle()
+            retireBitmapAfterRender(eldest)
         }
     }
 
@@ -5433,14 +5501,7 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
     }
 
     private fun recycleDetachedLastFrame(bitmap: Bitmap) {
-        val stillCached = synchronized(cacheLock) {
-            bitmap in bitmapCache.values ||
-                bitmap in animatedBitmapCache.values ||
-                bitmap in fontAtlasCache.values
-        }
-        if (!stillCached && bitmap !in lastDrawnFrameByLayer.values && !bitmap.isRecycled) {
-            bitmap.recycle()
-        }
+        retireBitmapAfterRender(bitmap)
     }
 
     private fun clearLastDrawnFrames() {
@@ -5520,10 +5581,10 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
             post {
                 pendingFlattenAssetInvalidation = false
                 if (disposed) return@post
-                if (source?.recycleSegmentsAwaitingAssets() == true) invalidate()
+                if (source?.recycleSegmentsAwaitingAssets() == true && !overlayRenderFrozen) invalidate()
             }
         }
-        if (claim.generation == sourceTransitionGeneration) {
+        if (claim.generation == sourceTransitionGeneration && !overlayRenderFrozen) {
             postInvalidateOnAnimation()
         }
     }
@@ -5548,20 +5609,54 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         runCatching { allocationByteCount.toLong() }
             .getOrElse { runCatching { byteCount.toLong() }.getOrDefault(0L) }
 
+    /**
+     * Retires a bitmap after it leaves every cache. Canvas drawing is recorded by
+     * HWUI, so the Kotlin call stack ending does not mean RenderThread stopped
+     * reading the bitmap. Keep an explicit render-thread lease for two frames.
+     */
+    private fun retireBitmapAfterRender(bitmap: Bitmap) {
+        if (bitmap.isRecycled || isBitmapStillOwned(bitmap) || pendingBitmapRetirements.containsKey(bitmap)) {
+            return
+        }
+        val lease = WatchmakerBitmapLease {
+            synchronized(bitmap) {
+                if (!bitmap.isRecycled) bitmap.recycle()
+            }
+        }
+        lease.acquire(WatchmakerBitmapConsumer.RENDER_THREAD)
+        pendingBitmapRetirements[bitmap] = lease
+        lease.retire()
+        bitmapRetirementHandler.postDelayed(
+            {
+                if (pendingBitmapRetirements[bitmap] === lease) {
+                    pendingBitmapRetirements.remove(bitmap)
+                    lease.release(WatchmakerBitmapConsumer.RENDER_THREAD)
+                }
+            },
+            BITMAP_RETIREMENT_DELAY_MS,
+        )
+    }
+
+    private fun isBitmapStillOwned(bitmap: Bitmap): Boolean =
+        bitmapCache.values.any { it === bitmap } ||
+            animatedBitmapCache.values.any { it === bitmap } ||
+            fontAtlasCache.values.any { it === bitmap } ||
+            lastDrawnFrameByLayer.values.any { it === bitmap }
+
     private fun clearAssetCaches() {
-        // 兜底图持有的就是 bitmapCache 里那批实例，下面要把它们 recycle 掉：
-        // 先松手，否则 map 里留着一堆已回收引用（画的时候有 isRecycled 守卫，
-        // 但没必要留悬垂引用占着）。
-        clearLastDrawnFrames()
+        val retiredBitmaps = IdentityHashMap<Bitmap, Boolean>()
+        lastDrawnFrameByLayer.values.forEach { retiredBitmaps[it] = true }
+        lastDrawnFrameByLayer.clear()
+        lastMaterialExpressionByLayer.clear()
         lastDrawnMovieByLayer.clear()
         synchronized(cacheLock) {
-            bitmapCache.values.forEach { bitmap -> if (!bitmap.isRecycled) bitmap.recycle() }
+            bitmapCache.values.forEach { retiredBitmaps[it] = true }
             bitmapCache.clear()
             bitmapCacheBytes = 0L
-            animatedBitmapCache.values.forEach { bitmap -> if (!bitmap.isRecycled) bitmap.recycle() }
+            animatedBitmapCache.values.forEach { retiredBitmaps[it] = true }
             animatedBitmapCache.clear()
             animatedBitmapCacheBytes = 0L
-            fontAtlasCache.values.forEach { bitmap -> if (!bitmap.isRecycled) bitmap.recycle() }
+            fontAtlasCache.values.forEach { retiredBitmaps[it] = true }
             fontAtlasCache.clear()
             fontAtlasCacheBytes = 0L
             movieCache.clear()
@@ -5572,10 +5667,18 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
             typefaceLoading.clear()
             typefaceCache.clear()
         }
+        // Do not recycle any bitmap synchronously: the just-finished display list
+        // may still be consuming it on RenderThread.
+        retiredBitmaps.keys.forEach(::retireBitmapAfterRender)
     }
 
     private fun scheduleTicks() {
-        if ((!faceVisible && !textExitAnimationActive) || !isAttachedToWindow || tickPosted) return
+        if (
+            overlayRenderFrozen ||
+            (!faceVisible && !textExitAnimationActive) ||
+            !isAttachedToWindow ||
+            tickPosted
+        ) return
         tickPosted = true
         // 重力景深的采样与推进完全绑定 onDraw 频率(每帧 snapshot + 0.18 插值),
         // 所以它必须自己要求 30fps。这一项刻意跨越编辑器分支:早先它只写在
@@ -5607,7 +5710,7 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
 
     private val tickRunnable = Runnable {
         tickPosted = false
-        if (faceVisible || textExitAnimationActive) {
+        if (!overlayRenderFrozen && (faceVisible || textExitAnimationActive)) {
             val prepared = source
             val luaCallbackRan = if (prepared?.ownsLuaRuntime == true && prepared.luaRuntime != null) {
                 prepared.luaRuntime.stepClock(
@@ -5618,6 +5721,7 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
             } else {
                 false
             }
+            if (luaCallbackRan) frameTagResolutionCache.clear()
             if (evaluateWatchFaceTickRedraw(luaCallbackRan, ::shouldRedrawThisTick)) {
                 invalidate()
                 // 视频图层的几何要跟着表盘时钟走：图层的 x/y/rotation 可以绑定
@@ -5707,7 +5811,8 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
      */
     private fun requestFullRepaint() {
         source?.slowTagTracker?.invalidateAll()
-        invalidate()
+        frameTagResolutionCache.clear()
+        if (!overlayRenderFrozen) invalidate()
     }
 
     private fun evaluateText(raw: String, source: PreparedSource): String {
@@ -5751,6 +5856,26 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         )
     }
 
+    private fun resolveFrameTag(
+        tag: String,
+        source: PreparedSource,
+    ): WatchTagResolution {
+        frameTagResolutionCache.beginFrame(frameDataSnapshotAtMs)
+        return frameTagResolutionCache.resolve(tag) { normalized ->
+            resolveTagResolution(normalized, calendar, source)
+        }
+    }
+
+    private fun resolveFrameTagWithoutLua(
+        tag: String,
+        source: PreparedSource,
+    ): WatchTagResolution {
+        frameTagResolutionCache.beginFrame(frameDataSnapshotAtMs)
+        return frameTagResolutionCache.resolve(tag) { normalized ->
+            resolveTagResolutionWithoutLua(normalized, calendar, source)
+        }
+    }
+
     private fun resolveColor(raw: String?, fallback: Int, source: PreparedSource): Int {
         val literal = normalizeWatchColorLiteral(raw)
         val value = literal ?: evaluateText(raw.orEmpty(), source).trim()
@@ -5764,7 +5889,7 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
     private fun isDisplayed(display: String?, source: PreparedSource): Boolean {
         val value = display?.trim().orEmpty()
         source.luaRuntime?.evaluateFaceBoolean(value) { tag ->
-            resolveTagResolutionWithoutLua(tag, calendar, source)
+            resolveFrameTagWithoutLua(tag, source)
         }?.let { return it }
         return when {
             value.isBlank() -> true
@@ -5776,22 +5901,20 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
                 value,
                 false,
                 source.expressionScope,
-            ) { tag -> resolveTagResolution(tag, calendar, source) }
+            ) { tag -> resolveFrameTag(tag, source) }
         }
     }
 
     private fun dynamicNumber(value: String?, fallback: Float, source: PreparedSource): Float {
         val raw = value.orEmpty()
         source.luaRuntime?.evaluateFaceNumber(raw) { tag ->
-            resolveTagResolutionWithoutLua(tag, calendar, source)
+            resolveFrameTagWithoutLua(tag, source)
         }?.let { return it.toFloat() }
         return WatchmakerExpressionEvaluator.evaluateNumber(
             value,
             fallback,
             source.expressionScope,
-        ) { tag ->
-            resolveTagResolution(tag, calendar, source)
-        }
+        ) { tag -> resolveFrameTag(tag, source) }
     }
 
     /**
@@ -6797,6 +6920,10 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
          * 持续得太久，反而拖长了启动阶段的逐层直绘。
          */
         private const val MAX_SEGMENT_BAKES_PER_FRAME = 2
+        /** Keep synchronous offscreen work below a small slice of the frame budget. */
+        private const val MAX_FLATTEN_BAKE_BUDGET_NANOS = 2_000_000L
+        /** Two VSYNCs let the outgoing HWUI display list retire before recycle. */
+        private const val BITMAP_RETIREMENT_DELAY_MS = 48L
 
         /**
          * 图片缓存的条数上限。
@@ -6969,6 +7096,7 @@ fun WatchmakerWatchFaceHost(
     textEntryAnimationEnabled: Boolean = true,
     textExitAnimationEnabled: Boolean = true,
     textExitAnimationActive: Boolean = false,
+    overlayTransitionActive: Boolean = false,
     modifier: Modifier = Modifier,
 ) {
     val ownedDataProvider = rememberWatchmakerWatchDataProvider(
@@ -7003,6 +7131,7 @@ fun WatchmakerWatchFaceHost(
                 textExitAnimationEnabled = textExitAnimationEnabled,
             )
             view.setTextExitAnimationActive(textExitAnimationActive)
+            stage.setOverlayTransitionActive(overlayTransitionActive)
             stage.setRoundClip(roundScreen)
         },
         onRelease = WatchmakerWatchFaceStageView::dispose,

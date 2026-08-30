@@ -86,6 +86,16 @@ class WatchStaticFlattenBakeableTest {
     }
 
     @Test
+    fun `位图字体文字不可烘焙以避免图集替换时出现空帧`() {
+        assertFalse(
+            bakeable(
+                layer("text", mapOf("font" to "bm:f2", "text" to "{dmz}")),
+                tags = listOf("dmz"),
+            ),
+        )
+    }
+
+    @Test
     fun `混入一个快 tag 就整层不可烘`() {
         assertFalse(bakeable(layer("text"), tags = listOf("dh", "dm", "dss")))
     }

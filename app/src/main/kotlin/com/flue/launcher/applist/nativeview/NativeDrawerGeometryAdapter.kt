@@ -338,12 +338,13 @@ internal fun NativeAppListConfig.toFisheyeParameters(): FisheyeParameters {
                 ?.coerceIn(0f, 0.99f)
                 ?: 0.6f,
             maximumSpacingCompression = if (edgeSpacingCompressionEnabled) {
-                // 圆屏列表的边缘行除了向心压缩还要过圆内软钳，30% 的压缩会把
-                // 最外几行拉到几乎同一个 Y —— 老师截图里上下两角图标叠成一摞。
-                // 圆屏减半：边缘行仍有序收拢，但不再堆成一点。方屏没有软钳叠加，
-                // 维持原档。
+                // 圆屏列表**不压缩间距**（2026-08 老师定稿）：向心压缩把中段几行拉密、
+                // 边缘行被圆内软钳留在原位，一行密一行疏——老师先后报过「上下两角
+                // 叠成一摞」「中间四个挤、剩下间距大」，根子都是它在动行距。圆屏的
+                // 行距保持与滚动内容一致（均匀），边缘只靠图标缩放/淡化收尾，越界
+                // 由圆内软钳兜底。方屏不走适配器，维持原档。
                 if (deviceShape == NativeDeviceShape.ROUND) {
-                    (0.15f * safeStrength).coerceIn(0f, 0.15f)
+                    0f
                 } else {
                     (0.30f * safeStrength).coerceIn(0f, 0.30f)
                 }

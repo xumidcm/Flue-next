@@ -140,6 +140,40 @@ class WatchStoreRepository(
         ) { destination -> api.downloadSiteImage(rawUrl, destination) }
     }
 
+    /** Returns a decoded site image already held by the process cache. */
+    fun peekSiteImage(rawUrl: String, targetSize: Int = AVATAR_TARGET_SIZE): Bitmap? {
+        require(targetSize in 1..MAX_PREVIEW_DIMENSION) { "targetSize is out of range" }
+        val normalizedUrl = rawUrl.trim()
+        if (normalizedUrl.isEmpty()) return null
+        return getMemoryPreview(previewMemoryKey(siteImageCacheKey(normalizedUrl), targetSize, targetSize))
+    }
+
+    /**
+     * Discards a server-owned site image from both caches. The URL may stay
+     * unchanged when a user replaces an avatar, so URL changes alone are not
+     * enough to invalidate the old bitmap.
+     */
+    suspend fun invalidateSiteImage(rawUrl: String?) = withContext(ioDispatcher) {
+        val normalizedUrl = rawUrl?.trim()?.takeIf(String::isNotEmpty) ?: return@withContext
+        val digest = siteImageCacheKey(normalizedUrl)
+        val itemLock = previewLocks.computeIfAbsent(digest) { Any() }
+        synchronized(itemLock) {
+            synchronized(memoryLock) {
+                val prefix = "$digest:"
+                val iterator = previewMemoryCache.entries.iterator()
+                while (iterator.hasNext()) {
+                    val entry = iterator.next()
+                    if (entry.key.startsWith(prefix)) {
+                        previewMemoryBytes -= entry.value.safeByteCount()
+                        iterator.remove()
+                    }
+                }
+                previewMemoryBytes = previewMemoryBytes.coerceAtLeast(0L)
+            }
+            File(previewDirectory, "$SITE_IMAGE_FILE_PREFIX$digest.img").delete()
+        }
+    }
+
     /**
      * 「内存 → 磁盘 → 网络」三级取图，封面与头像共用。
      *

@@ -1183,6 +1183,7 @@
     <string name="watch_store_profile_avatar_unreadable">That image cannot be read — try another one</string>
     <string name="watch_store_profile_avatar_too_large">Still over 2MB after compression — try another image</string>
     <string name="watch_store_profile_change_password">Change password</string>
+    <string name="watch_store_profile_change_password_action">Tap to change</string>
     <string name="watch_store_profile_current_password">Current password</string>
     <string name="watch_store_profile_new_password">New password</string>
     <string name="watch_store_profile_password_changed">Password updated</string>

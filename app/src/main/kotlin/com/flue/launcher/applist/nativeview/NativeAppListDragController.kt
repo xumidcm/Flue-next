@@ -2,7 +2,49 @@ package com.flue.launcher.applist.nativeview
 
 import com.flue.launcher.applist.model.AppItemKey
 import com.flue.launcher.applist.model.AppListCommand
+import kotlin.math.abs
 import kotlin.math.hypot
+
+/**
+ * Resolves an exact nearest-slot tie in the direction of the active drag.
+ *
+ * A dragged source occupies a virtual slot in the preview order.  If the
+ * pointer lands exactly between that slot and its neighbour, iterating
+ * children in adapter order can select the source again and suppress the next
+ * preview move.  The directional tie-break keeps the gesture monotonic at the
+ * boundary without changing ordinary nearest-slot hit testing.
+ */
+internal fun nativeReorderTiePrefersForwardCandidate(
+    candidateDistance: Float,
+    bestDistance: Float,
+    candidateCenterX: Float,
+    candidateCenterY: Float,
+    bestCenterX: Float,
+    bestCenterY: Float,
+    directionX: Float,
+    directionY: Float,
+): Boolean {
+    if (
+        !candidateDistance.isFinite() ||
+        !bestDistance.isFinite() ||
+        !candidateCenterX.isFinite() ||
+        !candidateCenterY.isFinite() ||
+        !bestCenterX.isFinite() ||
+        !bestCenterY.isFinite() ||
+        !directionX.isFinite() ||
+        !directionY.isFinite()
+    ) return false
+    if (abs(candidateDistance - bestDistance) > NATIVE_REORDER_TIE_TOLERANCE_PX) {
+        return false
+    }
+    val directionLengthSquared = directionX * directionX + directionY * directionY
+    if (!directionLengthSquared.isFinite() || directionLengthSquared <= 0.0001f) {
+        return false
+    }
+    val candidateDeltaX = candidateCenterX - bestCenterX
+    val candidateDeltaY = candidateCenterY - bestCenterY
+    return candidateDeltaX * directionX + candidateDeltaY * directionY > 0.0001f
+}
 
 internal interface NativeAppListDragHost {
     val viewportHeightPx: Float
@@ -48,6 +90,14 @@ internal interface NativeAppListDragHost {
     fun dispatch(command: AppListCommand): Boolean
     fun suppressLongClick(key: AppItemKey, suppress: Boolean)
     fun beginDrag(key: AppItemKey, pointerX: Float, pointerY: Float)
+    /** Starts the overlay while preserving the original DOWN-to-row offset. */
+    fun beginDrag(
+        key: AppItemKey,
+        pointerX: Float,
+        pointerY: Float,
+        downX: Float,
+        downY: Float,
+    ) = beginDrag(key, pointerX, pointerY)
     fun updateDrag(pointerX: Float, pointerY: Float)
     fun endDrag(committed: Boolean)
     fun setFolderHover(key: AppItemKey?)
@@ -96,6 +146,8 @@ internal class NativeAppListDragController(
     private var lastPointerX = 0f
     private var lastPointerY = 0f
     private var lastPointerAtMillis = 0L
+    private var gestureDownX = 0f
+    private var gestureDownY = 0f
     /**
      * 最近一次**真实指针采样**测出的速度。
      *
@@ -132,6 +184,8 @@ internal class NativeAppListDragController(
         val source = host.keyAt(x, y) ?: return false
         val policy = policyProvider()
         activePolicy = policy
+        gestureDownX = x
+        gestureDownY = y
         lastPointerX = x
         lastPointerY = y
         lastPointerAtMillis = eventTimeMillis
@@ -154,36 +208,22 @@ internal class NativeAppListDragController(
         lastPointerX = x
         lastPointerY = y
         lastPointerAtMillis = eventTimeMillis
+        val wasDragging = machine.isDragging
+        if (wasDragging) {
+            // The overlay is the spatial source for round/flow hit testing.
+            // Move it before sampling the target, otherwise every MOVE tests
+            // the previous pointer position and a drag can stick between rows.
+            host.updateDrag(x, y)
+        }
         lastPointerSpeedPxPerMs = speed
         val reorderTarget = host.reorderKeyAt(x, y)
         val folderCandidate = host.folderKeyAt(x, y).takeIf {
             allowFolderCreation()
         }
-        // 排序预览与合成的消歧按「空间 + 时间」两维走，不再靠
-        // 「开了文件夹就整个关掉预览」。
-        //
-        // 最初那版是 `if (allowFolderCreation()) null else reorderTarget` —— 开关一开，
-        // 实时避让位移就全程消失，等于用「不能排序预览」换「两个手势不打架」。
-        //
-        // 第二版引入 folderKeyAt 的核心区门槛（42% 图标半径）做空间消歧：指针落进
-        // 某个图标的核心区就冻结避让。但星环把图标铺到 0.86 格宽，核心区占掉每格
-        // 约七成面积，「从别的图标上路过」的大半时间都被冻结，观感就是老师报的
-        // 「避让赖着不动，得反复拖几下才动」。
-        //
-        // 现在这一版把冻结条件收紧到**时间维**：只有合成悬停真正武装（指针停在
-        // 核心区里凑满 dwell、高亮已亮起）才让位 —— 移动中照常避让，静止悬停才进
-        // 合成判定。这正是成熟桌面（Launcher3 的 hit-region + alarm）的分法。
-        //
-        // 武装后把预览目标掐成 null 是**冻结**而不是回弹：状态机对 null 目标
-        // 什么都不做（不发 Move 效果、lastMoveTarget 不变），所以位移停在上一帧，
-        // 手指移出核心区后接着往下走，不会出现「一进图标中心整列弹回去」。
-        val folderHoverArmed = folderCandidate != null &&
-            machine.folderHoverTarget == folderCandidate
-        val previewTarget = if (folderHoverArmed) null else reorderTarget
         val effects = machine.onMove(
             pointerX = x,
             pointerY = y,
-            targetKey = previewTarget,
+            targetKey = reorderTarget,
             speedPxPerMs = speed,
             nowMillis = eventTimeMillis,
             folderCandidateKey = folderCandidate,
@@ -195,7 +235,7 @@ internal class NativeAppListDragController(
             return false
         }
         if (machine.isDragging) {
-            host.updateDrag(x, y)
+            if (!wasDragging) host.updateDrag(x, y)
             updateFolderHoverSchedule(folderCandidate, speed, eventTimeMillis)
             updateAutoScrollSchedule()
         }
@@ -208,6 +248,7 @@ internal class NativeAppListDragController(
         lastPointerY = y
         lastPointerAtMillis = eventTimeMillis
         val consumed = machine.isDragging || machine.hasLongPressed
+        if (machine.isDragging) host.updateDrag(x, y)
         val sampledFolderTarget = host.folderKeyAt(x, y).takeIf {
             allowFolderCreation()
         }
@@ -303,10 +344,21 @@ internal class NativeAppListDragController(
                         return@forEach
                     }
                     host.performDragHaptic()
-                    host.beginDrag(effect.key, lastPointerX, lastPointerY)
+                    host.beginDrag(
+                        key = effect.key,
+                        pointerX = lastPointerX,
+                        pointerY = lastPointerY,
+                        downX = gestureDownX,
+                        downY = gestureDownY,
+                    )
                 }
-                is NativeDragEffect.Move ->
-                    host.previewMove(effect.source, effect.target)
+                is NativeDragEffect.Move -> {
+                    if (host.previewMove(effect.source, effect.target)) {
+                        machine.acceptMovePreview(effect.target)
+                    } else {
+                        machine.rejectMovePreview(effect.target)
+                    }
+                }
                 is NativeDragEffect.FolderHoverChanged ->
                     host.setFolderHover(effect.target.takeIf { allowFolderCreation() })
                 is NativeDragEffect.CreateFolder ->
@@ -438,15 +490,11 @@ internal class NativeAppListDragController(
                 machine.onMove(
                     pointerX = lastPointerX,
                     pointerY = lastPointerY,
-                    // 与 onMove 的 :165 同一条写法：**空间**消歧，而不是
-                    // 「开了文件夹就整个关掉预览」。旧写法
-                    // `if (allowFolderCreation()) null else …` 会在开关一开时
-                    // 让实时避让位移全程消失 —— 老师报的「拖动到图标上面不避让」。
-                    targetKey = if (currentTarget != null) {
-                        null
-                    } else {
-                        host.reorderKeyAt(lastPointerX, lastPointerY)
-                    },
+                    // Always sample the current reorder target. The gesture
+                    // machine suppresses only the exact folder candidate it
+                    // has actually armed, so a layout change during this poll
+                    // cannot drop a reorder frame.
+                    targetKey = host.reorderKeyAt(lastPointerX, lastPointerY),
                     // 合成帧不谎报「已停稳」，复用最近一次真实采样的速度。
                     speedPxPerMs = lastPointerSpeedPxPerMs,
                     nowMillis = now,
@@ -494,17 +542,11 @@ internal class NativeAppListDragController(
             machine.onMove(
                 pointerX = lastPointerX,
                 pointerY = lastPointerY,
-                // 与 onMove 同一条法则：只在合成悬停**武装后**才冻结避让。
-                // 旧写法 `if (folderCandidate != null) null else …` 在这里危害最大：
-                // 自动滚动边带是 `viewportHeight * 0.16f`（454px 屏上下各约 73px），
-                // 指针一进边带这一帧就每帧跑一次，只要在边带里拖，避让就全程消失。
-                targetKey = if (folderCandidate != null &&
-                    machine.folderHoverTarget == folderCandidate
-                ) {
-                    null
-                } else {
-                    host.reorderKeyAt(lastPointerX, lastPointerY)
-                },
+                // Always use the current reorder sample. The gesture machine
+                // suppresses only an actually armed folder candidate, while a
+                // newly exposed slot from auto-scroll remains immediately
+                // eligible for preview.
+                targetKey = host.reorderKeyAt(lastPointerX, lastPointerY),
                 // 合成帧不谎报「已停稳」（以前是 0f，把 requiredDwellMillis 压到下限
                 // 300ms，自动滚动期间划过的任何图标都会武装合并）。
                 speedPxPerMs = lastPointerSpeedPxPerMs,
@@ -554,3 +596,5 @@ internal class NativeAppListDragController(
     }
 
 }
+
+private const val NATIVE_REORDER_TIE_TOLERANCE_PX = 0.5f
