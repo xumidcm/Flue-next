@@ -9,6 +9,28 @@ import java.util.concurrent.atomic.AtomicInteger
 class WatchmakerRenderTransitionStateTest {
 
     @Test
+    fun settledAppListKeepsWatchmakerFrozenUntilFaceIsStableAgain() {
+        assertTrue(
+            shouldFreezeWatchmakerForLauncherBackdrop(
+                sideSceneOverlayActive = false,
+                appListBackdropActive = true,
+            ),
+        )
+        assertTrue(
+            shouldFreezeWatchmakerForLauncherBackdrop(
+                sideSceneOverlayActive = true,
+                appListBackdropActive = false,
+            ),
+        )
+        assertFalse(
+            shouldFreezeWatchmakerForLauncherBackdrop(
+                sideSceneOverlayActive = false,
+                appListBackdropActive = false,
+            ),
+        )
+    }
+
+    @Test
     fun overlayRenderGatePausesDynamicWorkAcrossOneCompleteTransition() {
         val gate = WatchmakerOverlayRenderGate()
 

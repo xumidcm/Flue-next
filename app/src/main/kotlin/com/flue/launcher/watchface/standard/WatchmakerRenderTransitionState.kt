@@ -74,6 +74,20 @@ internal class WatchmakerOverlayRenderGate {
     fun markResumeComplete(): Boolean = stateMachine.markResumeComplete()
 }
 
+/**
+ * Keeps a hidden Watchmaker renderer paused for the full lifetime of a
+ * launcher backdrop, not only while the opening gesture owns the pointer.
+ *
+ * A settled app list still redraws its RecyclerView every scroll frame. If the
+ * watch face is resumed as soon as the opening gesture settles, dynamic faces
+ * can continue ticking behind that list and compete for the same UI/render
+ * threads even though none of their pixels are visible.
+ */
+internal fun shouldFreezeWatchmakerForLauncherBackdrop(
+    sideSceneOverlayActive: Boolean,
+    appListBackdropActive: Boolean,
+): Boolean = sideSceneOverlayActive || appListBackdropActive
+
 /** The independent consumers that can still reference a captured frame. */
 internal enum class WatchmakerBitmapConsumer {
     PIXEL_COPY,

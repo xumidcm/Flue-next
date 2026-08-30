@@ -136,6 +136,7 @@ import com.flue.launcher.watchface.BuiltInWatchFaceOptions
 import com.flue.launcher.watchface.jbwatch.JbWatchFaceHost
 import com.flue.launcher.watchface.standard.WatchmakerWatchFaceHost
 import com.flue.launcher.watchface.standard.rememberWatchmakerWatchDataProvider
+import com.flue.launcher.watchface.standard.shouldFreezeWatchmakerForLauncherBackdrop
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.snapshotFlow
 import kotlinx.coroutines.delay
@@ -1742,10 +1743,6 @@ fun LauncherScreen(vm: LauncherViewModel) {
             overlayGestureTarget == OverlayGestureTarget.ControlCenter ||
             screenState == ScreenState.ControlCenter
         val sideSceneOverlayActive = sideScreenVisible || widgetPageVisible || controlCenterVisible
-        // Watchmaker is rendered underneath these layers. Once any overlay
-        // owns the gesture, freeze its clocks/media until the settle completes
-        // so the backdrop is not composited with a second live frame.
-        val watchFaceOverlayTransitionActive = sideSceneOverlayActive || appListGestureDriven
         val appListLayerRaised = screenState == ScreenState.Apps ||
             appListGestureDriven ||
             // 打断转场时补位：prevState 尚未回写的那一帧靠它顶住 zIndex，
@@ -1756,6 +1753,14 @@ fun LauncherScreen(vm: LauncherViewModel) {
             isReturningFromApp ||
             appListLayerReleaseHold ||
             (screenState == ScreenState.App && launchSourceState == ScreenState.Apps && showLaunchBackdrop)
+        // Keep Watchmaker paused while the app-list backdrop is resident, not
+        // only during the opening gesture. Heavy gyro/Lua faces otherwise
+        // resume their tick after settle and compete with RecyclerView while
+        // remaining fully hidden behind the opaque list.
+        val watchFaceOverlayTransitionActive = shouldFreezeWatchmakerForLauncherBackdrop(
+            sideSceneOverlayActive = sideSceneOverlayActive,
+            appListBackdropActive = appListLayerRaised,
+        )
         // API 31+ 的回填层已经把“中心 + 镜像边缘”作为一张完整画面统一模糊。
         // 内层真实表盘仍需绘制来推进动画状态，但必须关闭它自己的 RenderEffect，
         // 否则 GPU 上仍然会做两次模糊（即使下面那层最终被覆盖）。旧系统不改。
