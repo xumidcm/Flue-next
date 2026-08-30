@@ -1,9 +1,15 @@
 package com.flue.launcher.ui.style
 
 import androidx.compose.runtime.Composable
+import androidx.compose.foundation.Canvas
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.graphics.drawscope.DrawScope
 import com.flue.launcher.ui.style.apple.AppleLoadingIndicator
 import com.flue.launcher.ui.style.apple.AppleRefreshIndicator
 import com.flue.launcher.ui.style.md3.Md3LoadingIndicator
@@ -20,9 +26,8 @@ enum class FlueLoadingIndicatorUsage {
     WATCH_STORE,
 }
 
-// MIUIX 档现在是自绘的弧（见 MiuixStyleLoadingIndicator），没有上游组件那圈内建留白，
-// 所以名义边长就是视觉边长 —— 0.78 那个折扣本来就是为了抵掉 InfiniteProgressIndicator
-// 的内部 padding，留着只会让弧比调用点要求的小一圈（老师报过「加载圆圈太小」）。
+// MIUIX uses the official InfiniteProgressIndicator, whose size is already
+// the visual diameter and does not need a compensating scale factor.
 internal const val FLUE_MIUIX_LOADING_VISUAL_SCALE = 1.0f
 internal const val FLUE_MIUIX_STORE_LOADING_VISUAL_SCALE = 1.0f
 internal const val FLUE_MIUIX_WATCH_FACE_LOADING_VISUAL_SCALE = 1.0f
@@ -47,9 +52,8 @@ internal fun flueLoadingIndicatorVisualSize(
  *
  * ## 为什么要拆
  *
- * 现状是**两次全局统一**，正好是老师点名要废除的做法：手搓的 `MiuixLoadingIndicator`
- * 被全局用掉 24 处，而表盘加载页又全局用了 miuix 的真 `InfiniteProgressIndicator`。
- * 结果三套风格下「转圈」长得一模一样 —— 拿某一套的指示器覆盖了全局。
+ * Each style owns its loading component so a Miuix indicator is not replaced
+ * by a hand-drawn fallback or by another style's component.
  *
  * 分档之后：MIUIX 用 miuix 真组件、MD3 用 M3 的 `LoadingIndicator`（`MaterialShapes`
  * 形变）、Apple 用细环匀速弧（就是那份手搓实现，它本来就是 watchOS 的读法，搬到
@@ -71,6 +75,58 @@ fun FlueLoadingIndicator(
         UiStyle.MIUIX -> MiuixStyleLoadingIndicator(modifier, visualSize, color)
         UiStyle.MATERIAL_3 -> Md3LoadingIndicator(modifier, visualSize, color)
         UiStyle.APPLE_WATCH -> AppleLoadingIndicator(modifier, visualSize, color)
+    }
+}
+
+/**
+ * Determinate progress with the same style boundary as the indeterminate
+ * loading indicator. This keeps editor conversion progress from leaking a
+ * raw Material component into MIUIX and Apple surfaces.
+ */
+@Composable
+fun FlueDeterminateProgressIndicator(
+    progress: Float,
+    modifier: Modifier = Modifier,
+    uiStyle: UiStyle = LauncherTheme.style.uiStyle,
+    usage: FlueLoadingIndicatorUsage = FlueLoadingIndicatorUsage.DEFAULT,
+) {
+    val style = LauncherTheme.style
+    val safeProgress = progress.takeIf(Float::isFinite)?.coerceIn(0f, 1f) ?: 0f
+    val height = when (uiStyle) {
+        UiStyle.MIUIX -> 4.dp
+        UiStyle.MATERIAL_3 -> 6.dp
+        UiStyle.APPLE_WATCH -> 3.dp
+    }
+    val track = when (uiStyle) {
+        UiStyle.MIUIX -> style.secondaryTextColor.copy(alpha = 0.18f)
+        UiStyle.MATERIAL_3 -> style.secondaryTextColor.copy(alpha = 0.24f)
+        UiStyle.APPLE_WATCH -> style.secondaryTextColor.copy(alpha = 0.22f)
+    }
+    val fill = when (uiStyle) {
+        UiStyle.MIUIX -> style.accentColor
+        UiStyle.MATERIAL_3 -> style.accentColor
+        UiStyle.APPLE_WATCH -> style.secondaryTextColor
+    }
+    Canvas(modifier = modifier) {
+        drawFlueProgressTrack(track, fill, safeProgress, height.toPx())
+    }
+}
+
+private fun DrawScope.drawFlueProgressTrack(
+    track: Color,
+    fill: Color,
+    progress: Float,
+    heightPx: Float,
+) {
+    val barHeight = heightPx.coerceAtMost(size.height).coerceAtLeast(1f)
+    val top = (size.height - barHeight) / 2f
+    val radius = barHeight / 2f
+    val barSize = Size(size.width, barHeight)
+    drawRoundRect(track, Offset(0f, top), barSize, CornerRadius(radius, radius))
+    if (progress > 0f) {
+        val width = (size.width * progress).coerceAtLeast(barHeight)
+            .coerceAtMost(size.width)
+        drawRoundRect(fill, Offset(0f, top), Size(width, barHeight), CornerRadius(radius, radius))
     }
 }
 

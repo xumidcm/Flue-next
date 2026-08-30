@@ -39,6 +39,8 @@ import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.res.stringResource
+import com.flue.launcher.R
 import com.flue.launcher.watchface.WatchFaceDescriptor
 import com.flue.launcher.watchface.standard.WatchDataProvider
 import com.flue.launcher.watchface.standard.WatchDataSnapshot
@@ -74,6 +76,9 @@ import kotlin.math.sin
 private const val JB_LAYOUT_CANVAS_WIDTH = 512
 private const val JB_LAYOUT_CANVAS_HEIGHT = 512
 private const val DEFAULT_JB_GIF_DURATION_MS = 1_000
+
+/** GIF 帧在视觉帧缓存里的名义成本（Movie 是 native 对象，没有 byteCount 可量）。 */
+private const val DEFAULT_JB_GIF_FRAME_COST_BYTES = 512 * 1024
 private val JB_PROTECTED_IMAGE_KEY = byteArrayOf(0x53, 0x57, 0x48, 0x6E, 0x2D)
 private const val JB_STANDARD_BASE64 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
 private const val JB_CUSTOM_BASE64 = "ABCgEFGHIJK4MNOPQRSTUVWXYZabcdefDhijklmnopqrstuvwxyz0123L56789+/"
@@ -81,6 +86,27 @@ private const val JB_CUSTOM_BASE64 = "ABCgEFGHIJK4MNOPQRSTUVWXYZabcdefDhijklmnop
 // be escaped as well, otherwise this top-level initializer can take the whole
 // JB host down with PatternSyntaxException / ExceptionInInitializerError.
 private val JB_DYNAMIC_TAG_PATTERN = Regex("\\{\\s*([^\\{\\}]+?)\\s*\\}")
+
+// 下面这些都在逐帧求值路径上（星期条件文本、四则表达式、天气条件、点按动作、
+// 音效脚本），正则编译提到顶层，别在调用点每帧重造。
+private val JB_DAY_CONDITIONAL_PATTERN = Regex("\\{ddw0\\}\\s*==\\s*(\\d+)\\s*and\\s*'([^']*)'")
+private val JB_DAY_CONDITIONAL_FALLBACK = Regex("or\\s*'([^']*)'\\s*$")
+private val JB_ARITHMETIC_TOKEN_PATTERN = Regex("""[*/+-]?[^*/+-]+""")
+private val JB_WEATHER_CONDITIONAL_PATTERN = Regex("'\\{wci\\}'\\s*==\\s*'([^']+)'\\s*and\\s*(\\d+)")
+private val JB_NON_ASCII_PATTERN = Regex("[^\\x09\\x0A\\x0D\\x20-\\x7E]")
+private val JB_SFX_SCRIPT_PATTERN = Regex("wm_sfx\\(\\s*['\"]([^'\"]+)['\"]\\s*\\)")
+
+// JB 的绘制是单线程逐层串行的；Paint/RectF/Calendar 每帧每层新建只是 GC 压力。
+// 统一复用：每个使用点把用到的属性全部显式赋值，不依赖跨层残留；Calendar 各
+// 使用点入口都先写 timeInMillis（同一帧内值相同，嵌套调用互不干扰），且解析
+// 路径从不改写 calendar。
+private val JB_LAYER_PAINT = Paint(Paint.ANTI_ALIAS_FLAG)
+private val JB_TEXT_PAINT = Paint(Paint.ANTI_ALIAS_FLAG)
+private val JB_OUTLINE_PAINT = Paint(Paint.ANTI_ALIAS_FLAG)
+private val JB_STROKE_PAINT = Paint(Paint.ANTI_ALIAS_FLAG)
+private val JB_FILL_PAINT = Paint(Paint.ANTI_ALIAS_FLAG)
+private val JB_RECT_SCRATCH = RectF()
+private val JB_CALENDAR_SCRATCH = Calendar.getInstance()
 
 data class JbWatchRoot(
     val name: String,
@@ -494,7 +520,7 @@ fun JbWatchFaceHost(
                 }
             }
             loadError == null -> {
-                Text("Loading", color = Color.White.copy(alpha = 0.72f), fontSize = 12.sp)
+                Text(stringResource(R.string.watch_face_loading), color = Color.White.copy(alpha = 0.72f), fontSize = 12.sp)
             }
         }
     }
@@ -637,39 +663,57 @@ private fun drawJbBitmapLayer(
         animationElapsedMs = animationElapsedMs,
         luaRuntime = luaRuntime,
     )
-    val dayFile = resolveJbWatchPath(
-        rootDir = face.rootDir,
-        layer = resolvedPathLayer,
-        nowMillis = animationElapsedMs,
-        assetRevision = face.assetRevision,
-    )
-    val nightFile = if (
-        dayFile != null &&
-        layer.type == "image_cond" &&
+    // 高频重绘路径（needsHighRefresh 时 30Hz × 每层）不能每帧都走磁盘：下面这段先按
+    // 「解析后候选路径 + 昼夜标志」查已解析帧缓存，命中就直接复用上一次的 File 与
+    // 解码帧，把 resolveJbWatchPath 的逐候选 isFile stat、decode 的 lastModified/
+    // length stat、以及夜间文件回退时的 parent.listFiles() 全部挡在缓存未命中之后。
+    // 候选串是纯 CPU 计算（模板求值本来就要做），磁盘访问只在模板真变了才发生。
+    val frameCacheKey = jbLastVisualFrameKey(face, layerIndex)
+    val wantNight = layer.type == "image_cond" &&
         layer.weatherNight.equals("Y", ignoreCase = true) &&
         isJbWeatherNight(dataSnapshot)
-    ) {
-        resolveJbNightWeatherFile(dayFile)
+    val candidatesKey = jbLayerCandidatesKey(resolvedPathLayer, animationElapsedMs)
+    val cachedVisual = JbWatchLastVisualFrameCache.get(frameCacheKey)
+    val dayFile: File?
+    val nightFile: File?
+    val frame: JbWatchVisualFrame?
+    if (cachedVisual != null && cachedVisual.matches(candidatesKey, wantNight)) {
+        dayFile = cachedVisual.dayFile
+        nightFile = cachedVisual.nightFile
+        frame = cachedVisual.frame
     } else {
-        null
+        dayFile = resolveJbWatchPath(
+            rootDir = face.rootDir,
+            layer = resolvedPathLayer,
+            nowMillis = animationElapsedMs,
+            assetRevision = face.assetRevision,
+        )
+        nightFile = if (dayFile != null && wantNight) resolveJbNightWeatherFile(dayFile) else null
+        val file = nightFile ?: dayFile
+        val decodedFrame = file?.let { JbWatchVisualFrame.decode(it) }
+        if (decodedFrame != null) {
+            JbWatchLastVisualFrameCache.put(
+                frameCacheKey,
+                JbWatchResolvedVisual(candidatesKey, wantNight, dayFile, nightFile, decodedFrame),
+            )
+            frame = decodedFrame
+        } else {
+            // 解析失败沿用上一帧已解码画面，避免背景在两个有效帧之间闪黑。
+            frame = cachedVisual?.frame
+        }
     }
-    val file = nightFile ?: dayFile
-    val frameCacheKey = jbLastVisualFrameKey(face, layerIndex)
-    val decodedFrame = file?.let { JbWatchVisualFrame.decode(it) }
-    val frame = decodedFrame?.also { JbWatchLastVisualFrameCache.put(frameCacheKey, it) }
-        ?: JbWatchLastVisualFrameCache.get(frameCacheKey)
-        ?: return
+    if (frame == null) return
     val movie = frame.movie
     val bitmap = frame.bitmap
     val nativeWidth = frame.width
     val nativeHeight = frame.height
     val displaySize = resolveJbBitmapDisplaySize(layer, nativeWidth, nativeHeight)
     val rect = resolveJbRect(face, layer, displaySize.first, displaySize.second)
-    val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+    val paint = JB_LAYER_PAINT.apply {
         alpha = resolveJbLayerOpacity(layer)
     }
     if (bitmap != null && layer.type == "image_cond" && !layer.condGrid.isNullOrBlank()) {
-        val weatherCode = WatchmakerTagResolver.resolve("wci", Calendar.getInstance().apply {
+        val weatherCode = WatchmakerTagResolver.resolve("wci", JB_CALENDAR_SCRATCH.apply {
             timeInMillis = nowMillis
         }, dataSnapshot).renderedValue
         val dayIndex = evaluateWeatherIndex(layer.condValue, weatherCode = weatherCode)
@@ -730,7 +774,7 @@ private fun drawJbTextLayer(
 ) {
     if (!shouldDisplayLayer(layer, nowMillis, dataSnapshot, animationElapsedMs, luaRuntime)) return
     val text = resolveJbText(layer.text, nowMillis, dataSnapshot, is24Hour, animationElapsedMs, luaRuntime)
-    val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+    val paint = JB_TEXT_PAINT.apply {
         color = parseJbColor(layer.color)
         textSize = layer.textSize
         textAlign = when (jbAlignmentHorizontal(layer.alignment)) {
@@ -740,6 +784,7 @@ private fun drawJbTextLayer(
         }
         alpha = resolveJbLayerOpacity(layer)
         typeface = JbWatchTypefaceCache.get(face.rootDir, face.assetRevision, layer.font)
+        style = Paint.Style.FILL
     }
     val textDisplaySize = resolveJbTextDisplaySize(layer, text, paint)
     val rect = resolveJbRect(
@@ -755,7 +800,17 @@ private fun drawJbTextLayer(
     }
     val y = rect.centerY() - (paint.descent() + paint.ascent()) / 2f
     if (layer.outline?.equals("Outline", ignoreCase = true) == true && layer.oSize > 0) {
-        val outlinePaint = Paint(paint).apply {
+        // 复用 scratch 代替 Paint(paint) 拷贝：描边要的就是文字 paint 的
+        // 字形属性 + 描边样式，全部显式重赋，不吃上一层的残留。
+        val outlinePaint = JB_OUTLINE_PAINT.apply {
+            color = parseJbColor(layer.color)
+            textSize = layer.textSize
+            textAlign = when (jbAlignmentHorizontal(layer.alignment)) {
+                0f -> Paint.Align.LEFT
+                1f -> Paint.Align.RIGHT
+                else -> Paint.Align.CENTER
+            }
+            typeface = JbWatchTypefaceCache.get(face.rootDir, face.assetRevision, layer.font)
             style = Paint.Style.STROKE
             strokeWidth = layer.oSize.toFloat()
             color = parseJbColor(layer.oColor)
@@ -797,7 +852,7 @@ private fun drawJbCurvedTextLayer(
     val radians = Math.toRadians((angle - 90f).toDouble())
     val x = center.x + cos(radians).toFloat() * radius
     val y = center.y + sin(radians).toFloat() * radius
-    val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+    val paint = JB_TEXT_PAINT.apply {
         color = parseJbColor(layer.color)
         textSize = layer.textSize
         textAlign = when (jbAlignmentHorizontal(layer.alignment)) {
@@ -807,6 +862,7 @@ private fun drawJbCurvedTextLayer(
         }
         alpha = resolveJbLayerOpacity(layer)
         typeface = JbWatchTypefaceCache.get(face.rootDir, face.assetRevision, layer.font)
+        style = Paint.Style.FILL
     }
     canvas.save()
     canvas.rotate(angle + if (layer.curveDir.equals("Down", ignoreCase = true)) 180f else 0f, x, y)
@@ -842,21 +898,23 @@ private fun drawJbRingLayer(
         animationElapsedMs,
         luaRuntime = luaRuntime,
     ) - 90f
-    val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+    val paint = JB_STROKE_PAINT.apply {
         style = Paint.Style.STROKE
         strokeCap = Paint.Cap.ROUND
         strokeWidth = stroke
         color = parseJbColor(layer.color)
         alpha = resolveJbLayerOpacity(layer)
     }
-    val oval = RectF(center.x - radius, center.y - radius, center.x + radius, center.y + radius)
+    val oval = JB_RECT_SCRATCH.apply {
+        set(center.x - radius, center.y - radius, center.x + radius, center.y + radius)
+    }
     canvas.drawArc(oval, start, if (layer.isClockwise) sweep else -sweep, false, paint)
 }
 
 private fun drawJbMarkersLayer(canvas: AndroidCanvas, face: JbWatchFace, layer: JbWatchLayer) {
     val center = jbLayerCenter(face, layer)
     val radius = layer.radius.takeIf { it > 0f } ?: 181f
-    val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+    val paint = JB_STROKE_PAINT.apply {
         style = Paint.Style.STROKE
         strokeCap = Paint.Cap.ROUND
         strokeWidth = 3f
@@ -884,7 +942,7 @@ private fun drawJbShapeLayer(canvas: AndroidCanvas, face: JbWatchFace, layer: Jb
         ?: (min(layer.width.takeIf { it > 0 } ?: 0, layer.height.takeIf { it > 0 } ?: 0) / 2f)
         .takeIf { it > 0f }
         ?: 24f
-    val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+    val paint = JB_FILL_PAINT.apply {
         style = Paint.Style.FILL
         color = parseJbColor(layer.color)
         alpha = resolveJbLayerOpacity(layer)
@@ -900,7 +958,7 @@ private fun resolveJbText(
     animationElapsedMs: Long,
     luaRuntime: JbWatchLuaExpressionRuntime?,
 ): String {
-    val calendar = Calendar.getInstance().apply { timeInMillis = nowMillis }
+    val calendar = JB_CALENDAR_SCRATCH.apply { timeInMillis = nowMillis }
     // EEE / MMM 在部分 locale 会带尾句号（es "lun."、de "Mo."），
     // 统一 trimEnd('.') 避免表盘出现「周一.」式拖尾。
     val weekday = SimpleDateFormat("EEE", Locale.getDefault()).format(nowMillis).trimEnd('.')
@@ -938,14 +996,14 @@ private fun resolveJbText(
 
 private fun resolveJbDayConditionalText(raw: String, dayOfWeekZero: Int): String? {
     if ("{ddw0}" !in raw || " and " !in raw || " or " !in raw) return null
-    Regex("\\{ddw0\\}\\s*==\\s*(\\d+)\\s*and\\s*'([^']*)'")
+    JB_DAY_CONDITIONAL_PATTERN
         .findAll(raw)
         .forEach { match ->
             if (match.groupValues.getOrNull(1)?.toIntOrNull() == dayOfWeekZero) {
                 return match.groupValues.getOrNull(2).orEmpty()
             }
         }
-    return Regex("or\\s*'([^']*)'\\s*$").find(raw)?.groupValues?.getOrNull(1)
+    return JB_DAY_CONDITIONAL_FALLBACK.find(raw)?.groupValues?.getOrNull(1)
 }
 
 private fun resolveJbTextDisplaySize(layer: JbWatchLayer, text: String, paint: Paint): Pair<Float, Float> {
@@ -1067,7 +1125,7 @@ private fun evaluateJbNumericExpression(
     fallback: Float = 0f,
     luaRuntime: JbWatchLuaExpressionRuntime? = null,
 ): Float {
-    val calendar = Calendar.getInstance().apply { timeInMillis = nowMillis }
+    val calendar = JB_CALENDAR_SCRATCH.apply { timeInMillis = nowMillis }
     val resolver: (String) -> WatchTagResolution = { tag ->
         resolveJbTag(tag, calendar, dataSnapshot, animationElapsedMs)
     }
@@ -1130,7 +1188,7 @@ private fun resolveJbDynamicPathLayer(
     luaRuntime: JbWatchLuaExpressionRuntime? = null,
 ): JbWatchLayer {
     val rawPath = layer.path?.takeIf(String::isNotBlank) ?: return layer
-    val calendar = Calendar.getInstance().apply { timeInMillis = nowMillis }
+    val calendar = JB_CALENDAR_SCRATCH.apply { timeInMillis = nowMillis }
     val resolver: (String) -> WatchTagResolution = { tag ->
         resolveJbTag(tag, calendar, dataSnapshot, animationElapsedMs)
     }
@@ -1161,7 +1219,7 @@ private fun evaluateJbArithmetic(raw: String): Float {
     if (raw.isBlank()) return 0f
     val normalized = raw.replace(',', '.')
     normalized.toFloatOrNull()?.let { return it }
-    val tokens = Regex("""[*/+-]?[^*/+-]+""").findAll(normalized).map { it.value }.toList()
+    val tokens = JB_ARITHMETIC_TOKEN_PATTERN.findAll(normalized).map { it.value }.toList()
     if (tokens.isEmpty()) return normalized.filter { it.isDigit() || it == '.' || it == '-' }
         .toFloatOrNull() ?: 0f
     var result = tokens.first().toFloatOrNull() ?: return 0f
@@ -1346,7 +1404,7 @@ private fun resolveJbWatchPath(
     val rawPath = layer.path
     val normalized = rawPath?.trim().orEmpty()
     if (normalized.isBlank()) return null
-    val parsedPaths = parsePaths(normalized)
+    val parsedPaths = layer.pathFrames.ifEmpty { parsePaths(normalized) }
     val candidates = if (parsedPaths.size > 1) {
         val frameDelayMs = layer.gifDelay.takeIf { it > 0 } ?: 50
         val frameIndex = jbAnimationFrameIndex(
@@ -1377,7 +1435,7 @@ private fun shouldDisplayLayer(
     luaRuntime: JbWatchLuaExpressionRuntime? = null,
 ): Boolean {
     val expr = layer.condValue?.takeIf { it.isNotBlank() } ?: return true
-    val calendar = Calendar.getInstance().apply { timeInMillis = nowMillis }
+    val calendar = JB_CALENDAR_SCRATCH.apply { timeInMillis = nowMillis }
     val resolver: (String) -> WatchTagResolution = { tag ->
         resolveJbTag(tag, calendar, dataSnapshot, animationElapsedMs)
     }
@@ -1389,7 +1447,7 @@ private fun shouldDisplayLayer(
 private fun evaluateWeatherIndex(expr: String?, weatherCode: String): Int {
     val value = expr?.takeIf { it.isNotBlank() } ?: return 0
     val code = weatherCode.lowercase(Locale.ROOT)
-    Regex("'\\{wci\\}'\\s*==\\s*'([^']+)'\\s*and\\s*(\\d+)").findAll(value).forEach { match ->
+    JB_WEATHER_CONDITIONAL_PATTERN.findAll(value).forEach { match ->
         val codeMatch = match.groupValues.getOrNull(1)?.lowercase(Locale.ROOT)
         val numberMatch = match.groupValues.getOrNull(2)?.toIntOrNull()
         if (codeMatch == code && numberMatch != null) {
@@ -1622,12 +1680,12 @@ private fun normalizeJbTapAction(raw: String): String {
         .replace("&ars;", "&apos;")
         .replace("weatjr", "weather")
         .replace("updte", "update")
-        .replace(Regex("[^\\x09\\x0A\\x0D\\x20-\\x7E]"), "")
+        .replace(JB_NON_ASCII_PATTERN, "")
         .trim()
 }
 
 private fun playJbWatchScript(rootDir: File, script: String) {
-    val match = Regex("wm_sfx\\(\\s*['\"]([^'\"]+)['\"]\\s*\\)").find(script) ?: return
+    val match = JB_SFX_SCRIPT_PATTERN.find(script) ?: return
     val soundName = match.groupValues.getOrNull(1)?.trim().orEmpty()
     if (soundName.isBlank()) return
     val candidate = listOf(
@@ -1702,7 +1760,18 @@ private fun prewarmJbInitialVisualFrames(face: JbWatchFace) {
             .mapNotNull { file -> JbWatchVisualFrame.decode(file) }
             .firstOrNull()
             ?.let { frame ->
-                JbWatchLastVisualFrameCache.put(jbLastVisualFrameKey(face, layerIndex), frame)
+                // 预热用空快照解析、无夜间分支；首帧绘制若解析出不同候选会自然 miss
+                // 后重解析一次，然后回到零磁盘命中路径。
+                JbWatchLastVisualFrameCache.put(
+                    jbLastVisualFrameKey(face, layerIndex),
+                    JbWatchResolvedVisual(
+                        candidatesKey = jbLayerCandidatesKey(resolvedLayer, 0L),
+                        wantNight = false,
+                        dayFile = null,
+                        nightFile = null,
+                        frame = frame,
+                    ),
+                )
             }
     }
 }
@@ -1720,32 +1789,88 @@ private fun jbLastVisualFrameKey(face: JbWatchFace, layerIndex: Int): String = b
 }
 
 /**
+ * 一个图层一次解析成功后的完整视觉产物。
+ *
+ * [candidatesKey] 是「解析后路径模板 → 本帧该用的候选文件」的纯 CPU 指纹，与
+ * [jbLayerCandidatesKey] 同一套规则；绘制时指纹与昼夜标志都没变，就可以直接复用
+ * [dayFile]/[nightFile]/[frame]，把逐候选 `isFile`、`lastModified/length` stat 和
+ * 夜间回退的 `listFiles()` 全部挡在缓存未命中之后。
+ */
+private class JbWatchResolvedVisual(
+    val candidatesKey: String,
+    val wantNight: Boolean,
+    val dayFile: File?,
+    val nightFile: File?,
+    val frame: JbWatchVisualFrame,
+) {
+    fun matches(candidatesKey: String, wantNight: Boolean): Boolean =
+        this.candidatesKey == candidatesKey && this.wantNight == wantNight
+}
+
+/**
+ * 与 [resolveJbWatchPath] 同一套候选规则的纯 CPU 版：模板已解析（[JbWatchLayer.path]
+ * 是解析后字符串）的前提下，算出「本帧该用哪个候选文件」的字符串指纹。多候选时按
+ * `gifDelay` 取帧序号，与 [resolveJbWatchPath] 逐位一致 —— 两边一旦漂移，缓存会命中
+ * 在错误的文件上。
+ */
+internal fun jbLayerCandidatesKey(layer: JbWatchLayer, animationElapsedMs: Long): String {
+    val normalized = layer.path?.trim().orEmpty()
+    if (normalized.isEmpty()) return ""
+    val parsedPaths = layer.pathFrames.ifEmpty { parsePaths(normalized) }
+    val candidates = if (parsedPaths.size > 1) {
+        val frameDelayMs = layer.gifDelay.takeIf { it > 0 } ?: 50
+        val frameIndex = jbAnimationFrameIndex(
+            frameCount = parsedPaths.size,
+            timelineMs = animationElapsedMs,
+            delayMs = frameDelayMs.toLong(),
+        )
+        listOf(parsedPaths[frameIndex])
+    } else {
+        parsedPaths.ifEmpty { listOf(normalized) }
+    }
+    return candidates.first()
+}
+
+/**
  * A dynamic JB path can briefly point at a frame that has not finished being
  * extracted yet. Keep the last successfully decoded visual for that exact
  * face/layer so the watch background never falls through to its black root
  * colour between two valid frames.
+ *
+ * 预算按**字节**计而不是条数：一张帧就是原图尺寸 × 4 字节，按条数封顶时换
+ * 几张表盘就能把几十上百 MB 的位图压在缓存里。字节预算把最坏驻留钉在
+ * [MAX_CACHE_BYTES] 内；逐出只丢引用、不主动 recycle —— 后台预热线程与绘制
+ * 线程可能同时持有同一帧，过早 recycle 会把正在绘制的位图打穿。
  */
 private object JbWatchLastVisualFrameCache {
-    private const val MAX_FRAMES = 48
-    private val cache = LruCache<String, JbWatchVisualFrame>(MAX_FRAMES)
+    private const val MAX_CACHE_BYTES = 12 * 1024 * 1024
+    private val cache = object : LruCache<String, JbWatchResolvedVisual>(MAX_CACHE_BYTES) {
+        override fun sizeOf(key: String, value: JbWatchResolvedVisual): Int =
+            value.frame.bitmap?.byteCount ?: DEFAULT_JB_GIF_FRAME_COST_BYTES
+    }
 
-    fun get(key: String): JbWatchVisualFrame? = synchronized(cache) {
-        cache.get(key)?.takeIf { frame ->
+    fun get(key: String): JbWatchResolvedVisual? = synchronized(cache) {
+        cache.get(key)?.takeIf { resolved ->
+            val frame = resolved.frame
             frame.width > 0 &&
                 frame.height > 0 &&
                 (frame.bitmap?.isRecycled != true)
         }
     }
 
-    fun put(key: String, frame: JbWatchVisualFrame) {
+    fun put(key: String, value: JbWatchResolvedVisual) {
         synchronized(cache) {
-            cache.put(key, frame)
+            cache.put(key, value)
         }
     }
 }
 
 private object JbWatchBitmapCache {
     private const val MAX_CACHE_KB = 24 * 1024
+
+    /** 解码最长边上限；与标准表盘渲染器的 decodeBitmapSafely 对齐。 */
+    private const val MAX_DECODED_SIDE = 1024
+
     private val cache = object : LruCache<String, Bitmap>(MAX_CACHE_KB) {
         override fun sizeOf(key: String, value: Bitmap): Int = value.byteCount / 1024
     }
@@ -1754,9 +1879,28 @@ private object JbWatchBitmapCache {
         if (!file.isFile) return null
         val key = "${file.absolutePath}:${file.lastModified()}:${file.length()}"
         cache.get(key)?.let { return it }
-        val bitmap = decodeBitmap(file) ?: return null
+        val bitmap = decodeSampled(file) ?: return null
         cache.put(key, bitmap)
         return bitmap
+    }
+
+    /**
+     * 两趟解码：先量边界再按 inSampleSize 采样，把最长边压到 [MAX_DECODED_SIDE]
+     * 以内。JB 素材原始尺寸不受控（1024² 起步、更大的也不少见），直接解码是
+     * 原图 × 4 字节的瞬时分配，而显示目标只有表盘画布，超采样纯属浪费。
+     */
+    private fun decodeSampled(file: File): Bitmap? {
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        decodeBitmap(file, bounds)
+        var sampleSize = 1
+        var width = bounds.outWidth
+        var height = bounds.outHeight
+        while (width > 0 && height > 0 && (width / 2 >= MAX_DECODED_SIDE || height / 2 >= MAX_DECODED_SIDE)) {
+            width /= 2
+            height /= 2
+            sampleSize *= 2
+        }
+        return decodeBitmap(file, BitmapFactory.Options().apply { inSampleSize = sampleSize })
     }
 
     fun bounds(file: File): Pair<Int, Int>? {

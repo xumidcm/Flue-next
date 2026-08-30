@@ -1,6 +1,7 @@
 package com.flue.launcher.watchface.standard
 
 import android.Manifest
+import android.app.Activity
 import android.app.ActivityManager
 import android.bluetooth.BluetoothAdapter
 import android.bluetooth.BluetoothManager
@@ -28,6 +29,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.remember
 import androidx.compose.ui.platform.LocalContext
+import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import java.util.Calendar
 import java.util.Locale
@@ -49,6 +51,78 @@ internal fun watchMotionSensorTypes(hasGyroscope: Boolean): List<Int> = buildLis
 
 internal fun watchHeartRateValue(hasPermission: Boolean, value: Int?): Int? =
     value?.takeIf { hasPermission }
+
+/**
+ * 位置权限的单一口径：谁要坐标，就从这里问、从这里申请。
+ *
+ * ## 为什么要有这个 object
+ *
+ * 在这之前，全 App **唯一**的运行时位置申请点在「设置 → 表盘天气 → 使用系统定位」
+ * 那一行。而 {alat} / {alon} / {aalt} 一族读的正是天气落盘的那份坐标 —— 于是一张只
+ * 显示经纬度、完全不显示天气的表盘，用户没有任何理由去点天气设置，坐标就永远是空的。
+ * 老师收到的「经纬度变量读不出来」就是这个：不是没实现，是没人去申请那个权限。
+ *
+ * 所以渲染/编辑侧需要一个能自己判断「这张表盘要坐标吗、现在有权限吗」的入口，
+ * 而不是把判断散在各个 Activity 里各写一遍。
+ *
+ * ## 为什么两个权限都要
+ *
+ * `ACCESS_FINE_LOCATION` 是 Android 12+ 弹窗里「精确位置」那一档的前提，且
+ * GPS / passive provider 缺了它会直接抛 SecurityException（见
+ * [filterWatchWeatherLocationProvidersByPermission]）。但用户完全可以只给「大致位置」，
+ * 那也够天气和表盘用 —— 所以 [isGranted] 是**任一即可**，绝不把只给了粗定位的用户
+ * 当成没授权反复骚扰。
+ */
+object WatchLocationPermissionPolicy {
+
+    /**
+     * 一次申请里要一起问的两个权限。
+     *
+     * 必须**同时**提交：Android 12+ 只有在同一次请求里同时包含粗/精两个权限时，
+     * 系统弹窗才会给出「精确 / 大致」的二选一；单独请求 FINE 会被静默降级成粗定位，
+     * 之后再想拿精确位置就只能去系统设置里手动改。
+     */
+    val PERMISSIONS: Array<String> = arrayOf(
+        Manifest.permission.ACCESS_COARSE_LOCATION,
+        Manifest.permission.ACCESS_FINE_LOCATION,
+    )
+
+    /** 给传统 `onRequestPermissionsResult` 风格的调用方；Activity Result 风格用不到。 */
+    const val REQUEST_CODE = 0x10C
+
+    /** 粗或精任一被授予即算可用 —— 表盘坐标和天气都不需要米级精度。 */
+    fun isGranted(context: Context): Boolean = PERMISSIONS.any { permission ->
+        ContextCompat.checkSelfPermission(context, permission) == PackageManager.PERMISSION_GRANTED
+    }
+
+    /** 单独问精确位置：决定要不要把 GPS / passive provider 报给 LocationManager。 */
+    fun hasFineLocation(context: Context): Boolean =
+        ContextCompat.checkSelfPermission(
+            context,
+            Manifest.permission.ACCESS_FINE_LOCATION,
+        ) == PackageManager.PERMISSION_GRANTED
+
+    /**
+     * 这段表盘文本要不要一次授权引导：用到了位置标签、且当前没有任何位置权限。
+     *
+     * 传 watch.xml 全文最准（Lua 脚本与表达式里的标签也算得进去），传单个属性值也行。
+     * 判定口径见 [WatchmakerTagResolver.usesLocationTags]。
+     */
+    fun isRequestNeededFor(context: Context, watchFaceText: String): Boolean =
+        WatchmakerTagResolver.usesLocationTags(watchFaceText) && !isGranted(context)
+
+    /**
+     * 发起申请。已经授权时**什么都不做**，所以调用方可以无脑调，不必自己先判一次。
+     *
+     * 用 [ActivityCompat] 而不是 Activity Result contract：这样任何 Activity 都能直接
+     * 调，不要求宿主是 Compose、也不要求它提前 register 一个 launcher。Compose 侧
+     * 想用 contract 的话，把 [PERMISSIONS] 交给 `RequestMultiplePermissions` 即可。
+     */
+    fun request(activity: Activity) {
+        if (isGranted(activity)) return
+        runCatching { ActivityCompat.requestPermissions(activity, PERMISSIONS, REQUEST_CODE) }
+    }
+}
 
 internal class AndroidWatchDataProvider(
     context: Context,
@@ -254,7 +328,7 @@ internal class AndroidWatchDataProvider(
         val gyro = gyroscope
         val accel = accelerometer
         val currentHeartRate = watchHeartRateValue(
-            hasPermission = hasHeartRatePermission(appContext),
+            hasPermission = hasHeartRatePermissionCached(),
             value = heartRate,
         )
         val slow = slowDeviceState()
@@ -275,8 +349,9 @@ internal class AndroidWatchDataProvider(
             // 由宿主通过 WatchNotificationCounts 这个 seam 推进来。
             notificationCount = WatchNotificationCounts.current(),
             // {d24h}：DateFormat 需要 Context，而 tag 解析器是纯函数，所以在
-            // provider 侧读。用户在系统设置里改制式后，下一帧快照就跟上。
-            is24Hour = runCatching { DateFormat.is24HourFormat(appContext) }.getOrNull(),
+            // provider 侧读。改制式不是实时性敏感的变更，短 TTL 缓存换掉每帧
+            // 一次的 Settings 查询（见 [is24HourFormatCached]）。
+            is24Hour = is24HourFormatCached(),
             weather = weather,
             // Compatibility fields retain the first slice's public snapshot
             // shape. New renderers consume [weather], whose values are
@@ -330,6 +405,7 @@ internal class AndroidWatchDataProvider(
             compassHeadingDegrees = compassHeading,
             latitude = slow.latitude,
             longitude = slow.longitude,
+            altitudeMeters = slow.altitudeMeters,
             stopwatchRunning = WatchStopwatch.isRunning,
             stopwatchElapsedMs = WatchStopwatch.elapsedMs(SystemClock.elapsedRealtime()),
             calendarEvents = calendarEvents(nowEpochMs),
@@ -375,6 +451,7 @@ internal class AndroidWatchDataProvider(
         val darkMode: Boolean?,
         val latitude: Double?,
         val longitude: Double?,
+        val altitudeMeters: Double?,
     )
 
     @Volatile
@@ -388,6 +465,41 @@ internal class AndroidWatchDataProvider(
 
     @Volatile
     private var calendarReadAtMs: Long = 0L
+
+    // snapshot() 是每帧调用的，而这两项（心率权限检查、{d24h} 的改制式查询）
+    // 都是系统设置级的慢变量；按 [SLOW_STATE_TTL_MS] 缓存，省掉每帧的
+    // checkSelfPermission 与 Settings.System 查询。
+    @Volatile
+    private var cachedIs24Hour: Boolean? = null
+
+    @Volatile
+    private var is24HourReadAtMs = 0L
+
+    @Volatile
+    private var cachedHeartRatePermission: Boolean? = null
+
+    @Volatile
+    private var heartRatePermissionReadAtMs = 0L
+
+    private fun is24HourFormatCached(): Boolean? {
+        val cached = cachedIs24Hour
+        val now = SystemClock.elapsedRealtime()
+        if (cached != null && now - is24HourReadAtMs < SLOW_STATE_TTL_MS) return cached
+        val fresh = runCatching { DateFormat.is24HourFormat(appContext) }.getOrNull() ?: return cached
+        cachedIs24Hour = fresh
+        is24HourReadAtMs = now
+        return fresh
+    }
+
+    private fun hasHeartRatePermissionCached(): Boolean {
+        val cached = cachedHeartRatePermission
+        val now = SystemClock.elapsedRealtime()
+        if (cached != null && now - heartRatePermissionReadAtMs < SLOW_STATE_TTL_MS) return cached
+        val fresh = hasHeartRatePermission(appContext)
+        cachedHeartRatePermission = fresh
+        heartRatePermissionReadAtMs = now
+        return fresh
+    }
 
     private fun slowDeviceState(): SlowDeviceState {
         val now = SystemClock.elapsedRealtime()
@@ -417,6 +529,9 @@ internal class AndroidWatchDataProvider(
                 Configuration.UI_MODE_NIGHT_YES,
             latitude = location?.latitude,
             longitude = location?.longitude,
+            // {aalt}。海拔不是传感器读数，是天气那次 Open-Meteo 请求顺带带回来的
+            // `elevation`（同一个响应里就有，不用再打一次网络）。
+            altitudeMeters = location?.elevation,
         )
         slowState = fresh
         slowStateReadAtMs = now
@@ -479,7 +594,13 @@ internal class AndroidWatchDataProvider(
         java.text.SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.US).format(java.util.Date(bootedAt))
     }.getOrNull()
 
-    /** {alat} / {alon}：只读天气已经落盘的那份定位，不为此另外申请位置权限。 */
+    /**
+     * {alat} / {alon} / {aalt}：只读天气已经落盘的那份定位，不在渲染路径上发起定位请求。
+     *
+     * 这里刻意不申请权限 —— 渲染线程不该弹系统对话框。要授权引导的话由宿主 Activity
+     * 走 [WatchLocationPermissionPolicy]（先用 `isRequestNeededFor` 判断这张表盘是否
+     * 真的用到了坐标，再 `request`），免得没用位置标签的表盘也被弹一次。
+     */
     private fun activeLocation(): WatchWeatherLocation? =
         (weatherSource as? WatchWeatherRepository)?.activeLocation()
 

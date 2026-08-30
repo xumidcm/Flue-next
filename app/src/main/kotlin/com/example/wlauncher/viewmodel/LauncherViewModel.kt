@@ -55,7 +55,13 @@ import com.flue.launcher.layout.FlueLayoutProfileJson
 import com.flue.launcher.layout.FlueLayoutProfiles
 import com.flue.launcher.layout.flueUniqueProfileName
 import com.flue.launcher.layout.migratedLayoutProfiles
+import com.flue.launcher.layout.FLUE_LAYOUT_APP_LIST_SCALE_MAX
+import com.flue.launcher.layout.FLUE_LAYOUT_APP_LIST_SCALE_MIN
+import com.flue.launcher.layout.FLUE_LAYOUT_NARROW_COLUMNS_MAX
+import com.flue.launcher.layout.FLUE_LAYOUT_NARROW_COLUMNS_MIN
 import com.flue.launcher.util.FlowCrescentDirection
+import com.flue.launcher.util.FlowShapeCurve
+import com.flue.launcher.util.RecentsVisibility
 import com.flue.launcher.ui.common.FlueScreenShape
 import com.flue.launcher.ui.common.DEFAULT_OVERLAY_MASK_CORNER_RADIUS_DP
 import com.flue.launcher.ui.common.normalizeOverlayMaskCornerRadiusDp
@@ -352,7 +358,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     val sideScreenEnabled: StateFlow<Boolean> = _sideScreenEnabled.asStateFlow()
     private val _sideScreenShortcutRows = MutableStateFlow(2)
     val sideScreenShortcutRows: StateFlow<Int> = _sideScreenShortcutRows.asStateFlow()
-    private val _sideScreenShortcutCols = MutableStateFlow(3)
+    private val _sideScreenShortcutCols = MutableStateFlow(4)
     val sideScreenShortcutCols: StateFlow<Int> = _sideScreenShortcutCols.asStateFlow()
     private val _sideScreenShortcuts = MutableStateFlow(List(SIDE_SCREEN_SHORTCUT_SLOT_CAPACITY) { null as String? })
     val sideScreenShortcuts: StateFlow<List<String?>> = _sideScreenShortcuts.asStateFlow()
@@ -819,6 +825,9 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     private var watchFacePrefsHydrated = false
     private var watchFaceScanHydrated = false
     private var lastWatchFaceRefreshAt = 0L
+
+    /** 最近一次全量表盘扫描的墙钟时刻；配合 [watchFaceDiskChangedSince] 做廉价变化探测。 */
+    private var lastWatchFaceScanWallClockMs = 0L
     private var watchFaceRefreshJob: Job? = null
     private val pendingWriteJobs = ConcurrentHashMap<String, Job>()
     private val appOrderWriteCoordinator = AppOrderWriteCoordinator()
@@ -907,7 +916,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                     _sideScreenShortcutRows.value = loadedShortcutRows
                 }
 
-                val loadedShortcutCols = (prefs[KEY_SIDE_SCREEN_SHORTCUT_COLS] ?: 3).coerceIn(2, 4)
+                val loadedShortcutCols = (prefs[KEY_SIDE_SCREEN_SHORTCUT_COLS] ?: 4).coerceIn(2, 4)
                 if (_sideScreenShortcutCols.value != loadedShortcutCols) {
                     _sideScreenShortcutCols.value = loadedShortcutCols
                 }
@@ -931,7 +940,11 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                 val loadedLowRes = prefs[KEY_LOW_RES] ?: false
                 if (_lowResIcons.value != loadedLowRes) {
                     _lowResIcons.value = loadedLowRes
-                    refreshIcons()
+                    // 首次加载而非用户切换：初始扫描还在延迟等待时只改参数，
+                    // 避免冷启动连跑两轮全量扫描（图标包加载同理，见下文）。
+                    appRepository.setIconRenderingOptionsDeferrable(
+                        iconSize = if (loadedLowRes) 64 else 128
+                    )
                 }
 
                 val loadedLegacyCircularIcons = true
@@ -982,6 +995,10 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
 
                 val loadedHoneycombCols = (prefs[KEY_HONEYCOMB_COLS] ?: honeycombColsDefault).coerceIn(1, 5)
                 if (_honeycombCols.value != loadedHoneycombCols) _honeycombCols.value = loadedHoneycombCols
+                val loadedAppListScale = normalizeAppListScalePercent(prefs[KEY_APP_LIST_SCALE_PERCENT] ?: 100)
+                if (_appListScalePercent.value != loadedAppListScale) {
+                    _appListScalePercent.value = loadedAppListScale
+                }
 
                 val loadedTopBlur = (prefs[KEY_HONEYCOMB_TOP_BLUR] ?: 4).coerceIn(0, 48)
                 if (_honeycombTopBlur.value != loadedTopBlur) _honeycombTopBlur.value = loadedTopBlur
@@ -1019,7 +1036,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                         null
                     }
                 val storedLayoutProfiles = prefs[KEY_LAYOUT_PROFILES]?.let { payload ->
-                    runCatching { FlueLayoutProfileJson.decodeLibrary(payload) }.getOrNull()
+                    decodeLayoutProfileLibraryCached(payload)
                 }
                 val loadedLayoutProfiles = FlueLayoutProfiles.withMissingBuiltIns(
                     storedLayoutProfiles ?: migratedLayoutProfiles(
@@ -1031,6 +1048,8 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                         fisheyeStrengthPercent = prefs[KEY_APP_LIST_FISHEYE_STRENGTH_PERCENT],
                         leftSafeInsetPercent =
                             flatLeftSafeInsetPercent?.let(::normalizeLeftSafeInsetPercent),
+                        narrowColumns = loadedHoneycombCols,
+                        appListScalePercent = loadedAppListScale,
                     ),
                 )
                 if (_layoutProfiles.value != loadedLayoutProfiles) {
@@ -1048,11 +1067,6 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                     AppListBackgroundJson.decodeOrDefault(prefs[KEY_APP_LIST_BACKGROUND])
                 if (_appListBackground.value != loadedAppListBackground) {
                     _appListBackground.value = loadedAppListBackground
-                }
-
-                val loadedAppListScale = normalizeAppListScalePercent(prefs[KEY_APP_LIST_SCALE_PERCENT] ?: 100)
-                if (_appListScalePercent.value != loadedAppListScale) {
-                    _appListScalePercent.value = loadedAppListScale
                 }
 
                 val loadedGlobalUiScale = normalizeGlobalUiScalePercent(prefs[KEY_GLOBAL_UI_SCALE_PERCENT] ?: 100)
@@ -1156,10 +1170,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                 }
 
                 val customMotionProfiles = prefs[KEY_CUSTOM_MOTION_PROFILES]
-                    ?.let { payload ->
-                        runCatching { FlueMotionProfileJson.decodeLibrary(payload) }
-                            .getOrDefault(emptyList())
-                    }
+                    ?.let { payload -> decodeMotionProfileLibraryCached(payload) }
                     .orEmpty()
                     .filterNot { FlueMotionProfiles.isBuiltIn(it.id) }
                 val loadedMotionProfiles =
@@ -1329,7 +1340,9 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                 val selectedPack = prefs[KEY_ICON_PACK_PACKAGE]
                 if (_selectedIconPackPackage.value != selectedPack) {
                     _selectedIconPackPackage.value = selectedPack
-                    appRepository.setIconPackPackage(selectedPack)
+                    // 首次加载走可延迟路径：若初始扫描还没开跑，把图标包并入
+                    // 那一轮，不单独再扫一次（用户运行时切换仍走即时重扫）。
+                    appRepository.setIconRenderingOptionsDeferrable(packageName = selectedPack)
                 }
 
                 val loadedWatchFaceId = prefs[KEY_SELECTED_WATCHFACE_ID] ?: BUILT_IN_WATCHFACE_ID
@@ -1517,6 +1530,9 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
 
                 val loadedHideFromRecents = prefs[KEY_HIDE_FROM_RECENTS] ?: true
                 if (_hideFromRecents.value != loadedHideFromRecents) _hideFromRecents.value = loadedHideFromRecents
+                // RecentsVisibility 的读方遍布各 Activity 的 onCreate/onResume，
+                // 靠这条收集器推送保持缓存与 DataStore 一致，读方就不必阻塞读盘。
+                RecentsVisibility.updateCache(loadedHideFromRecents)
 
                 val loadedSegmentedDownload = prefs[KEY_WATCH_STORE_SEGMENTED_DOWNLOAD] ?: true
                 if (_watchStoreSegmentedDownload.value != loadedSegmentedDownload) {
@@ -2212,9 +2228,9 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     }
 
     fun setHoneycombCols(cols: Int) {
-        _honeycombCols.value = cols.coerceIn(1, 5)
-        val savedValue = _honeycombCols.value
-        persistDebounced("key_honeycomb_cols") { store.edit { it[KEY_HONEYCOMB_COLS] = savedValue } }
+        updateActiveLayoutProfile {
+            it.copy(narrowColumns = cols.coerceIn(FLUE_LAYOUT_NARROW_COLUMNS_MIN, FLUE_LAYOUT_NARROW_COLUMNS_MAX))
+        }
     }
 
     fun setHoneycombTopBlur(value: Int) {
@@ -2294,10 +2310,8 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     }
 
     fun setAppListScalePercent(value: Int) {
-        _appListScalePercent.value = normalizeAppListScalePercent(value)
-        val savedValue = _appListScalePercent.value
-        persistDebounced("key_app_list_scale_percent") {
-            store.edit { it[KEY_APP_LIST_SCALE_PERCENT] = savedValue }
+        updateActiveLayoutProfile {
+            it.copy(appListScalePercent = value.coerceIn(FLUE_LAYOUT_APP_LIST_SCALE_MIN, FLUE_LAYOUT_APP_LIST_SCALE_MAX))
         }
     }
 
@@ -2554,6 +2568,12 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         if (_appListLeftSafeInsetPercent.value != profile.leftSafeInsetPercent) {
             _appListLeftSafeInsetPercent.value = profile.leftSafeInsetPercent
         }
+        if (_honeycombCols.value != profile.narrowColumns) {
+            _honeycombCols.value = profile.narrowColumns
+        }
+        if (_appListScalePercent.value != profile.appListScalePercent) {
+            _appListScalePercent.value = profile.appListScalePercent
+        }
         if (_appListFlowCrescentBulgePercent.value != profile.crescentBulgePercent) {
             _appListFlowCrescentBulgePercent.value = profile.crescentBulgePercent
         }
@@ -2658,6 +2678,19 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
 
     fun setAppListBackgroundScrimPercent(percent: Int) {
         updateAppListBackground { it.copy(scrimPercent = percent) }
+    }
+
+    fun setAppListFlowShapeCurve(curve: FlowShapeCurve) {
+        updateActiveLayoutProfile { it.copy(flowShapeCurve = curve) }
+    }
+
+    fun resetAppListBackgroundEffects() {
+        updateAppListBackground {
+            it.copy(
+                blurPercent = AppListBackgroundConfig.DEFAULT_BLUR_PERCENT,
+                scrimPercent = AppListBackgroundConfig.DEFAULT_SCRIM_PERCENT,
+            )
+        }
     }
 
     /**
@@ -3051,7 +3084,19 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
             }
         }
         if (!force && watchFaceScanHydrated && now - lastWatchFaceRefreshAt < 25_000L) return
+        // force 的本意是「编辑器改了表盘，必须立刻重扫」。但从任意应用/锁屏回来
+        // 也都会走这条 —— 原来每次 onResume 都付一轮「逐包 ZipFile + XML 解析」
+        // 的成本。磁盘探测（纯 stat 走）发现什么都没变时，force 直接落空，
+        // cachedWatchFaces 已在上方发布，视图保持现状即可。
+        if (
+            force && watchFaceScanHydrated &&
+            !watchFaceDiskChangedSince(lastWatchFaceScanWallClockMs)
+        ) {
+            lastWatchFaceRefreshAt = now
+            return
+        }
         lastWatchFaceRefreshAt = now
+        lastWatchFaceScanWallClockMs = System.currentTimeMillis()
         watchFaceRefreshJob?.cancel()
         watchFaceRefreshJob = viewModelScope.launch {
             val scanned = withContext(Dispatchers.IO) {
@@ -3060,6 +3105,33 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
             publishWatchFaces(scanned)
             syncSelectedWatchFace(freshScanCompleted = true)
         }
+    }
+
+    /**
+     * 表盘存储目录里有没有比 [scanWallClockMs] 更晚的改动。只递归 stat（深度封顶），
+     * 不读文件内容：覆盖编辑器改 watch.xml/pxml、导入/删除表盘这三类真实变更。
+     * mtime 在部分文件系统上是秒级精度，留 2s 余量宁可多扫一次也不错漏编辑结果。
+     */
+    private fun watchFaceDiskChangedSince(scanWallClockMs: Long): Boolean {
+        if (scanWallClockMs <= 0L) return true
+        val context = getApplication<Application>()
+        val roots = listOf(
+            WatchmakerWatchFaceStorage.rootDirectory(context),
+            JbWatchFaceStorage.rootDir(context),
+        )
+        val slackMs = 2_000L
+        val newest = roots.maxOfOrNull { root -> newestMtimeOf(root, depth = 0) } ?: 0L
+        return newest > scanWallClockMs - slackMs
+    }
+
+    private fun newestMtimeOf(file: File, depth: Int): Long {
+        var newest = file.lastModified()
+        if (depth >= 3) return newest
+        val children = runCatching { file.listFiles() }.getOrNull() ?: return newest
+        for (child in children) {
+            newest = maxOf(newest, newestMtimeOf(child, depth + 1))
+        }
+        return newest
     }
 
     suspend fun importJbWatchFace(uri: Uri): Result<WatchFaceDescriptor> {
@@ -3739,7 +3811,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         _motionProfiles.value = FlueMotionProfiles.builtIns
         _sideScreenEnabled.value = true
         _sideScreenShortcutRows.value = 2
-        _sideScreenShortcutCols.value = 3
+        _sideScreenShortcutCols.value = 4
         _sideScreenShortcuts.value = List(SIDE_SCREEN_SHORTCUT_SLOT_CAPACITY) { null }
         _sideScreenWidgetSlots.value = emptyList()
         _blurEnabled.value = defaultBlurEnabled
@@ -3867,7 +3939,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                 it[KEY_UI_STYLE] = DEFAULT_UI_STYLE.name
                 it[KEY_SIDE_SCREEN_ENABLED] = true
                 it[KEY_SIDE_SCREEN_SHORTCUT_ROWS] = 2
-                it[KEY_SIDE_SCREEN_SHORTCUT_COLS] = 3
+                it[KEY_SIDE_SCREEN_SHORTCUT_COLS] = 4
                 it[KEY_BLUR] = defaultBlurEnabled
                 it[KEY_EDGE_BLUR] = false
                 it[KEY_LOW_RES] = false
@@ -4305,7 +4377,13 @@ private fun encodeWatchfaceCanvasOverrides(
 
 private fun decodeWatchfaceCanvasOverrides(raw: String?): Map<String, WatchCanvasSettings> {
     if (raw.isNullOrBlank()) return emptyMap()
-    return raw.lineSequence()
+    // DataStore 收集器每次发射都整体重跑，而这份文本在两次「真正编辑」之间
+    // 几乎不变。按原文做单条记忆化，写入风暴（拖滑杆等连续写盘）期间不再
+    // 每次发射都重新逐行解析。收集器在 IO 线程跑，这里无需加锁。
+    decodeWatchfaceCanvasOverridesCache?.let { (payload, decoded) ->
+        if (payload == raw) return decoded
+    }
+    val decoded = raw.lineSequence()
         .mapNotNull { line ->
             val separator = line.indexOf('=')
             if (separator <= 0) return@mapNotNull null
@@ -4313,6 +4391,34 @@ private fun decodeWatchfaceCanvasOverrides(raw: String?): Map<String, WatchCanva
             id to WatchCanvasSettings.decode(line.substring(separator + 1))
         }
         .toMap()
+    decodeWatchfaceCanvasOverridesCache = raw to decoded
+    return decoded
+}
+
+private var decodeWatchfaceCanvasOverridesCache: Pair<String, Map<String, WatchCanvasSettings>>? = null
+
+/**
+ * 大 JSON 库的按 payload 记忆化（布局档案 / 动效档案）。偏好收集器对每次
+ * 写盘都全量重跑；没有这份缓存时，拖动任意一个滑杆的每一帧都会把两份
+ * JSON 全文重新解析一遍。单条缓存即可：同一个 payload 的解码结果是纯函数。
+ */
+private var layoutProfileLibraryCache: Pair<String, List<FlueLayoutProfile>?>? = null
+
+/** 与原实现同为「失败返回 null」：null 会走迁移路径，不能与空列表混淆。 */
+private fun decodeLayoutProfileLibraryCached(payload: String): List<FlueLayoutProfile>? {
+    layoutProfileLibraryCache?.let { (key, value) -> if (key == payload) return value }
+    val decoded = runCatching { FlueLayoutProfileJson.decodeLibrary(payload) }.getOrNull()
+    layoutProfileLibraryCache = payload to decoded
+    return decoded
+}
+
+private var motionProfileLibraryCache: Pair<String, List<FlueMotionProfile>>? = null
+
+private fun decodeMotionProfileLibraryCached(payload: String): List<FlueMotionProfile> {
+    motionProfileLibraryCache?.let { (key, value) -> if (key == payload) return value }
+    val decoded = runCatching { FlueMotionProfileJson.decodeLibrary(payload) }.getOrDefault(emptyList())
+    motionProfileLibraryCache = payload to decoded
+    return decoded
 }
 
 private fun ExternalLaunchState.sessionOrNull(): ExternalLaunchSession? = when (this) {

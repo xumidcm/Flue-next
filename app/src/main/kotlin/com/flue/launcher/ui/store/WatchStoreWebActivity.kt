@@ -5,14 +5,19 @@ import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
+import android.util.Log
+import android.webkit.ConsoleMessage
 import android.webkit.CookieManager
 import android.webkit.DownloadListener
 import android.webkit.URLUtil
 import android.webkit.ValueCallback
 import android.webkit.WebChromeClient
+import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
+import android.webkit.WebResourceResponse
 import android.webkit.WebSettings
 import android.webkit.WebView
+import android.util.Base64
 import android.webkit.WebViewClient
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
@@ -21,6 +26,7 @@ import androidx.activity.result.ActivityResultLauncher
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -29,6 +35,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -37,10 +44,12 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -66,6 +75,7 @@ import com.flue.launcher.watchface.store.DEFAULT_WEB_ZOOM_PERCENT
 import com.flue.launcher.watchface.store.WatchStoreUiPreferences
 import com.flue.launcher.watchface.store.WatchStoreUrlPolicy
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -73,6 +83,68 @@ import java.net.HttpURLConnection
 import java.net.URI
 import java.net.URL
 import java.util.Locale
+import org.json.JSONObject
+import org.json.JSONTokener
+
+internal data class WatchStoreWebLoginIdentity(
+    val token: String,
+    val username: String,
+    val expiresAtEpochMs: Long,
+)
+
+/** Collects JWT-shaped values from both Web Storage and the WebView cookie jar. */
+internal fun watchStoreWebLoginTokenCandidates(
+    localStorageRaw: String?,
+    cookieHeader: String?,
+): List<String> {
+    val candidates = LinkedHashSet<String>()
+    runCatching { JSONTokener(localStorageRaw.orEmpty()).nextValue() as? String }
+        .getOrNull()
+        ?.trim()
+        ?.takeIf(::looksLikeWatchStoreJwt)
+        ?.let(candidates::add)
+
+    cookieHeader.orEmpty().split(';').forEach { part ->
+        val equals = part.indexOf('=')
+        if (equals <= 0) return@forEach
+        val rawValue = part.substring(equals + 1).trim()
+        val value = (runCatching { Uri.decode(rawValue) }.getOrNull() ?: rawValue)
+            .removeSurrounding("\"")
+            .trim()
+        if (looksLikeWatchStoreJwt(value)) candidates.add(value)
+    }
+    return candidates.toList()
+}
+
+/** Validates a same-origin WebView token before importing it into the native session. */
+internal fun parseWatchStoreWebLoginToken(
+    token: String,
+    nowEpochMs: Long = System.currentTimeMillis(),
+): WatchStoreWebLoginIdentity {
+    val normalized = token.trim()
+    val parts = normalized.split('.')
+    require(parts.size == 3 && parts.all(String::isNotEmpty)) { "网页登录令牌无效" }
+    val payload = String(
+        Base64.decode(
+            parts[1],
+            Base64.URL_SAFE or Base64.NO_WRAP or Base64.NO_PADDING,
+        ),
+        Charsets.UTF_8,
+    )
+    val tokenPayload = JSONObject(payload)
+    val expSeconds = tokenPayload.optLong("exp", 0L)
+    require(expSeconds > nowEpochMs / 1_000L) { "网页登录令牌已过期" }
+    val username = tokenPayload.optString("username").trim()
+    require(username.isNotEmpty()) { "网页登录用户信息缺失" }
+    return WatchStoreWebLoginIdentity(
+        token = normalized,
+        username = username,
+        expiresAtEpochMs = Math.multiplyExact(expSeconds, 1_000L),
+    )
+}
+
+private fun looksLikeWatchStoreJwt(value: String): Boolean =
+    value.split('.').size == 3 && value.split('.').all(String::isNotEmpty)
 
 /**
  * C1 — 网页版兜底的 WebView 宿主。
@@ -93,6 +165,20 @@ import java.util.Locale
  *   站外链接交给外部浏览器，不在这个带登录 cookie 的 WebView 里打开。
  * - 进来的 `EXTRA_URL` 来自 Intent（别的 App 也能发），一律过
  *   [WatchStoreUrlPolicy.webUrlOrSiteRoot]：不合法就退回站点根，绝不加载传进来的任意地址。
+ *
+ * ## T-11 —— 白屏 / 黑屏的三道防线
+ *
+ * 老师报「Android 9 上打开网页版会白屏或黑屏」。真因在上游前端的编译目标（Vite 5 默认
+ * es2020，源码里 `?.` / `??` 满天飞，而 Android 9 自带的 WebView 是 Chrome 66~79），
+ * 详见 [flueWebViewVersionUsable] 的 KDoc。**不改上游**，客户端这边分三层挡：
+ *
+ * 1. **进来之前**（`onCreate`）：主版本 < 80 或问不出版本 → 根本不进这个 Activity 的正文，
+ *    直接 `ACTION_VIEW` 外跳 + Toast 说明。白屏是「看起来坏了」，外跳只是「换个地方开」。
+ * 2. **进来之后**（`onConsoleMessage` / `onReceivedError` / `onReceivedHttpError`）：把
+ *    版本号与 console 一起记进 logcat；主框架失败显示带原因的错误页 + 重试，不再是
+ *    「转圈一收剩下黑底」。
+ * 3. **渲染之后**（[scheduleBlankScreenProbe]）：HTTP 200 但 `#root` 是空的 → 自动外跳。
+ *    这类失败没有任何回调，只能主动量一次 DOM。
  */
 class WatchStoreWebActivity : FlueComponentActivity() {
 
@@ -119,25 +205,72 @@ class WatchStoreWebActivity : FlueComponentActivity() {
     private var busyMessage by mutableStateOf<String?>(null)
     private var pageLoading by mutableStateOf(true)
 
+    /**
+     * T-11：主框架加载失败的原因，非 null 时盖一层错误页。
+     *
+     * 以前失败时只有 `pageLoading = false` —— 转圈一收，屏幕上就只剩 [WebHostScreen] 的
+     * 黑底，老师报的「黑屏」就是它。原因文字来自 WebView（`net::ERR_…` / `HTTP 503`），
+     * 是技术串但准确；配上「重试」与「用系统浏览器打开」两条出路，总比困在黑屏里好。
+     */
+    private var pageError by mutableStateOf<String?>(null)
+
+    /** 当前生效的 WebView 版本号，记进每一条错误日志 —— 诊断白屏时第一个要问的就是它。 */
+    private var webViewVersionName: String? = null
+
+    /** 自动外跳只做一次：同一个 SyntaxError 在 console 里会连着报好几条。 */
+    private var externalFallbackDone = false
+
+    /** 首屏空白只探一次，见 [scheduleBlankScreenProbe]。 */
+    private var blankScreenProbePending = true
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         RecentsVisibility.apply(this)
         val preferences = WatchStoreUiPreferences(this)
-        siteBase = runCatching { URI(preferences.readBaseUrl()) }.getOrDefault(URI(DEFAULT_FALLBACK_BASE))
+        siteBase = intent.getStringExtra(EXTRA_TRUSTED_SITE_BASE)
+            ?.let { raw -> runCatching { URI(raw) }.getOrNull() }
+            ?: runCatching { URI(preferences.readBaseUrl()) }.getOrDefault(URI(DEFAULT_FALLBACK_BASE))
         val target = WatchStoreUrlPolicy.webUrlOrSiteRoot(siteBase, intent.getStringExtra(EXTRA_URL))
+        val loginMode = intent.getBooleanExtra(EXTRA_LOGIN_MODE, false)
 
         // SAF 的 launcher 必须在 STARTED 之前注册。
         systemPicker = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
             deliverFileChooserResult(uri)
         }
 
-        // 部分 Wear 机型不带 Android System WebView：构造就会抛。这时候退外部浏览器，
-        // 连浏览器都没有才提示 —— 总比整页白屏好。
-        val created = runCatching { WebView(this) }.getOrNull()
+        // T-11 —— 进内置 WebView 之前先过两道门：
+        //
+        // 1. **版本门**（新增）：Android 9 那批机器自带的 WebView 是 Chrome 66~79，上游前端
+        //    的入口 chunk 在解析期就 SyntaxError，进去必定白屏，而且事后没有任何回调能告诉
+        //    我们「渲染失败了」（见 [flueWebViewVersionUsable] 的 KDoc）。所以必须提前拦。
+        // 2. 部分 Wear 机型根本不带 Android System WebView：构造就会抛。
+        //
+        // 两道门的处置一样 —— 退系统浏览器，并且**说清楚为什么跳走了**：不解释的话老师会
+        // 以为「点网页版会莫名跳浏览器」是新 bug。这个 Activity 是版本门的**唯一**落点，
+        // 因为 EXTRA_URL 也可能来自别的 App 发来的 Intent，只在按钮那侧拦是拦不住的。
+        webViewVersionName = flueWebViewVersionNameOrNull(this)
+        val versionUsable = flueWebViewVersionUsable(webViewVersionName)
+        val created = if (versionUsable) runCatching { WebView(this) }.getOrNull() else null
         if (created == null) {
-            if (!openExternally(target.toASCIIString())) {
-                Toast.makeText(this, R.string.watch_store_web_unavailable, Toast.LENGTH_LONG).show()
-            }
+            Log.w(
+                LOG_TAG,
+                "内置 WebView 不可用，改用系统浏览器（version=$webViewVersionName, usable=$versionUsable）",
+            )
+            val opened = openExternally(target.toASCIIString())
+            val version = webViewVersionName
+            Toast.makeText(
+                this,
+                when {
+                    // 连系统浏览器都没有：这台设备真的没有任何能开网页的东西。
+                    !opened -> getString(R.string.watch_store_web_unavailable)
+                    // 问出了版本号但太旧 → 明确说是版本问题。
+                    !versionUsable && version != null ->
+                        getString(R.string.watch_store_web_view_outdated_fmt, version)
+                    // 取不到 provider 包信息，或 WebView 构造直接抛 → 按「没有可用网页组件」说。
+                    else -> getString(R.string.watch_store_web_unavailable)
+                },
+                Toast.LENGTH_LONG,
+            ).show()
             finish()
             return
         }
@@ -162,7 +295,18 @@ class WatchStoreWebActivity : FlueComponentActivity() {
                     webView = created,
                     loading = pageLoading,
                     busyMessage = busyMessage,
+                    error = pageError,
+                    onRetry = {
+                        pageError = null
+                        pageLoading = true
+                        created.reload()
+                    },
+                    onOpenExternal = {
+                        // 当前地址优先：错误可能发生在站内某个子页面上，退回站点根会丢上下文。
+                        if (openExternally(created.url ?: target.toASCIIString())) finish()
+                    },
                     onBack = { goBackOrFinish() },
+                    onImportLogin = if (loginMode) ::captureWebLogin else null,
                 )
                 if (chooserVisible) {
                     WebUploadChooserDialog(
@@ -214,12 +358,60 @@ class WatchStoreWebActivity : FlueComponentActivity() {
         }
     }
 
+    private fun captureWebLogin() {
+        val view = webView ?: return
+        view.evaluateJavascript(
+            "localStorage.getItem('token')",
+        ) { raw ->
+            runCatching {
+                val currentUrl = view.url?.let(::URI)
+                    ?: error("网页登录页面地址缺失")
+                require(WatchStoreUrlPolicy.isSameWebSite(siteBase, currentUrl)) {
+                    "网页登录页面不属于当前市场"
+                }
+                // HttpOnly 登录态不会出现在 localStorage，也不会被 JS 读到；CookieManager
+                // 是 WebView 能提供给宿主的读取入口。origin 已在上面确认后才读它。
+                val cookieHeader = CookieManager.getInstance().getCookie(currentUrl.toASCIIString())
+                val identity = watchStoreWebLoginTokenCandidates(raw, cookieHeader)
+                    .asSequence()
+                    .mapNotNull { candidate ->
+                        runCatching { parseWatchStoreWebLoginToken(candidate) }.getOrNull()
+                    }
+                    .firstOrNull()
+                    ?: error("网页登录令牌缺失或无效")
+                // 成功也要说一声：一 finish 就回到商店，没有提示的话分不清
+                // 「导入了」还是「按钮没反应」（失败分支有 Toast，成功一直哑着）。
+                Toast.makeText(
+                    this,
+                    getString(R.string.watch_store_login_web_imported_fmt, identity.username),
+                    Toast.LENGTH_SHORT,
+                ).show()
+                setResult(
+                    RESULT_OK,
+                    Intent()
+                        .putExtra(EXTRA_LOGIN_TOKEN, identity.token)
+                        .putExtra(EXTRA_LOGIN_USERNAME, identity.username),
+                )
+                finish()
+            }.onFailure {
+                Toast.makeText(this, R.string.watch_store_login_web_missing, Toast.LENGTH_LONG).show()
+            }
+        }
+    }
+
     @SuppressLint("SetJavaScriptEnabled")
     private fun configure(view: WebView, zoomPercent: Int) {
         CookieManager.getInstance().apply {
             setAcceptCookie(true)
             setAcceptThirdPartyCookies(view, true)
         }
+        // ── T-11：**不要**在这里加 `setLayerType(View.LAYER_TYPE_SOFTWARE)` ────────────
+        //
+        // 网上治「WebView 黑屏」的偏方基本都是这一句，但它对我们这个病症是反的：软件层会把
+        // 整个 WebView 从合成器里摘出来、改成 CPU 逐帧画进一张位图 —— 在 454×454 的手表上
+        // 又慢，又**更容易**出现整块不刷新的黑块。而我们的黑屏根本不是合成器的问题，是入口
+        // 脚本解析失败导致 React 没渲染（见 [flueWebViewVersionUsable] 的 KDoc），
+        // 页面里本来就什么都没有 —— 换渲染路径不会让空页面变出内容。
         view.settings.apply {
             javaScriptEnabled = true
             domStorageEnabled = true
@@ -262,6 +454,8 @@ class WatchStoreWebActivity : FlueComponentActivity() {
 
             override fun onPageStarted(view: WebView, url: String?, favicon: android.graphics.Bitmap?) {
                 pageLoading = true
+                // 新一轮加载：上一轮的错误页要收掉，否则「重试」成功了错误页还盖在上面。
+                pageError = null
             }
 
             override fun onPageFinished(view: WebView, url: String?) {
@@ -269,7 +463,47 @@ class WatchStoreWebActivity : FlueComponentActivity() {
                 // opens `.wf-modal-backdrop`, so shouldOverrideUrlLoading never sees it. Intercept
                 // that one card gesture before React and use the site's real detail route instead.
                 view.evaluateJavascript(WatchStoreWebBridge.installScript(siteBase), null)
+                // 转圈要收（不收就永远转），但**不能**顺手把 pageError 清掉 —— 失败时
+                // onReceivedError 已经先写好了原因，清掉就又变回黑屏。
                 pageLoading = false
+                scheduleBlankScreenProbe(view)
+            }
+
+            /**
+             * T-11：主框架加载失败 → 错误页，不是黑屏。
+             *
+             * 只认 `isForMainFrame`：站点上子资源失败（埋点、缺图标）很常见，为它整页报错
+             * 会把能用的页面也判死。
+             */
+            override fun onReceivedError(
+                view: WebView,
+                request: WebResourceRequest,
+                error: WebResourceError,
+            ) {
+                if (!request.isForMainFrame) return
+                val description = error.description?.toString()?.takeIf(String::isNotBlank)
+                    ?: "error ${error.errorCode}"
+                Log.w(
+                    LOG_TAG,
+                    "主框架加载失败：$description（url=${request.url}, webview=$webViewVersionName）",
+                )
+                pageLoading = false
+                pageError = description
+            }
+
+            override fun onReceivedHttpError(
+                view: WebView,
+                request: WebResourceRequest,
+                errorResponse: WebResourceResponse,
+            ) {
+                if (!request.isForMainFrame) return
+                val status = "HTTP ${errorResponse.statusCode}"
+                Log.w(
+                    LOG_TAG,
+                    "主框架 HTTP 错误：$status（url=${request.url}, webview=$webViewVersionName）",
+                )
+                pageLoading = false
+                pageError = status
             }
         }
         view.setDownloadListener(
@@ -297,6 +531,78 @@ class WatchStoreWebActivity : FlueComponentActivity() {
                 fileChooserCallback = filePathCallback
                 chooserVisible = true
                 return true
+            }
+
+            /**
+             * T-11 的诊断口径：白屏时 logcat 里应当能看到
+             * `Uncaught SyntaxError: Unexpected token '.'`（或 `'?'`），sourceId 指向
+             * `/assets/index-*.js`，同时打印出的 WebView 版本 < 80。
+             *
+             * 顺带兜住「版本号骗了我们」的情况：主版本 ≥ 80 但入口脚本还是解析失败（精简版
+             * WebView、上游换了更新语法），这时候 React 一行都不会跑，留在页面上就是白屏 ——
+             * 直接换系统浏览器。
+             */
+            override fun onConsoleMessage(consoleMessage: ConsoleMessage): Boolean {
+                val message = consoleMessage.message()
+                if (consoleMessage.messageLevel() == ConsoleMessage.MessageLevel.ERROR) {
+                    Log.w(
+                        LOG_TAG,
+                        "web console: $message" +
+                            "（${consoleMessage.sourceId()}:${consoleMessage.lineNumber()}," +
+                            " webview=$webViewVersionName）",
+                    )
+                }
+                if (flueWebConsoleIndicatesFatalSyntaxError(message)) {
+                    fallbackToExternalBrowser("入口脚本解析失败：$message")
+                }
+                return super.onConsoleMessage(consoleMessage)
+            }
+        }
+    }
+
+    /**
+     * 已经进到内置 WebView 才发现渲染不了 → 自动换系统浏览器 + 说明原因。
+     *
+     * 两条触发路径都属于「版本门放过了但实际跑不起来」的残余情况：入口脚本解析期
+     * SyntaxError（[flueWebConsoleIndicatesFatalSyntaxError]）、首屏一直空白
+     * （[scheduleBlankScreenProbe]）。
+     *
+     * 外跳失败时**不**静默返回：退回错误页，至少让人看到发生了什么并能重试。
+     */
+    private fun fallbackToExternalBrowser(reason: String) {
+        if (externalFallbackDone || isFinishing) return
+        externalFallbackDone = true
+        val url = webView?.url ?: return
+        Log.w(LOG_TAG, "改用系统浏览器打开（$reason, webview=$webViewVersionName）")
+        if (openExternally(url)) {
+            Toast.makeText(this, R.string.watch_store_web_view_render_failed, Toast.LENGTH_LONG).show()
+            finish()
+        } else {
+            pageLoading = false
+            pageError = getString(R.string.watch_store_web_unavailable)
+        }
+    }
+
+    /**
+     * 首屏空白探测。
+     *
+     * 为什么要主动量：这类失败**没有任何回调** —— HTTP 200、`onPageFinished` 正常触发，
+     * 只有屏幕是空的。既然事件层测不出来，就在加载完之后隔一会儿去问一次 DOM。
+     *
+     * 只在**首次**加载后量一次：站内跳转时页面偶尔慢一拍，反复探测会把正在正常浏览的人
+     * 莫名踢去系统浏览器 —— 那比白屏更让人困惑。
+     */
+    private fun scheduleBlankScreenProbe(view: WebView) {
+        if (!blankScreenProbePending) return
+        blankScreenProbePending = false
+        lifecycleScope.launch {
+            delay(BLANK_SCREEN_PROBE_DELAY_MS)
+            if (externalFallbackDone || isFinishing || pageError != null) return@launch
+            view.evaluateJavascript(BLANK_SCREEN_PROBE_SCRIPT) { raw ->
+                // evaluateJavascript 回的是 JSON 字面量，字符串结果带引号，得先剥掉。
+                if (raw?.trim()?.trim('"') == BLANK_SCREEN_VERDICT_BLANK) {
+                    fallbackToExternalBrowser("首屏空白")
+                }
             }
         }
     }
@@ -603,6 +909,34 @@ class WatchStoreWebActivity : FlueComponentActivity() {
 
         /** C3：命中表盘下载链接时交回调用方的表盘 id，由商店走既有安装流程。 */
         const val EXTRA_INSTALL_ID: String = "com.flue.launcher.extra.WEB_INSTALL_ID"
+        const val EXTRA_LOGIN_MODE: String = "com.flue.launcher.extra.WEB_LOGIN_MODE"
+        const val EXTRA_LOGIN_TOKEN: String = "com.flue.launcher.extra.WEB_LOGIN_TOKEN"
+        const val EXTRA_LOGIN_USERNAME: String = "com.flue.launcher.extra.WEB_LOGIN_USERNAME"
+        const val EXTRA_TRUSTED_SITE_BASE: String = "com.flue.launcher.extra.WEB_TRUSTED_SITE_BASE"
+
+        private const val LOG_TAG = "FlueStoreWeb"
+
+        /**
+         * T-11：首屏是否空白。
+         *
+         * 取 `#root`（Vite + React 的挂载点）而不是 `body`：body 里永远有 `<script>`，
+         * 拿它判空会永远判成「有内容」。`#root` 不存在时才退回 body（站点改结构的兜底）。
+         *
+         * 同时看子元素数与可见文字：React 挂载失败时 `#root` 是彻底空的，而只要渲染出了
+         * 任何东西（哪怕是它自己的错误提示）就不该判成空白。
+         */
+        private const val BLANK_SCREEN_PROBE_SCRIPT =
+            "(function(){var r=document.getElementById('root')||document.body;" +
+                "if(!r)return 'blank';" +
+                "var t=(r.innerText||'').trim();" +
+                "return (r.childElementCount===0&&t.length===0)?'blank':'ok';})()"
+        private const val BLANK_SCREEN_VERDICT_BLANK = "blank"
+
+        /**
+         * 探测前等多久。React 挂载通常在几十毫秒内完成，2.5s 是给慢机型 + 慢网络留的宽余量
+         * —— 宁可晚一点判，也不要把只是加载慢的页面判成白屏。
+         */
+        private const val BLANK_SCREEN_PROBE_DELAY_MS = 2_500L
 
         private const val UPLOAD_CACHE_DIRECTORY = "web-uploads"
         private const val DOWNLOAD_CACHE_DIRECTORY = "web-downloads"
@@ -622,7 +956,9 @@ class WatchStoreWebActivity : FlueComponentActivity() {
         )
 
         fun intent(context: Context, url: String): Intent =
-            Intent(context, WatchStoreWebActivity::class.java).putExtra(EXTRA_URL, url)
+            Intent(context, WatchStoreWebActivity::class.java)
+                .putExtra(EXTRA_URL, url)
+                .putExtra(EXTRA_LOGIN_MODE, url.trimEnd('/').endsWith("/login"))
     }
 }
 
@@ -631,7 +967,11 @@ private fun WebHostScreen(
     webView: WebView,
     loading: Boolean,
     busyMessage: String?,
+    error: String?,
+    onRetry: () -> Unit,
+    onOpenExternal: () -> Unit,
     onBack: () -> Unit,
+    onImportLogin: (() -> Unit)?,
 ) {
     BackHandler(onBack = onBack)
     Box(modifier = Modifier.fillMaxSize().background(Color.Black)) {
@@ -647,6 +987,15 @@ private fun WebHostScreen(
                 FlueLoadingIndicator()
             }
         }
+        // T-11：失败时盖错误页。这一层在转圈之后判，因为 onReceivedError 会先把
+        // pageLoading 收掉 —— 底下那块 `.background(Color.Black)` 就是老师看到的「黑屏」。
+        if (error != null) {
+            WebErrorPane(
+                reason = error,
+                onRetry = onRetry,
+                onOpenExternal = onOpenExternal,
+            )
+        }
         if (busyMessage != null) {
             Box(
                 modifier = Modifier
@@ -661,6 +1010,78 @@ private fun WebHostScreen(
                 }
             }
         }
+        if (onImportLogin != null && error == null) {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(10.dp),
+            ) {
+                WebErrorAction(stringResource(R.string.watch_store_login_web_import), onImportLogin)
+            }
+        }
+    }
+}
+
+/**
+ * T-11 的错误页：原因 + 两条出路。
+ *
+ * 文字与按钮全部写死成白色（而不是走 [LauncherTheme] 的 titleColor）：这一层盖在 WebView
+ * 的黑底上，浅色主题下的深色前景在这里等于看不见。
+ *
+ * 标题只有原因串（`net::ERR_INTERNET_DISCONNECTED` / `HTTP 503` 这类）—— 技术味重，但
+ * 准确，而且两个按钮已经把「接下来能做什么」说清楚了。要加一句本地化的「网页版加载失败」
+ * 标题需要新字符串，那个由主代理统一加。
+ */
+@Composable
+private fun WebErrorPane(
+    reason: String,
+    onRetry: () -> Unit,
+    onOpenExternal: () -> Unit,
+) {
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color.Black.copy(alpha = 0.92f)),
+        contentAlignment = Alignment.Center,
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 24.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            Text(
+                text = reason,
+                color = Color.White,
+                fontSize = 13.sp,
+                textAlign = TextAlign.Center,
+                maxLines = 4,
+            )
+            Spacer(Modifier.height(14.dp))
+            WebErrorAction(stringResource(R.string.watch_store_retry), onRetry)
+            Spacer(Modifier.height(6.dp))
+            WebErrorAction(stringResource(R.string.watch_store_web_open_external), onOpenExternal)
+        }
+    }
+}
+
+@Composable
+private fun WebErrorAction(label: String, onClick: () -> Unit) {
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(999.dp))
+            .background(Color.White.copy(alpha = 0.14f))
+            .clickable(onClick = onClick)
+            .padding(vertical = 11.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            text = label,
+            color = Color.White,
+            fontSize = 14.sp,
+            fontWeight = FontWeight.SemiBold,
+        )
     }
 }
 

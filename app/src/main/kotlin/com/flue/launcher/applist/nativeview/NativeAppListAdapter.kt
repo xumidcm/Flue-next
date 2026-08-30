@@ -68,12 +68,25 @@ internal class NativeAppListAdapter(
     }
 
     fun submitContent(content: NativeAppListContent, onCommitted: () -> Unit = {}) {
-        // An uncommitted preview is cancelled immediately. A committed one has
-        // already dropped its adapter-local state, so its cleanup token is
-        // carried by this authoritative submission instead.
-        if (discardDragPreview()) {
-            pendingHostPreviewCleanupToken = null
-            onDragPreviewFinished(false)
+        // 拖拽预览进行中来了新的权威内容：**先试着把预览搬过去**，而不是无条件丢弃。
+        // 图标异步解码完成会反复 bump iconRevision → 宿主重提交同一顺序的内容；从前
+        // 这里直接 discard，previewMove 从此永远 false —— 手势还活着，避让却再也不动，
+        // 只能松手重拖（星环上反复拖几下才肯让位就是它）。顺序真的变了（仓库赢过
+        // 手势）才照旧丢弃。
+        val preservedPreview = reattachDragPreview(content.rows)
+        val preservedOrder = if (preservedPreview) {
+            dragPreview?.let { it.originalOrderSnapshot to it.currentOrder }
+        } else {
+            null
+        }
+        if (preservedPreview == false) {
+            // An uncommitted preview is cancelled immediately. A committed one has
+            // already dropped its adapter-local state, so its cleanup token is
+            // carried by this authoritative submission instead.
+            if (discardDragPreview()) {
+                pendingHostPreviewCleanupToken = null
+                onDragPreviewFinished(false)
+            }
         }
         pendingDragCommitRows = null
         pendingDragCommitCommand = null
@@ -82,8 +95,39 @@ internal class NativeAppListAdapter(
         submitList(content.rows) {
             onListCommitted(content.rows.size)
             finishHostPreviewCleanup(cleanupToken)
+            val order = preservedOrder
+            if (order != null && dragPreview != null) {
+                // 重绑定/新挂载的行要拿回预览位移：把当前虚拟顺序再广播一次，
+                // 宿主会把 attached children 重新摆到虚拟格位上。
+                onDragPreviewOrderChanged(order.first, order.second)
+            }
             onCommitted()
         }
+    }
+
+    /**
+     * 把活着的拖拽预览迁到新的内容快照上。
+     *
+     * 只有两情况可迁：新顺序 == 预览的原始顺序（图标解码这类内容级更新的典型形状），
+     * 或新顺序 == 预览的当前虚拟顺序（仓库恰好已和预览一致）。其余任何顺序都说明
+     * 权威快照自己动了，预览作废、返回 false。迁移只换行快照（新图标、新元数据），
+     * 虚拟顺序原样保留，后续 previewMove / finishDragPreview 拿到的都是新内容。
+     */
+    private fun reattachDragPreview(rows: List<NativeAppListBoundRow<Bitmap>>): Boolean {
+        val preview = dragPreview ?: return false
+        val original = preview.originalOrderSnapshot
+        val current = preview.currentOrder
+        if (rows.size != original.size) return false
+        val keys = rows.map { it.stableKey }
+        if (keys.toSet() != original.toSet()) return false
+        if (keys != original && keys != current) return false
+        val rowsByKey = rows.associateBy { it.stableKey }
+        dragPreviewOriginalRows = original.mapNotNull(rowsByKey::get)
+        if (dragPreviewOriginalRows.size != original.size) {
+            dragPreviewOriginalRows = emptyList()
+            return false
+        }
+        return true
     }
 
     fun setConfig(config: NativeAppListResolvedConfig) {

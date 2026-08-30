@@ -349,8 +349,9 @@ private fun decodeVideoFrameThumbnail(context: Context, uri: Uri, reqSize: Int):
     val retriever = MediaMetadataRetriever()
     return runCatching {
         retriever.setDataSource(context, uri)
-        val raw = retriever.frameAtTime ?: return null
-        Bitmap.createScaledBitmap(raw, reqSize, reqSize, true)
+        // getScaledFrameAtTime 在解码时直接输出目标尺寸；原来的 frameAtTime
+        // 会先解出视频原始分辨率的一帧（4K 就是 33MB）再缩放，raw 只能等 GC。
+        retriever.getScaledFrameAtTime(0L, MediaMetadataRetriever.OPTION_CLOSEST_SYNC, reqSize, reqSize)
     }.getOrNull().also {
         runCatching { retriever.release() }
     }

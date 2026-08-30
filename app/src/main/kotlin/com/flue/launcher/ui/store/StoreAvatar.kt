@@ -30,6 +30,12 @@ import com.flue.launcher.ui.theme.LauncherStyle
 import com.flue.launcher.ui.theme.LauncherTheme
 import com.flue.launcher.watchface.store.WatchStoreRepository
 
+internal fun storeAvatarCacheKey(avatarUrl: String?, avatarVersion: Long): String =
+    "${avatarUrl?.trim().orEmpty()}#$avatarVersion"
+
+internal fun storeAvatarBitmapStateKey(avatarUrl: String?, targetPx: Int): String =
+    "${avatarUrl?.trim().orEmpty()}@$targetPx"
+
 /**
  * 圆形头像，取不到图就退回首字母（H2 / H3 / H5 共用）。
  *
@@ -50,6 +56,7 @@ internal fun StoreAvatar(
     modifier: Modifier = Modifier,
     onClick: (() -> Unit)? = null,
     onLongClick: (() -> Unit)? = null,
+    avatarVersion: Long = 0L,
 ) {
     val style = LauncherTheme.style
     val density = LocalDensity.current
@@ -61,9 +68,14 @@ internal fun StoreAvatar(
             .coerceIn(24, WatchStoreRepository.AVATAR_TARGET_SIZE)
     }
     val trimmedUrl = avatarUrl?.trim().orEmpty()
-    var bitmap by remember(trimmedUrl, targetPx) { mutableStateOf<Bitmap?>(null) }
+    val cacheKey = storeAvatarCacheKey(trimmedUrl, avatarVersion)
+    // Version changes must re-fetch the image, but must not clear the old bitmap
+    // first. This keeps the cached avatar visible until the replacement arrives.
+    var bitmap by remember(storeAvatarBitmapStateKey(trimmedUrl, targetPx)) {
+        mutableStateOf<Bitmap?>(repository.peekSiteImage(trimmedUrl, targetPx))
+    }
 
-    LaunchedEffect(repository, trimmedUrl, targetPx) {
+    LaunchedEffect(repository, cacheKey, targetPx) {
         if (trimmedUrl.isEmpty()) return@LaunchedEffect
         runCatching { repository.loadSiteImage(trimmedUrl, targetPx) }
             .onSuccess { bitmap = it }

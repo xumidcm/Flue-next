@@ -284,6 +284,7 @@ internal class NativeAppListRowView(
                 this.config.rowPaddingStartPx != next.rowPaddingStartPx ||
                 this.config.rowPaddingTopPx != next.rowPaddingTopPx ||
                 this.config.rowPaddingEndPx != next.rowPaddingEndPx ||
+                this.config.rightSafeInsetPx != next.rightSafeInsetPx ||
                 this.config.rowPaddingBottomPx != next.rowPaddingBottomPx ||
                 this.config.iconLabelGapPx != next.iconLabelGapPx ||
                 this.config.iconShape != next.iconShape ||
@@ -475,6 +476,34 @@ internal class NativeAppListRowView(
     fun positionTranslationXWithoutFlow(): Float =
         moveTranslationX + previewTranslationX + dragTranslationX
 
+    /**
+     * 空间布局算「这一格在屏幕上的什么位置」时该读的纵向位移：**不含重排预览**。
+     *
+     * ## 为什么不能读预览通道
+     *
+     * 心流的月牙横移是行 y 的函数（`nativeFlowCrescentTranslationX`），星环的收拢与鱼眼
+     * 缩放同理。`applyChildVisuals` 若拿 [positionTranslationYWithoutFlow]（含
+     * previewTranslationY）当输入，链路就闭环了：
+     *
+     *   预览位移 → 改 flowTranslationX → 改 iconCenterXInParentForHitTest()
+     *   → 拖拽命中到别的槽 → 新预览位移 → …
+     *
+     * 每帧走一遍，就是老师报的「心流布局拖动应用图标时整个列表会散掉」。月牙斜率在 454px
+     * 屏上能到 0.6 px/px，一次 100px 的避让能把图标横向甩出 60px。
+     *
+     * 预览位移本质上是**上一帧判定的结果**，把结果喂回判定的输入必然自激；而
+     * moveTranslation（RecyclerView 的 move 动画）、dragTranslation、contentTranslation
+     * （下拉画布）都不由拖拽判定产生，喂回来是稳定的，所以仍然计入。
+     *
+     * 这条与 `ui/common/ChordScale.kt` 开头那条铁律同源：只读布局值，不读被自己改过的值。
+     */
+    fun positionTranslationYWithoutPreviewOrFlow(): Float =
+        moveTranslationY + dragTranslationY + contentTranslationY
+
+    /** [positionTranslationYWithoutPreviewOrFlow] 的横向对应量。 */
+    fun positionTranslationXWithoutPreviewOrFlow(): Float =
+        moveTranslationX + dragTranslationX
+
     private fun applyCompositeTranslation() {
         translationX =
             moveTranslationX + previewTranslationX + dragTranslationX + flowTranslationX
@@ -549,12 +578,12 @@ internal class NativeAppListRowView(
 
     fun iconCenterXInParentWithoutFlow(): Float {
         ensureGeometry()
-        return left + iconBounds.centerX() + positionTranslationXWithoutFlow()
+        return transformedIconCenterX(positionTranslationXWithoutFlow())
     }
 
     fun iconCenterYInParentWithoutFlow(): Float {
         ensureGeometry()
-        return top + iconBounds.centerY() + positionTranslationYWithoutFlow()
+        return transformedIconCenterY(positionTranslationYWithoutFlow())
     }
 
     fun iconCenterXInParentWithoutPreviewOrFlow(): Float {
@@ -580,21 +609,45 @@ internal class NativeAppListRowView(
      */
     fun iconCenterXInParentForHitTest(): Float {
         ensureGeometry()
-        return left + iconBounds.centerX() +
-            moveTranslationX + dragTranslationX + flowTranslationX
+        return transformedIconCenterX(
+            moveTranslationX + dragTranslationX + flowTranslationX,
+        )
     }
 
     /** [iconCenterXInParentForHitTest] 的纵向对应量（月牙也有纵向分量时一并计入）。 */
     fun iconCenterYInParentForHitTest(): Float {
         ensureGeometry()
-        return top + iconBounds.centerY() +
-            moveTranslationY + dragTranslationY + contentTranslationY + flowTranslationY
+        return transformedIconCenterY(
+            moveTranslationY + dragTranslationY + contentTranslationY + flowTranslationY,
+        )
     }
 
     fun iconCenterYInParentWithoutPreviewOrFlow(): Float {
         ensureGeometry()
         return top + iconBounds.centerY() +
             moveTranslationY + dragTranslationY + contentTranslationY
+    }
+
+    /**
+     * Projects the icon centre through the row's current RenderNode transform.
+     *
+     * Reorder hit testing must agree with what the user sees, including the
+     * chord scale on round linear rows. Preview translation is intentionally
+     * supplied by the caller and is omitted from the hit-test callers so the
+     * virtual slot map stays stable while neighbours animate.
+     */
+    private fun transformedIconCenterX(translationXWithoutPreview: Float): Float {
+        ensureCenteredTransformPivot()
+        val scale = scaleX.takeIf { it.isFinite() } ?: 1f
+        return left + translationXWithoutPreview + pivotX +
+            (iconBounds.centerX() - pivotX) * scale
+    }
+
+    private fun transformedIconCenterY(translationYWithoutPreview: Float): Float {
+        ensureCenteredTransformPivot()
+        val scale = scaleY.takeIf { it.isFinite() } ?: 1f
+        return top + translationYWithoutPreview + pivotY +
+            (iconBounds.centerY() - pivotY) * scale
     }
 
     fun iconWidthForSafeGeometry(): Float {
@@ -642,7 +695,8 @@ internal class NativeAppListRowView(
                     config.rowPaddingStartPx.toLong() +
                     config.iconSizePx.toLong() +
                     config.iconLabelGapPx.toLong() +
-                    config.rowPaddingEndPx.toLong()
+                    config.rowPaddingEndPx.toLong() +
+                    config.rightSafeInsetPx.toLong()
                 ).coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
         }
         val desiredHeight = when (config.presentation) {
@@ -738,7 +792,9 @@ internal class NativeAppListRowView(
         }
 
         val labelLeft = iconBounds.right + config.iconLabelGapPx
-        val labelRight = width.toFloat() - config.rowPaddingEndPx
+        // 右侧安全内缩（滚动指示器占位）要从标签可用宽度里让出去，否则长名字会一直
+        // 压到指示器底下。指示器关掉时 rightSafeInsetPx 为 0，观感与改动前完全一致。
+        val labelRight = width.toFloat() - config.rowPaddingEndPx - config.rightSafeInsetPx
         if (
             config.presentation == NativeAppListPresentation.LINEAR &&
             label.isNotEmpty() &&
@@ -848,14 +904,16 @@ internal class NativeAppListRowView(
 
     private fun ensureGeometry() {
         if (!geometryDirty) return
+        val rowLeft = if (config.presentation == NativeAppListPresentation.LINEAR) {
+            config.leftSafeInsetPx.toFloat().coerceAtMost(width.toFloat())
+        } else {
+            0f
+        }
         rowBounds.set(
-            if (config.presentation == NativeAppListPresentation.LINEAR) {
-                config.leftSafeInsetPx.toFloat().coerceAtMost(width.toFloat())
-            } else {
-                0f
-            },
+            rowLeft,
             0f,
-            width.toFloat(),
+            // 行底色 / 描边同样退到指示器左边：底色画到屏幕最右会从指示器底下透出来一角。
+            (width.toFloat() - config.rightSafeInsetPx).coerceAtLeast(rowLeft),
             height.toFloat(),
         )
 

@@ -26,20 +26,41 @@ internal const val NATIVE_SCROLL_INDICATOR_FADE_IN_MS = 110L
  */
 internal const val NATIVE_SCROLL_INDICATOR_HOLD_MS = 700L
 
-/** 淡出时长。比淡入长,退场要柔和。 */
-internal const val NATIVE_SCROLL_INDICATOR_FADE_OUT_MS = 320L
+/** 淡出时长。比淡入长,退场要柔和，同时保持在 200-300ms 的响应窗口内。 */
+internal const val NATIVE_SCROLL_INDICATOR_FADE_OUT_MS = 260L
 
 /**
- * 目标不透明度:滚动中、或停下后还在保持窗口内 = 1,否则 0。
+ * 惯性(SETTLING)状态仍算「在动」的新鲜窗口。
  *
- * @param scrolling RecyclerView 的滚动状态是否非 IDLE。按住不动拖着列表时它仍为 true,
- *   所以「按住列表不放但内容没动」不会让指示器反复闪 —— 这是分开取 `scrolling` 和
- *   `millisSinceScrollActivity` 两个入参的原因,单看后者会在按住的那几百毫秒里判成该淡出。
+ * 惯性中每一帧都有滚动事件把活动时间戳刷新,所以只要超过这个窗口没有新事件,
+ * 就说明惯性实际上已经停了 —— 哪怕 `scrollState` 因为某条路径(拖拽移交吞事件、
+ * 边界弹簧吸收)没回 IDLE,也不再按「在动」处理。没有这道保险,状态卡在 SETTLING
+ * 的那次惯性会让指示器永远全亮:快速甩动抬手,指示器赖着不消失,正是这个病。
+ */
+internal const val NATIVE_SCROLL_INDICATOR_SETTLING_FRESH_MS = 120L
+
+/**
+ * 目标不透明度:手指按着、正在滚动、或停下后还在保持窗口内 = 1,否则 0。
+ *
+ * @param scrolling 列表此刻是否真的在动(DRAGGING 且手指在上,或惯性 SETTLING)。
+ *   **不能直接拿 `scrollState != IDLE`**:原生列表的手势路径里 UP 事件可能根本没送到
+ *   RecyclerView(拖图标那条链路会自己吞掉终止事件),状态就永久停在 DRAGGING,目标恒 1,
+ *   指示器再也不淡出 —— 星环圆屏最容易稳定复现,正是老师报的「滑动指示器不会消失」。
+ * @param millisSinceScrollActivity 距上一次「滚过 / 按下 / 松手」多久。松手时要重新起算,
+ *   这样 [NATIVE_SCROLL_INDICATOR_HOLD_MS] 是「松手之后」的延迟,而不是「内容最后一次
+ *   移动之后」的延迟。
+ * @param pointerDown 手指是否还按在列表上。按着就恒 1:按住不放但已经到顶/到底时内容不
+ *   移动,只看 `millisSinceScrollActivity` 会在几百毫秒后判成该淡出,而手指明明还在滑。
  */
 internal fun nativeScrollIndicatorTargetAlpha(
     scrolling: Boolean,
     millisSinceScrollActivity: Long,
-): Float = if (scrolling || millisSinceScrollActivity < NATIVE_SCROLL_INDICATOR_HOLD_MS) {
+    pointerDown: Boolean = false,
+): Float = if (
+    pointerDown ||
+    scrolling ||
+    millisSinceScrollActivity < NATIVE_SCROLL_INDICATOR_HOLD_MS
+) {
     1f
 } else {
     0f

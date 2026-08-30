@@ -377,7 +377,23 @@ class AppListItemStorage(private val context: Context) {
 
     fun loadShortcutIcon(path: String?): Bitmap? {
         if (path.isNullOrBlank()) return null
-        return runCatching { BitmapFactory.decodeFile(path) }.getOrNull()
+        // 图标文件的原始尺寸不受控，两趟解码按最长边 [MAX_SHORTCUT_ICON_DECODE_SIDE] 采样。
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        BitmapFactory.decodeFile(path, bounds)
+        var sampleSize = 1
+        var width = bounds.outWidth
+        var height = bounds.outHeight
+        while (width > 0 && height > 0 && (width / 2 >= MAX_SHORTCUT_ICON_DECODE_SIDE || height / 2 >= MAX_SHORTCUT_ICON_DECODE_SIDE)) {
+            width /= 2
+            height /= 2
+            sampleSize *= 2
+        }
+        return runCatching {
+            BitmapFactory.decodeFile(
+                path,
+                BitmapFactory.Options().apply { inSampleSize = sampleSize },
+            )
+        }.getOrNull()
     }
 
     private fun saveShortcuts(shortcuts: List<StoredAppListShortcut>) {
@@ -420,5 +436,8 @@ class AppListItemStorage(private val context: Context) {
         private const val KEY_SHORTCUTS = "shortcuts"
         private const val KEY_FOLDERS = "folders"
         private val folderMutationLock = Any()
+
+        /** 快捷方式图标的解码最长边；显示目标只有几十像素。 */
+        private const val MAX_SHORTCUT_ICON_DECODE_SIDE = 256
     }
 }

@@ -1,17 +1,16 @@
 package com.flue.launcher.applist.nativeview
 
-import kotlin.math.abs
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * 星环布局的几何与四边收拢。
+ * 星环布局的几何与鱼眼。
  *
- * 这套布局的需求是老师给的：「圆屏上面和下面、左边右边都有弧度，向中间收缩靠拢；
- * 方屏那就上面下面左边右边都平铺」。这两条互斥的行为都被压在
- * [nativeRingConvergenceFraction] 一个纯函数里（`deviceShape` 判定刻意没放进布局
- * 管理器），所以这里能真的把它们测出来 —— 摆在 View 层就只能靠肉眼验。
+ * 2026-08 起星环**不分屏形**：圆屏专属的径向收拢与安全轮廓已删（老师要求一律按
+ * 方屏平铺渲染），两种屏共用同一套平铺几何与「按生效行数触发的上下边缘鱼眼」。
+ * 行为全部压在 [nativeRingFisheyeProgress] / [nativeRingChildVisual] 纯函数里，
+ * 这里能真的把它们测出来 —— 摆在 View 层就只能靠肉眼验。
  */
 class NativeRingGeometryTest {
 
@@ -30,21 +29,7 @@ class NativeRingGeometryTest {
         leftSafeInsetPx = leftSafeInsetPx,
     )
 
-    private fun offsetAt(
-        centerX: Float,
-        centerY: Float,
-        config: NativeAppListConfig,
-        viewportWidth: Float = 400f,
-        viewportHeight: Float = 400f,
-    ) = nativeRingConvergenceOffset(
-        centerX = centerX,
-        centerY = centerY,
-        viewportWidth = viewportWidth,
-        viewportHeight = viewportHeight,
-        config = config,
-    )
-
-    // ---------- 验收点 5：格子尺寸 / 列数 / 行距 ----------
+    // ---------- 格子尺寸 / 列数 / 行距 ----------
 
     /** 可用宽度按列数等分，一格都不剩 —— 星环不留内边距也不留格间距。 */
     @Test
@@ -115,220 +100,89 @@ class NativeRingGeometryTest {
         assertEquals(geometry.centerX(1), geometry.centerX(5), 0.001f)
     }
 
-    // ---------- 验收点 2：方屏平铺 ----------
+    // ---------- 鱼眼：生效行数决定触发带，两种屏形同一份 ----------
 
     /**
-     * 方屏恒不收拢 —— 老师明确指定「方屏上面下面左边右边都平铺」。
+     * 触发带宽度 = 生效行数 × 格边长（上限半屏）。
      *
-     * 连四个角这种收拢量最大的位置都必须是 0，否则四角会空出一片无用留白。
+     * 以前带宽写死一行，行数滑杆是摆设 —— 老师报「生效行数不生效」就是它。
+     * 1 行只卷最贴边那排，4 行带伸到半屏（上限），屏心那格永远在带外。
      */
     @Test
-    fun `a rectangular screen never converges anywhere`() {
-        val square = config(round = false)
-        listOf(
-            0f to 0f,
-            400f to 0f,
-            0f to 400f,
-            400f to 400f,
-            50f to 120f,
-            380f to 390f,
-        ).forEach { (x, y) ->
-            val offset = offsetAt(x, y, square)
-            assertEquals("x at ($x,$y)", 0f, offset.x, 0f)
-            assertEquals("y at ($x,$y)", 0f, offset.y, 0f)
-        }
-    }
+    fun `the trigger band follows the fisheye row range`() {
+        val oneRow = config(fisheyeRangeRows = 1).copy(ringCellSizePx = 100f)
+        val fourRows = config(fisheyeRangeRows = 4).copy(ringCellSizePx = 100f)
 
-    // ---------- 验收点 1：圆屏四向收拢 ----------
+        // 1 行：带 = 一格。150 在带外，50 在带内。
+        assertEquals(0f, nativeRingFisheyeProgress(150f, 400f, oneRow), 0.001f)
+        assertEquals(0f, nativeRingFisheyeProgress(200f, 400f, oneRow), 0.001f)
+        assertTrue(nativeRingFisheyeProgress(50f, 400f, oneRow) > 0f)
+        assertTrue(nativeRingFisheyeProgress(350f, 400f, oneRow) > 0f)
 
-    /** 收拢方向永远指向屏心，四个象限都成立。 */
-    @Test
-    fun `every quadrant is pulled towards the screen centre on a round screen`() {
-        val round = config()
-        // 左上：要往右下拉（x 正、y 正）。
-        offsetAt(60f, 60f, round).let {
-            assertTrue("左上应往右拉，实际 x=${it.x}", it.x > 0f)
-            assertTrue("左上应往下拉，实际 y=${it.y}", it.y > 0f)
-        }
-        // 右上：往左下。
-        offsetAt(340f, 60f, round).let {
-            assertTrue(it.x < 0f)
-            assertTrue(it.y > 0f)
-        }
-        // 左下：往右上。
-        offsetAt(60f, 340f, round).let {
-            assertTrue(it.x > 0f)
-            assertTrue(it.y < 0f)
-        }
-        // 右下：往左上。
-        offsetAt(340f, 340f, round).let {
-            assertTrue(it.x < 0f)
-            assertTrue(it.y < 0f)
-        }
+        // 4 行：带 = 四格，夹到半屏（200）。150 进了带内，屏心仍在带外。
+        assertTrue(nativeRingFisheyeProgress(150f, 400f, fourRows) > 0f)
+        assertEquals(0f, nativeRingFisheyeProgress(200f, 400f, fourRows), 0.001f)
+
+        // 鱼眼关掉时严格为 0（缩放侧据此恒 1）。
+        assertEquals(
+            0f,
+            nativeRingFisheyeProgress(50f, 400f, oneRow.copy(fisheyeEnabled = false)),
+            0.001f,
+        )
     }
 
     /**
-     * 一整行被拽成弧，这就是「上面和下面都有弧度」的来源。
+     * 圆屏与方屏表现**完全一致** —— 星环已经没有圆屏专属路径。
      *
-     * 同一行里越靠外的列径向距离越大、收拢比例越高，于是**纵向**被拉得更多 ——
-     * 一条直排自然弯成弧。若外侧列的纵向位移不大于内侧，那一行就还是直的。
+     * 这条钉住「删掉圆屏特殊适配」：任何（x, y）上两种屏形的缩放、透明度、
+     * 位移都必须逐位相同。若哪天有人往回加形状分支，这条会先红。
      */
     @Test
-    fun `outer columns of one row are pulled further so the row bends into an arc`() {
-        val round = config()
-        val rowY = 100f
-        val inner = abs(offsetAt(220f, rowY, round).y)
-        val middle = abs(offsetAt(280f, rowY, round).y)
-        val outer = abs(offsetAt(360f, rowY, round).y)
-
-        assertTrue("中列($middle) 应比内列($inner) 拉得多", middle > inner)
-        assertTrue("外列($outer) 应比中列($middle) 拉得多", outer > middle)
-    }
-
-    /**
-     * 一整列被收窄，这就是「左边右边都有弧度」的来源。
-     *
-     * 与上一条同一个公式的另一个分量：同一列里越靠上下端的行，横向被收得越多。
-     */
-    @Test
-    fun `outer rows of one column are pulled further so the column bends inwards`() {
-        val round = config()
-        val columnX = 100f
-        val inner = abs(offsetAt(columnX, 220f, round).x)
-        val outer = abs(offsetAt(columnX, 360f, round).x)
-
-        assertTrue("外行($outer) 应比内行($inner) 收得多", outer > inner)
-    }
-
-    /** 屏心那一格几乎不动 —— 弧才有「从中间鼓出去」的观感，而不是整张网平移。 */
-    @Test
-    fun `the cell at the screen centre barely moves`() {
-        val offset = offsetAt(200f, 200f, config())
-
-        assertEquals(0f, offset.x, 0.001f)
-        assertEquals(0f, offset.y, 0.001f)
-    }
-
-    /**
-     * 收拢比例恒小于 1：任何设置下格子都只会靠近屏心，绝不穿过屏心翻到对面。
-     *
-     * 这条守的是 `k·t²/(1+k·t²)` 这个形状本身。换成线性的 `k·t²`，强度一调大
-     * 角上的格子就会翻面，画面直接是乱码。
-     */
-    @Test
-    fun `convergence never overshoots the centre even at maximum strength`() {
-        val maxStrength = config(fisheyeStrength = 2f, fisheyeRangeRows = 8)
-        // 远在屏外的角（t 远大于 1）也不能翻面：位移量必须小于到屏心的距离。
-        listOf(60f to 60f, 400f to 400f, 0f to 0f, 396f to 4f).forEach { (x, y) ->
-            val offset = offsetAt(x, y, maxStrength)
-            assertTrue(
-                "($x,$y) 横向翻面：位移 ${offset.x} 越过了距屏心 ${x - 200f}",
-                abs(offset.x) < abs(x - 200f) + 0.001f,
-            )
-            assertTrue(
-                "($x,$y) 纵向翻面：位移 ${offset.y} 越过了距屏心 ${y - 200f}",
-                abs(offset.y) < abs(y - 200f) + 0.001f,
-            )
+    fun `round and rectangular screens render the ring identically`() {
+        listOf(200f to 200f, 200f to 50f, 60f to 60f, 340f to 350f).forEach { (x, y) ->
+            val roundVisual = visualAt(x, y, config(round = true), 400f, 400f)
+            val rectVisual = visualAt(x, y, config(round = false), 400f, 400f)
+            assertEquals("($x,$y) 缩放分屏形", roundVisual.scale, rectVisual.scale, 0f)
+            assertEquals("($x,$y) 透明度分屏形", roundVisual.alpha, rectVisual.alpha, 0f)
+            assertEquals("($x,$y) 横向位移分屏形", roundVisual.translationX, rectVisual.translationX, 0f)
+            assertEquals("($x,$y) 纵向位移分屏形", roundVisual.translationY, rectVisual.translationY, 0f)
         }
     }
 
-    // ---------- 验收点 3：接入已有的鱼眼设置 ----------
-
-    /** 鱼眼关掉时完全不收拢 —— 收拢是鱼眼的一部分，不是独立效果。 */
+    /** 触发行缩小、屏心行保持 1.0；鱼眼关掉时整屏统一大小。 */
     @Test
-    fun `turning the fish-eye off flattens a round screen too`() {
-        val offset = offsetAt(60f, 60f, config(fisheyeEnabled = false))
+    fun `icons shrink inside the band and stay full size without the fish-eye`() {
+        val cfg = config().copy(ringCellSizePx = 100f)
 
-        assertEquals(0f, offset.x, 0f)
-        assertEquals(0f, offset.y, 0f)
+        val interior = visualAt(200f, 200f, cfg, 400f, 400f)
+        val bandTop = visualAt(200f, 50f, cfg, 400f, 400f)
+        val bandEdge = visualAt(200f, 4f, cfg, 400f, 400f)
+        assertEquals(1f, interior.scale, 0.001f)
+        assertEquals(1f, interior.alpha, 0.001f)
+        assertTrue("带内行应缩小", bandTop.scale < 1f)
+        assertTrue("越贴边缩得越多", bandEdge.scale < bandTop.scale)
+        assertTrue("缩放不能到 0", bandEdge.scale > 0f)
+        assertEquals(0f, interior.translationX, 0.001f)
+
+        // 鱼眼关掉：连最贴边也是原尺寸、不透明。
+        val flat = config(fisheyeEnabled = false).copy(ringCellSizePx = 100f)
+        assertEquals(1f, visualAt(200f, 4f, flat, 400f, 400f).scale, 0.001f)
+        assertEquals(1f, visualAt(200f, 4f, flat, 400f, 400f).alpha, 0.001f)
     }
 
-    /** 鱼眼强度越大收拢越狠，强度 0 等于不收拢。 */
-    @Test
-    fun `convergence scales monotonically with the existing fish-eye strength`() {
-        val amounts = listOf(0f, 0.5f, 1f, 1.5f, 2f).map { strength ->
-            abs(offsetAt(60f, 60f, config(fisheyeStrength = strength)).x)
-        }
-
-        assertEquals(0f, amounts.first(), 0f)
-        amounts.zipWithNext().forEach { (weaker, stronger) ->
-            assertTrue("强度更大却收得更少：$weaker -> $stronger", stronger > weaker)
-        }
-    }
-
-    /**
-     * 鱼眼的「生效行数」决定中心那块不动的稳定核。
-     *
-     * 8 行 = 整屏都参与，1 行 = 只有最外一圈卷边。所以同一个中距点，行数越少收得越少。
-     */
-    @Test
-    fun `the fish-eye row range controls how large the untouched core is`() {
-        val wide = abs(offsetAt(140f, 140f, config(fisheyeRangeRows = 8)).x)
-        val narrow = abs(offsetAt(140f, 140f, config(fisheyeRangeRows = 1)).x)
-
-        assertTrue("生效行数 8 应比 1 收得多：$wide vs $narrow", wide > narrow)
-        // 1 行时稳定核是 0.75 半径，这个点落在核内，应当完全不动。
-        assertEquals(0f, narrow, 0.001f)
-    }
-
-    // ---------- 验收点 4：边缘图标更小 ----------
-
-    /** 越靠边的格子缩得越小；鱼眼关掉时全部 1.0。 */
-    @Test
-    fun `icons shrink towards the edge and stay full size without the fish-eye`() {
-        val round = config()
-        val centre = scaleAt(200f, 200f, round)
-        // 取样点必须落在稳定核**之外**：默认 4 行对应核半径 0.5，也就是距屏心 100px
-        // 以内完全不缩。300f 正好压在核边界上，那里缩放本来就该是 1。
-        val middle = scaleAt(200f, 340f, round)
-        val edge = scaleAt(200f, 396f, round)
-
-        assertEquals(1f, centre, 0.001f)
-        assertTrue("中距($middle) 应比屏心($centre) 小", middle < centre)
-        assertTrue("边缘($edge) 应比中距($middle) 更小", edge < middle)
-        assertTrue("缩放不能到 0：$edge", edge > 0f)
-
-        // 核内不缩，这是「中心那块不动」的另一面。
-        assertEquals(1f, scaleAt(200f, 300f, round), 0.001f)
-
-        // 鱼眼关掉：连最边缘也是原尺寸。
-        assertEquals(1f, scaleAt(200f, 396f, config(fisheyeEnabled = false)), 0.001f)
-    }
-
-    private fun scaleAt(x: Float, y: Float, cfg: NativeAppListConfig) = nativeRingChildVisual(
+    private fun visualAt(
+        x: Float,
+        y: Float,
+        cfg: NativeAppListConfig,
+        viewportWidth: Float = 400f,
+        viewportHeight: Float = 400f,
+    ) = nativeRingChildVisual(
         centerX = x,
         centerY = y,
-        viewportWidth = 400f,
-        viewportHeight = 400f,
+        viewportWidth = viewportWidth,
+        viewportHeight = viewportHeight,
         config = cfg,
-    ).scale
-
-    /**
-     * 缩放恒在 (0, 1] 内，圆屏内切圆之外的角落也不例外。
-     *
-     * 等比不用测 —— [NativeSpatialChildVisual] 只有一个 `scale` 字段，横纵不可能不等，
-     * 那是类型层面就成立的事。真正会出事的是**钳位**：径向进度在四个角上大于 1，
-     * 缩放侧必须自己夹住，夹漏了角上图标会缩到看不见甚至翻成负数镜像。
-     */
-    @Test
-    fun `the fish-eye scale stays within a sane range everywhere`() {
-        val maxStrength = config(fisheyeStrength = 2f, fisheyeRangeRows = 8)
-        listOf(
-            200f to 200f,
-            60f to 60f,
-            340f to 390f,
-            // 内切圆之外：径向进度 > 1。
-            0f to 0f,
-            400f to 400f,
-            420f to -20f,
-        ).forEach { (x, y) ->
-            listOf(config(), maxStrength).forEach { cfg ->
-                val scale = scaleAt(x, y, cfg)
-                assertTrue("($x,$y) 缩放非正：$scale", scale > 0f)
-                assertTrue("($x,$y) 缩放超过 1：$scale", scale <= 1f + 0.0001f)
-            }
-        }
-    }
+    )
 
     // ---------- 图标尺寸 ----------
 
@@ -352,7 +206,7 @@ class NativeRingGeometryTest {
         assertEquals(86, nativeRingIconSizePx(100f, Float.NaN))
     }
 
-    // ---------- 验收点 6：边界 ----------
+    // ---------- 边界 ----------
 
     /** 非法列数要被合法化，不能让 0 或负数传进除法。 */
     @Test

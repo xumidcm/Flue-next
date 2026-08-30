@@ -2,6 +2,8 @@
 // WatchEditorActivity.kt 本身完全一致（这个仓里那批 Activity 的路径和包名从来不一致）。
 package com.flue.launcher
 
+import java.io.File
+import javax.xml.parsers.DocumentBuilderFactory
 import com.flue.launcher.watchface.editor.shape.WATCH_SHAPE_ATTRIBUTE_VALUES
 import com.flue.launcher.watchface.editor.shape.watchShapeAttributeValue
 import com.flue.launcher.watchface.editor.shape.watchShapeKindOf
@@ -28,13 +30,45 @@ import org.junit.Test
  *    `Outline` / `GradientLinear`），Flue 自己读的时候 lowercase，所以写成小写在本机
  *    照样画得出来 —— 但别的渲染器是拿原值去拼 `shape_<小写>.png` 这类查表键的，
  *    写错就整层不显示。这类错只在导出后才暴露，本地跑一遍表盘看不出来。
- * 2. **不承诺渲染器不做的事**。`ring` / `progress` 的描边阴影、`progress` 的 shader
- *    在规范里就不支持（`WM_EFFECTS.md` §7），面板放出来只会让人以为自己写错了。
+ * 2. **不承诺渲染器不做的事**。`ring` 的描边阴影、`progress` 的 shader 面板都不给 ——
+ *    渲染器没有对应实现（ring 的边要沿弧线走）或会互相盖掉（progress 的 shader 会覆盖
+ *    `color2` 渐变），放出来只会让人以为自己写错了。`rounded` 与 `progress` 的描边阴影
+ *    是刻意的 Flue 扩展：规范矩阵里是 `—`，但渲染器确实画，导出时只是被别家忽略。
  * 3. **每个属性都有真标签**。漏一条映射的后果是界面上出现「未知属性」。
  */
 class WatchEditorStyleAttributesTest {
 
     private val styledTypes = listOf("shape", "rounded", "progress", "ring")
+
+    @Test
+    fun `property panel resources are stored as readable unicode`() {
+        val chinese = stringResources("values")
+        assertEquals("位置与变换", chinese["watch_editor_section_transform"])
+        assertEquals("几何与样式", chinese["watch_editor_section_geometry"])
+        assertEquals("颜色 2 · 渐变终点", chinese["watch_editor_attribute_color2"])
+
+        val english = stringResources("values-en")
+        assertEquals("Color 2 · gradient end", english["watch_editor_attribute_color2"])
+    }
+
+    @Test
+    fun `image path drafts are relative to the images directory`() {
+        assertEquals(
+            "background.png",
+            normalizeWatchEditorAssetPath("image", "images/background.png"),
+        )
+        assertEquals(
+            "one.png`nested/two.png",
+            normalizeWatchEditorAssetPath(
+                "image_gif",
+                "images/one.png`images/nested/two.png",
+            ),
+        )
+        assertEquals(
+            "{dynamic_image}",
+            normalizeWatchEditorAssetPath("image", "{dynamic_image}"),
+        )
+    }
 
     @Test
     fun `every editable attribute has a real label`() {
@@ -157,8 +191,15 @@ class WatchEditorStyleAttributesTest {
     /**
      * 描边 / 阴影只挂在渲染器真的读它们的类型上。
      *
-     * `resolveOutline` / `resolveShadow` 的调用点只有 text / 位图文字 / shape / rounded
-     * 四处，与 `WM_EFFECTS.md` §7 的支持矩阵一致。
+     * `resolveOutline` / `resolveShadow` 的调用点是 text / 位图文字 / shape / rounded /
+     * progress 五处。前四处与 `WM_EFFECTS.md` §7 的支持矩阵一致；`rounded` 与 `progress`
+     * 是 **Flue 扩展** —— 矩阵里这两个的 Shadow / Outline / Glow 都是 `—`，但两者的几何
+     * 都是圆角矩形、`drawRoundedOutline` / `drawRoundedShadow` 直接就能用，而作者要的
+     * 「带描边的进度条」在 WM 生态里只能靠叠一层 rounded 伪造。导出到官方渲染器时这两族
+     * 被忽略（少了边和影，不会画错）。
+     *
+     * `ring` 仍然不给：它的描边要沿弧线走，`drawRing` 那条路径还没有对应实现，放出来
+     * 就是个不生效的开关。
      */
     @Test
     fun `outline shadow and shader are only offered where the renderer reads them`() {
@@ -169,13 +210,39 @@ class WatchEditorStyleAttributesTest {
             assertTrue("$type 应有着色器", "shader" in attributes)
             assertTrue("$type 应有 u_5", "u_5" in attributes)
         }
-        listOf("progress", "ring").forEach { type ->
-            val attributes = editableAttributesFor(type)
-            assertFalse("$type 不该有描边（渲染器不读）", "outline" in attributes)
-            assertFalse("$type 不该有阴影（渲染器不读）", "shadow" in attributes)
-            // progress 按规范就不支持 shader；ring 规范支持但 Flue 渲染器还没做。
-            assertFalse("$type 不该有着色器", "shader" in attributes)
-        }
+        // progress：描边阴影给（渲染器已实现），shader 不给 —— 填充段被 color→color2
+        // 渐变占着，shader 会把 color2 整个盖掉，两个开关只有一个生效比不给更糟。
+        val progress = editableAttributesFor("progress")
+        assertTrue("progress 应有描边", "outline" in progress)
+        assertTrue("progress 应有阴影", "shadow" in progress)
+        assertFalse("progress 不该有着色器（会盖掉 color2 渐变）", "shader" in progress)
+        // ring：三族都不给。描边要沿弧线走，drawRing 没有对应实现。
+        val ring = editableAttributesFor("ring")
+        assertFalse("ring 不该有描边（渲染器不读）", "outline" in ring)
+        assertFalse("ring 不该有阴影（渲染器不读）", "shadow" in ring)
+        assertFalse("ring 不该有着色器", "shader" in ring)
+    }
+
+    /** 进度条的描边阴影要拿到与形状同一套子属性，缺一个就是「调了没反应」。 */
+    @Test
+    fun `progress outline and shadow expose the same knobs as shape`() {
+        val progress = editableAttributesFor("progress")
+        val shape = editableAttributesFor("shape")
+        val effectKnobs = listOf(
+            "outline", "o_color", "o_size", "o_opacity",
+            "shadow", "w_color", "w_distance", "w_angle", "w_opacity",
+        )
+        assertTrue("形状本来就该有这九项", shape.containsAll(effectKnobs))
+        assertTrue("进度条缺了外观子属性", progress.containsAll(effectKnobs))
+        // 枚举取值必须与形状同源，否则写进 XML 的字面量渲染器不认。
+        assertEquals(
+            attributeEnumOptions("shape", "outline")?.map { it.value },
+            attributeEnumOptions("progress", "outline")?.map { it.value },
+        )
+        assertEquals(
+            attributeEnumOptions("shape", "shadow")?.map { it.value },
+            attributeEnumOptions("progress", "shadow")?.map { it.value },
+        )
     }
 
     /** 进度条那几个「找不到开关」的属性必须都在面板上。 */
@@ -303,5 +370,22 @@ class WatchEditorStyleAttributesTest {
         assertTrue("radius 必须大于 0", radius!! > 0f)
         assertTrue("radius 不能超过钳制上限", radius <= height!! / 2f)
         assertEquals("1", progress["corner_type"])
+    }
+
+    private fun stringResources(directory: String): Map<String, String> {
+        val source = sequenceOf(
+            File("src/main/res/$directory/strings.xml"),
+            File("app/src/main/res/$directory/strings.xml"),
+        ).firstOrNull(File::isFile) ?: error("找不到 $directory/strings.xml")
+        val nodes = DocumentBuilderFactory.newInstance()
+            .newDocumentBuilder()
+            .parse(source)
+            .getElementsByTagName("string")
+        return buildMap {
+            for (index in 0 until nodes.length) {
+                val node = nodes.item(index)
+                put(node.attributes.getNamedItem("name").nodeValue, node.textContent)
+            }
+        }
     }
 }

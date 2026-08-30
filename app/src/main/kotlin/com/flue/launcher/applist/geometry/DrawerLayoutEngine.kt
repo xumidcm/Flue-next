@@ -6,6 +6,7 @@ import kotlin.math.abs
 import kotlin.math.hypot
 import kotlin.math.roundToInt
 import kotlin.math.sqrt
+import kotlin.math.tanh
 
 data class LinearItemPlacement(
     val key: AppItemKey,
@@ -87,6 +88,16 @@ internal class DrawerLayoutSession internal constructor(
         desiredCenterX: Float,
         desiredCenterY: Float,
         output: MutableDrawerItemGeometry,
+        /**
+         * 这一格实际要留位的命中尺寸，默认取会话建立时的 item 尺寸。
+         *
+         * 单独开成入参而不是塞进会话：鱼眼让**每个子项**的画出尺寸都不同，若把它计入
+         * 会话的重建判据，滚动一帧内扫过的每个子项都会重建一次 SafeOutline —— 这个类
+         * 存在的唯一理由就是热路径零分配。轮廓几何（圆心 / 半径、安全矩形）本来就与
+         * item 尺寸无关，尺寸只在 [SafeOutline.constrainCenter] 里参与留位计算。
+         */
+        hitWidth: Float = itemSize.width,
+        hitHeight: Float = itemSize.height,
     ): MutableDrawerItemGeometry {
         if (!desiredCenterX.isFinite() || !desiredCenterY.isFinite()) {
             return output.reset(desiredCenterX, desiredCenterY)
@@ -104,7 +115,8 @@ internal class DrawerLayoutSession internal constructor(
         outline.constrainCenter(
             desiredCenterX = compressedCenterX,
             desiredCenterY = compressedCenterY,
-            hitSize = itemSize,
+            hitWidth = hitWidth.takeIf { it.isFinite() && it > 0f } ?: itemSize.width,
+            hitHeight = hitHeight.takeIf { it.isFinite() && it > 0f } ?: itemSize.height,
             output = output,
         )
         output.scale = fisheyeVisuals.scale
@@ -216,6 +228,60 @@ private fun calculateFisheyeVisuals(
 private fun smoothstep(progress: Float): Float =
     progress * progress * (3f - 2f * progress)
 
+/**
+ * 圆屏轮廓的**软钳**：把任意纵向偏移压进 `(-limit, limit)`，且对输入**严格单调**。
+ *
+ * ## 为什么不能用饱和的 coerceIn
+ *
+ * 原来这里是 `desiredCenterY.coerceIn(center.y ± limit)`。饱和钳位在越界区是常函数 ——
+ * 所有超出的行被映射到**同一个 Y**，于是顶部（或底部）连续几行的图标叠在一条线上，
+ * 正是老师报的「圆屏顶上和底下会有图标重叠」。行的先后顺序也被抹平，滚动时相邻两行
+ * 会互相穿过。
+ *
+ * ## 形状
+ *
+ * 内侧 [SOFT_CLAMP_KNEE_FRACTION] 那一段保持**恒等**（正常可见的行不受任何影响，
+ * 观感与从前一致），越过膝点之后把剩下的 `span = limit - knee` 那点余量用 `tanh`
+ * 摊给整条无穷尾巴：
+ *
+ * ```
+ * |y| <= knee :  y
+ * |y| >  knee :  knee + span * tanh((|y| - knee) / span)
+ * ```
+ *
+ * 三条性质正好是需要的：
+ *
+ * 1. `tanh` 严格递增 ⇒ 整个映射对输入严格单调 ⇒ **行序永不反转、越界行也不塌成一点**；
+ * 2. `tanh < 1` ⇒ 结果严格小于 `limit` ⇒ 命中框四角仍在内切圆内（`constrainCenter`
+ *    的横向余量是按这个结果反算的弦宽，`limit` 一旦被越过弦宽就会小于图标半宽）；
+ * 3. 膝点处两段取值相同（都等于 `knee`），映射连续，不会在边界跳一下。
+ *
+ * `limit <= 0`（图标恰好塞满内切圆）是退化情形：没有任何余量可摊，只能钉在圆心。
+ */
+private fun softClampOffset(offset: Float, limit: Float): Float {
+    if (!offset.isFinite()) return 0f
+    if (limit <= 0f || !limit.isFinite()) return 0f
+    val magnitude = abs(offset)
+    if (magnitude <= 0f) return 0f
+    val knee = limit * SOFT_CLAMP_KNEE_FRACTION
+    val span = limit - knee
+    val softMagnitude = if (magnitude <= knee || span <= 0f) {
+        magnitude.coerceAtMost(limit)
+    } else {
+        knee + span * tanh((magnitude - knee) / span)
+    }
+    return if (offset < 0f) -softMagnitude else softMagnitude
+}
+
+/**
+ * 软钳的膝点占可用余量的比例。
+ *
+ * 0.75 是折中：再高（比如 0.9）尾段只剩 10% 余量可摊，深度越界的相邻行差值会掉到
+ * 亚像素级，重叠虽然消失但看起来仍像贴在一起；再低（比如 0.5）就会开始压缩**本来
+ * 完全可见**的中段行距，圆屏列表的行距观感会变。
+ */
+private const val SOFT_CLAMP_KNEE_FRACTION = 0.75f
+
 private fun lerp(
     start: Float,
     end: Float,
@@ -239,7 +305,8 @@ internal sealed interface SafeOutline {
     fun constrainCenter(
         desiredCenterX: Float,
         desiredCenterY: Float,
-        hitSize: PixelSize,
+        hitWidth: Float,
+        hitHeight: Float,
         output: MutableDrawerItemGeometry,
     )
 
@@ -255,11 +322,12 @@ internal sealed interface SafeOutline {
         override fun constrainCenter(
             desiredCenterX: Float,
             desiredCenterY: Float,
-            hitSize: PixelSize,
+            hitWidth: Float,
+            hitHeight: Float,
             output: MutableDrawerItemGeometry,
         ) {
-            val halfWidth = hitSize.width / 2f
-            val halfItemHeight = hitSize.height / 2f
+            val halfWidth = hitWidth / 2f
+            val halfItemHeight = hitHeight / 2f
             output.centerX = desiredCenterX.coerceIn(
                 minimumValue = safeBounds.left + halfWidth,
                 maximumValue = safeBounds.right - halfWidth,
@@ -280,18 +348,19 @@ internal sealed interface SafeOutline {
         override fun constrainCenter(
             desiredCenterX: Float,
             desiredCenterY: Float,
-            hitSize: PixelSize,
+            hitWidth: Float,
+            hitHeight: Float,
             output: MutableDrawerItemGeometry,
         ) {
-            val halfWidth = hitSize.width / 2f
-            val halfItemHeight = hitSize.height / 2f
+            val halfWidth = hitWidth / 2f
+            val halfItemHeight = hitHeight / 2f
             val maximumVerticalOffset = (
                 sqrt((radius * radius - halfWidth * halfWidth).coerceAtLeast(0f)) -
                     halfItemHeight
                 ).coerceAtLeast(0f)
-            val constrainedY = desiredCenterY.coerceIn(
-                minimumValue = center.y - maximumVerticalOffset,
-                maximumValue = center.y + maximumVerticalOffset,
+            val constrainedY = center.y + softClampOffset(
+                offset = desiredCenterY - center.y,
+                limit = maximumVerticalOffset,
             )
             val farthestVerticalEdge =
                 abs(constrainedY - center.y) + halfItemHeight

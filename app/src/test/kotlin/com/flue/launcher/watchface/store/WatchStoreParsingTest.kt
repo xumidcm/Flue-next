@@ -131,6 +131,26 @@ class WatchStoreParsingTest {
     }
 
     @Test
+    fun `private market base requires explicit opt in while redirects remain strict`() {
+        assertThrows(IllegalArgumentException::class.java) {
+            WatchStoreUrlPolicy.normalizeBaseUrl("http://192.168.1.10:3000/api")
+        }
+        assertEquals(
+            "http://192.168.1.10:3000/api",
+            WatchStoreUrlPolicy.normalizeBaseUrl(
+                "http://192.168.1.10:3000/api",
+                allowPrivateNetworkBase = true,
+            ).toASCIIString(),
+        )
+        assertThrows(WatchStoreRedirectException::class.java) {
+            WatchStoreUrlPolicy.resolveRedirect(
+                URI("http://192.168.1.10:3000/api/watchfaces/1"),
+                "http://127.0.0.1/private",
+            )
+        }
+    }
+
+    @Test
     fun `url policy rejects hostnames resolving to private addresses or no addresses`() {
         val request = URI("https://watch.example/api")
         assertThrows(IllegalArgumentException::class.java) {
@@ -554,6 +574,35 @@ class WatchStoreParsingTest {
         assertEquals(null, WatchStoreJsonParser.myRating("""{"mine":9}"""))
         assertTrue(WatchStoreJsonParser.favoriteState("""{"ok":true,"favorited":true,"favorite_count":3}"""))
         assertEquals(3L, WatchStoreJsonParser.favoriteCount("""{"favorite_count":3}"""))
+    }
+
+    @Test
+    fun `rating submission response exposes the submitted rating immediately`() {
+        val summary = WatchStoreJsonParser.ratingSummary(
+            """{"success":true,"rating":4,"average":4.25,"count":8}""",
+        )
+
+        assertEquals(4, summary.mine)
+    }
+
+    @Test
+    fun `comments truncate an oversized unpaged response instead of failing the whole section`() {
+        val payload = buildString {
+            append("{\"data\":[")
+            repeat(501) { index ->
+                if (index > 0) append(',')
+                append(
+                    """{"id":"$index","content":"comment-$index","parent_comment_id":null,"created_at":"2026-01-01","user":{"id":"user-$index","username":"user_$index"}}""",
+                )
+            }
+            append("]}")
+        }
+
+        val comments = WatchStoreJsonParser.comments(payload)
+
+        assertEquals(500, comments.size)
+        assertEquals("0", comments.first().id)
+        assertEquals("499", comments.last().id)
     }
 
     @Test

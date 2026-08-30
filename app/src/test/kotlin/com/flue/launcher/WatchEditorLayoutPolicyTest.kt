@@ -3,6 +3,7 @@ package com.flue.launcher
 import com.flue.launcher.watchface.editor.WatchEditorSession
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
+import org.junit.Assert.assertNull
 import org.junit.Test
 
 class WatchEditorLayoutPolicyTest {
@@ -157,5 +158,11 @@ class WatchEditorLayoutPolicyTest {
                 "界".repeat(WatchEditorSession.MAX_WATCH_SCRIPT_BYTES / 3 + 1),
             ),
         )
+    }
+
+    @Test
+    fun globalScriptSyntaxValidationUsesLuaCompilerWithoutExecutingCode() {
+        assertNull(validateWatchEditorLua("local value = 1 + 2"))
+        assertTrue(validateWatchEditorLua("local value =")?.isNotBlank() == true)
     }
 }

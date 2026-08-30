@@ -121,6 +121,9 @@ internal class JbWatchLuaExpressionRuntime private constructor(
         private val LUA_KEYWORD_PATTERN = Regex("\\b(?:and|or|not|true|false|nil)\\b")
         private val LUA_LIBRARY_PATTERN = Regex("\\b(?:math|string|table)\\s*\\.")
         private val LUA_STRUCTURE_PATTERN = Regex("[\\{\\}+*/%<>=~'\"0-9-]")
+        // looksLikeLuaExpression 是每个动态属性每帧都要问的判定，正则一律提常量。
+        private val PURE_TAG_PATTERN = Regex("\\{[^\\{\\}]+\\}")
+        private val OPERATOR_PATTERN = Regex("(?:[+*/%<>=~()-])")
         private val JB_ALIAS_TAGS = setOf("time", "ddm", "dmm")
 
         fun create(): JbWatchLuaExpressionRuntime = JbWatchLuaExpressionRuntime(
@@ -130,13 +133,13 @@ internal class JbWatchLuaExpressionRuntime private constructor(
         internal fun looksLikeLuaExpression(raw: String): Boolean {
             val expression = raw.trim()
             if (expression.isBlank()) return false
-            if (expression.matches(Regex("\\{[^\\{\\}]+\\}"))) return false
+            if (expression.matches(PURE_TAG_PATTERN)) return false
             if (expression.contains("..")) return true
             if (LUA_LIBRARY_PATTERN.containsMatchIn(expression)) return true
             if ('{' in expression && expression.length >= 2 &&
                 expression.first() == expression.last() && expression.first() in charArrayOf('\'', '"')
             ) return true
-            if ('{' in expression && Regex("(?:[+*/%<>=~()-])").containsMatchIn(expression)) return true
+            if ('{' in expression && OPERATOR_PATTERN.containsMatchIn(expression)) return true
             if (LUA_KEYWORD_PATTERN.containsMatchIn(expression) &&
                 LUA_STRUCTURE_PATTERN.containsMatchIn(expression)
             ) return true

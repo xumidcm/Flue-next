@@ -31,10 +31,21 @@ data class WatchStoreHttpConfig(
 class HttpWatchStoreApi(
     baseUrl: String = DEFAULT_WATCH_STORE_BASE_URL,
     private val config: WatchStoreHttpConfig = WatchStoreHttpConfig(),
+    private val allowPrivateNetworkBase: Boolean = false,
     /** Injectable for URL/redirect tests; production uses [URL.openConnection]. */
     private val connectionFactory: (URL) -> HttpURLConnection = { it.openConnection() as HttpURLConnection },
 ) : WatchStoreApi {
-    private val base = WatchStoreUrlPolicy.normalizeBaseUrl(baseUrl)
+    private val base = WatchStoreUrlPolicy.normalizeBaseUrl(baseUrl, allowPrivateNetworkBase)
+
+    private fun requireInitialTarget(url: URI) {
+        if (allowPrivateNetworkBase && url.scheme.equals(base.scheme, true) &&
+            url.host.equals(base.host, true) && url.port == base.port
+        ) {
+            WatchStoreUrlPolicy.requireBaseUrl(url, allowPrivateNetworkBase = true)
+        } else {
+            WatchStoreUrlPolicy.requirePublicHttps(url)
+        }
+    }
 
     override fun getCategories(): List<WatchStoreCategory> = requestJson(
         WatchStoreUrlPolicy.categories(base),
@@ -56,7 +67,7 @@ class HttpWatchStoreApi(
 
     override fun downloadPreview(id: String, destination: File): File {
         val url = WatchStoreUrlPolicy.preview(base, id)
-        return download(url, destination, MAX_PREVIEW_BYTES, expectPreview = true, onProgress = null)
+        return download(url, destination, MAX_PREVIEW_BYTES, expectPreview = true, onProgress = null, allowPrivateNetworkBase = allowPrivateNetworkBase)
     }
 
     /**
@@ -72,12 +83,19 @@ class HttpWatchStoreApi(
     override fun downloadSiteImage(rawUrl: String?, destination: File): File {
         val url = WatchStoreUrlPolicy.siteImageUrlOrNull(base, rawUrl)
             ?: throw WatchStoreProtocolException("图片地址不在市场站点内")
-        return download(url, destination, MAX_PREVIEW_BYTES, expectPreview = true, onProgress = null)
+        return download(
+            url,
+            destination,
+            MAX_PREVIEW_BYTES,
+            expectPreview = true,
+            onProgress = null,
+            allowPrivateNetworkBase = allowPrivateNetworkBase && WatchStoreUrlPolicy.isSameWebSite(base, url),
+        )
     }
 
     override fun downloadWatchFace(id: String, destination: File): File {
         val url = WatchStoreUrlPolicy.download(base, id)
-        return download(url, destination, MAX_WATCH_BYTES, expectPreview = false, onProgress = null)
+        return download(url, destination, MAX_WATCH_BYTES, expectPreview = false, onProgress = null, allowPrivateNetworkBase = allowPrivateNetworkBase)
     }
 
     override fun downloadWatchFace(
@@ -86,7 +104,7 @@ class HttpWatchStoreApi(
         onProgress: (bytes: Long, totalBytes: Long?) -> Unit,
     ): File {
         val url = WatchStoreUrlPolicy.download(base, id)
-        return download(url, destination, MAX_WATCH_BYTES, expectPreview = false, onProgress = onProgress)
+        return download(url, destination, MAX_WATCH_BYTES, expectPreview = false, onProgress = onProgress, allowPrivateNetworkBase = allowPrivateNetworkBase)
     }
 
     /** Authenticates against the community store. The password only lives inside this call. */
@@ -763,7 +781,7 @@ class HttpWatchStoreApi(
     private fun <T> requestJsonWithAuth(url: URI, token: String, maxBytes: Long, parser: (String) -> T): T {
         try {
             try {
-                WatchStoreUrlPolicy.requirePublicHttps(url)
+                requireInitialTarget(url)
             } catch (error: IllegalArgumentException) {
                 throw WatchStoreRedirectException(error.message ?: "Watch store connection target is unsafe")
             }
@@ -801,7 +819,7 @@ class HttpWatchStoreApi(
     private fun deleteWithAuth(url: URI, token: String) {
         try {
             try {
-                WatchStoreUrlPolicy.requirePublicHttps(url)
+                requireInitialTarget(url)
             } catch (error: IllegalArgumentException) {
                 throw WatchStoreRedirectException(error.message ?: "Watch store connection target is unsafe")
             }
@@ -877,7 +895,7 @@ class HttpWatchStoreApi(
     ): T {
         try {
             try {
-                WatchStoreUrlPolicy.requirePublicHttps(url)
+                requireInitialTarget(url)
             } catch (error: IllegalArgumentException) {
                 throw WatchStoreRedirectException(
                     error.message ?: "Watch store connection target is unsafe",
@@ -978,7 +996,7 @@ class HttpWatchStoreApi(
         url: URI,
         maxBytes: Long,
         parser: (String) -> T,
-    ): T = request(url) { connection ->
+    ): T = request(url, allowPrivateNetworkBase) { connection ->
         validateContentType(connection, expectPreview = false, expectJson = true)
         if (connection.contentLengthLong > maxBytes) {
             throw WatchStorePayloadTooLargeException(maxBytes)
@@ -993,6 +1011,7 @@ class HttpWatchStoreApi(
         maxBytes: Long,
         expectPreview: Boolean,
         onProgress: ((bytes: Long, totalBytes: Long?) -> Unit)?,
+        allowPrivateNetworkBase: Boolean = false,
     ): File {
         if (destination.isDirectory) throw IllegalArgumentException("Download destination is a directory")
         destination.parentFile?.takeIf { !it.exists() }?.let { parent ->
@@ -1006,10 +1025,10 @@ class HttpWatchStoreApi(
             val allowSegmented = !expectPreview && segmentedDownloads()
             if (allowSegmented) {
                 translateTransportErrors {
-                    downloadSegmentedOrFallback(url, destination, maxBytes, expectPreview, onProgress)
+                    downloadSegmentedOrFallback(url, destination, maxBytes, expectPreview, onProgress, allowPrivateNetworkBase)
                 }
             } else {
-                downloadSingleStream(url, destination, maxBytes, expectPreview, onProgress)
+                downloadSingleStream(url, destination, maxBytes, expectPreview, onProgress, allowPrivateNetworkBase)
             }
             if (!destination.isFile || destination.length() == 0L) {
                 throw WatchStoreProtocolException("Watch store returned an empty file")
@@ -1033,8 +1052,9 @@ class HttpWatchStoreApi(
         maxBytes: Long,
         expectPreview: Boolean,
         onProgress: ((bytes: Long, totalBytes: Long?) -> Unit)?,
+        allowPrivateNetworkBase: Boolean,
     ) {
-        request(url) { connection ->
+        request(url, allowPrivateNetworkBase) { connection ->
             validateContentType(connection, expectPreview = expectPreview, expectJson = false)
             val length = connection.contentLengthLong
             if (length > maxBytes) throw WatchStorePayloadTooLargeException(maxBytes)
@@ -1063,8 +1083,9 @@ class HttpWatchStoreApi(
         maxBytes: Long,
         expectPreview: Boolean,
         onProgress: ((bytes: Long, totalBytes: Long?) -> Unit)?,
+        allowPrivateNetworkBase: Boolean,
     ) {
-        val probe = connect(url, rangeHeader = "bytes=0-0")
+        val probe = connect(url, rangeHeader = "bytes=0-0", allowPrivateNetworkBase = allowPrivateNetworkBase)
         val plan: List<SegmentRange>
         val totalBytes: Long
         val finalUrl: URI
@@ -1093,7 +1114,7 @@ class HttpWatchStoreApi(
 
         if (plan.size <= 1) {
             // 小于分段门槛：并发只会把一次顺序读拆成几次抢带宽的短读。
-            downloadSingleStream(url, destination, maxBytes, expectPreview, onProgress)
+            downloadSingleStream(url, destination, maxBytes, expectPreview, onProgress, allowPrivateNetworkBase)
             return
         }
 
@@ -1119,7 +1140,7 @@ class HttpWatchStoreApi(
         val workers = plan.drop(1).map { segment ->
             Thread {
                 try {
-                    fetchSegment(finalUrl, destination, segment, aborted, emitProgress)
+                    fetchSegment(finalUrl, destination, segment, aborted, emitProgress, allowPrivateNetworkBase)
                 } catch (error: Throwable) {
                     aborted.set(true)
                     failure.compareAndSet(null, error)
@@ -1131,7 +1152,7 @@ class HttpWatchStoreApi(
             }
         }
         try {
-            fetchSegment(finalUrl, destination, plan.first(), aborted, emitProgress)
+            fetchSegment(finalUrl, destination, plan.first(), aborted, emitProgress, allowPrivateNetworkBase)
         } catch (error: Throwable) {
             aborted.set(true)
             failure.compareAndSet(null, error)
@@ -1171,9 +1192,10 @@ class HttpWatchStoreApi(
         segment: SegmentRange,
         aborted: java.util.concurrent.atomic.AtomicBoolean,
         onDelta: (Long) -> Unit,
+        allowPrivateNetworkBase: Boolean,
     ) {
         if (aborted.get()) return
-        val resolved = connect(url, rangeHeader = "bytes=${segment.start}-${segment.endInclusive}")
+        val resolved = connect(url, rangeHeader = "bytes=${segment.start}-${segment.endInclusive}", allowPrivateNetworkBase = allowPrivateNetworkBase)
         try {
             if (resolved.status != HttpURLConnection.HTTP_PARTIAL) {
                 // 探针说支持、真取时又回 200：整个响应是全文件，按分段偏移写进去
@@ -1210,9 +1232,13 @@ class HttpWatchStoreApi(
         }
     }
 
-    private fun <T> request(url: URI, block: (HttpURLConnection) -> T): T =
+    private fun <T> request(
+        url: URI,
+        allowPrivateNetworkBase: Boolean = false,
+        block: (HttpURLConnection) -> T,
+    ): T =
         translateTransportErrors {
-            val resolved = connect(url, rangeHeader = null)
+            val resolved = connect(url, rangeHeader = null, allowPrivateNetworkBase = allowPrivateNetworkBase)
             try {
                 block(resolved.connection)
             } finally {
@@ -1227,13 +1253,18 @@ class HttpWatchStoreApi(
      * 「重定向解析后的最终 URL」——各分段必须都打同一个终点，否则 CDN 轮询会让
      * 不同分段落到不同副本上，拼出来的文件是坏的。
      */
-    private fun connect(url: URI, rangeHeader: String?): ResolvedConnection {
+    private fun connect(
+        url: URI,
+        rangeHeader: String?,
+        allowPrivateNetworkBase: Boolean = false,
+    ): ResolvedConnection {
         var current = url
         var redirectCount = 0
         while (true) {
             // The endpoint and every redirect are validated before a socket is opened.
             try {
-                WatchStoreUrlPolicy.requirePublicHttps(current)
+                if (redirectCount == 0 && allowPrivateNetworkBase) requireInitialTarget(current)
+                else WatchStoreUrlPolicy.requirePublicHttps(current)
             } catch (error: IllegalArgumentException) {
                 throw WatchStoreRedirectException(
                     error.message ?: "Watch store connection target is unsafe",

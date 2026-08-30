@@ -15,9 +15,9 @@ internal object WatchStoreUrlPolicy {
     /** 与上游注册校验同规则：字母、数字、下划线，3–50 字符。 */
     private val usernamePattern = Regex("^[a-zA-Z0-9_]{3,50}$")
 
-    fun normalizeBaseUrl(raw: String): URI {
+    fun normalizeBaseUrl(raw: String, allowPrivateNetworkBase: Boolean = false): URI {
         val parsed = parseUri(raw, "base URL")
-        requireSafeHttps(parsed, "base URL")
+        requireSafeHttps(parsed, "base URL", allowPrivateNetworkBase)
         if (parsed.rawQuery != null) throw IllegalArgumentException("Watch store base URL cannot contain a query")
         val path = parsed.rawPath.orEmpty().trimEnd('/').ifBlank { "/" }
         return URI(
@@ -387,7 +387,15 @@ internal object WatchStoreUrlPolicy {
         throw IllegalArgumentException("Watch store $label is malformed", error)
     }
 
-    private fun requireSafeHttps(uri: URI, label: String) {
+    internal fun requireBaseUrl(uri: URI, label: String = "base URL", allowPrivateNetworkBase: Boolean) {
+        requireSafeHttps(uri, label, allowPrivateNetworkBase)
+    }
+
+    private fun requireSafeHttps(
+        uri: URI,
+        label: String,
+        allowPrivateNetworkBase: Boolean = false,
+    ) {
         if (!uri.scheme.equals("https", ignoreCase = true) &&
             !uri.scheme.equals("http", ignoreCase = true)
         ) {
@@ -399,7 +407,7 @@ internal object WatchStoreUrlPolicy {
         if (uri.port == 0 || uri.port > 65_535 || uri.port < -1) {
             throw IllegalArgumentException("Watch store $label has an invalid port")
         }
-        if (isForbiddenLiteral(uri.host)) {
+        if (!allowPrivateNetworkBase && isForbiddenLiteral(uri.host)) {
             throw IllegalArgumentException("Watch store $label cannot target a local address")
         }
     }

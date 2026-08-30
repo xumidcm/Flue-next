@@ -266,6 +266,7 @@ data class WatchStoreComment(
     val authorUsername: String,
     /** Relative site image path; validate through the shared site-image loader before fetching. */
     val authorAvatarUrl: String? = null,
+    val authorAvatarVersion: Long = 0L,
 )
 
 /** `GET /watchfaces/:id/rating` 的公开汇总 + 自己那一票（`GET /my/watchfaces/:id/rating`）。 */
@@ -365,6 +366,7 @@ enum class WatchStoreReportReason(val apiValue: String) {
 /** 网页版固定页面（决策 9）。带参数的详情页 / 创作者页各有专门的构造函数。 */
 enum class WatchStoreWebPage(val path: String) {
     HOME("/"),
+    LOGIN("/login"),
     DASHBOARD("/dashboard"),
     PROFILE("/profile"),
     CREATORS("/creators"),

@@ -1,5 +1,6 @@
 package com.flue.launcher.watchface.standard
 
+import com.flue.launcher.watchface.editor.WatchFeatureDetector
 import java.util.Calendar
 import java.util.Locale
 import java.util.TimeZone
@@ -268,6 +269,85 @@ class WatchmakerStudioTagValuesTest {
     }
 
     @Test
+    fun `location tags fall back to clox zeroes instead of double dashes`() {
+        val now = calendarAt("UTC")
+        // 没有任何定位数据时**必须给 0，不能给 `--`**：clox 的
+        // `WF.location.latitude or 0`（`wf_tagdefs.lua:483-495`）在这种情况下就是 0，
+        // 于是同一张表盘在 clox 上显示 `0`、在 Flue 上显示 `--`，用户报「经纬度变量
+        // 读不出来」。而 `--` 还和「不认识这个 tag」撞成同一个外观，连排查方向都指错。
+        val empty = WatchDataSnapshot()
+        assertEquals("0", value("alat", now, empty))
+        assertEquals("0", value("alon", now, empty))
+        assertEquals("0.0", value("alatd", now, empty))
+        assertEquals("0.0", value("alond", now, empty))
+        assertEquals("0.0°N", value("alatdd", now, empty))
+        assertEquals("0.0°E", value("alondd", now, empty))
+        // {aalt} 同理：clox 是 `WF.location.elevation or 0`。
+        assertEquals("0", value("aalt", now, empty))
+    }
+
+    @Test
+    fun `degree forms keep a fixed decimal place even on whole degrees`() {
+        val now = calendarAt("UTC")
+        // 52.0 要给 "52.0" 而不是 "52"：上游是 `fmt("%.1f", …)`，位数固定。走
+        // renderOneDecimal → renderCompactNumber 会把 `.0` 吃掉，而这一族常被
+        // 位图字体按固定宽度排版（一个字符一个槽），少一位整块都会错位。
+        val whole = WatchDataSnapshot(latitude = 52.0, longitude = -13.0)
+        assertEquals("52.0", value("alatd", now, whole))
+        assertEquals("52.0°N", value("alatdd", now, whole))
+        assertEquals("13.0", value("alond", now, whole))
+        assertEquals("13.0°W", value("alondd", now, whole))
+    }
+
+    @Test
+    fun `coordinates are not narrowed to float`() {
+        val now = calendarAt("UTC")
+        // Float 只有约 7 位有效十进制位，116.397428 会被截成 116.39743。经度小数
+        // 第 6 位大约是 0.1 米量级 —— 表盘上直接显示出来的坐标被我们改了值。
+        val beijing = WatchDataSnapshot(latitude = 39.904211, longitude = 116.397428)
+        assertEquals("39.904211", value("alat", now, beijing))
+        assertEquals("116.397428", value("alon", now, beijing))
+    }
+
+    @Test
+    fun `what3words renders empty instead of the unavailable dashes`() {
+        val now = calendarAt("UTC")
+        // 没有 what3words 的 API key，永远拿不到三词地址。给空串而不是 `--`：
+        // 上游引擎把没有值的变量登记成静态 ""（`wf_expr.lua` 的 `engine:activate`），
+        // 而表盘上一个居中的 `--` 看着像坏了，空白才读作「这项没配」。
+        assertEquals("", value("aw3w", now))
+        assertEquals("", value("aw3w1", now))
+        assertEquals("", value("aw3w2", now))
+        assertEquals("", value("aw3w3", now))
+    }
+
+    @Test
+    fun `location tag usage is detected inside expressions too`() {
+        // 渲染层靠这个信号决定要不要做一次位置权限引导。只认「整个花括号就是一个
+        // 标签」不够 —— 表盘里坐标常混在算式里（`rotation="{alat*2}"`）。
+        assertTrue(WatchmakerTagResolver.usesLocationTags("{alat}"))
+        assertTrue(WatchmakerTagResolver.usesLocationTags("{alat*2+10}"))
+        assertTrue(WatchmakerTagResolver.usesLocationTags("{floor(aalt/100)}"))
+        assertTrue(WatchmakerTagResolver.usesLocationTags("{ALATDD}"))
+        assertTrue(WatchmakerTagResolver.usesLocationTags("{aw3w1}"))
+        // 没用到坐标就不该打扰用户授权。{alangcode} 以 `ala` 开头，是子串陷阱。
+        assertTrue(!WatchmakerTagResolver.usesLocationTags("{dh23}:{dm}"))
+        assertTrue(!WatchmakerTagResolver.usesLocationTags("{alangcode}"))
+        // 花括号外的字面文本不算。
+        assertTrue(!WatchmakerTagResolver.usesLocationTags("alat"))
+    }
+
+    @Test
+    fun `the renderer and the feature detector share one location tag list`() {
+        // 两份名单必须逐字相同：detector 用它算 `features`，渲染层用它决定要不要
+        // 引导授权。漂移的后果是「市场上标着用了定位、但运行时从不申请权限」。
+        assertEquals(
+            WatchFeatureDetector.LOCATION_TAGS.sorted(),
+            WatchmakerTagResolver.LOCATION_TAGS.sorted(),
+        )
+    }
+
+    @Test
     fun `wind reuses the same bearing table as the compass`() {
         val now = calendarAt("UTC")
         val snapshot = WatchDataSnapshot(
@@ -379,12 +459,16 @@ class WatchmakerStudioTagValuesTest {
     @Test
     fun `the families that still have no source stay known`() {
         val now = calendarAt("UTC")
-        // what3words 与手机电池温度仍然只是「认识」。认识就够了：渲染 `--`、表达式里
-        // 取中性 0，表盘照样加载。
+        // what3words 与手机电池温度仍然只是「认识」，重点是**不能是 Unsupported** ——
+        // 那才会让含它的表达式整条失败、属性落回默认值。
+        // 两者的空值外观刻意不同：{pbtc} 是 `--`（有数据源、这台设备没有配对手机），
+        // {aw3w} 是空串（永远不会有 API key，画个 `--` 只会像坏了）。
         listOf("aw3w", "pbtc").forEach { tag ->
             val resolution = WatchmakerTagResolver.resolve(tag, now, WatchDataSnapshot())
             assertEquals("$tag 不该是 Unsupported", false, resolution is WatchTagResolution.Unsupported)
         }
+        assertEquals("--", WatchmakerTagResolver.resolve("pbtc", now, WatchDataSnapshot()).renderedValue)
+        assertEquals("", WatchmakerTagResolver.resolve("aw3w", now, WatchDataSnapshot()).renderedValue)
     }
 
     // ── 日程 ─────────────────────────────────────────────────────────────────

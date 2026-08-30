@@ -127,6 +127,16 @@ class FlowGridMathTest {
     }
 
     @Test
+    fun `custom shape curve changes intermediate rows but keeps centre and edges`() {
+        val custom = FlowShapeCurve(0.15f, 0.8f, 0.85f, 0.95f)
+        assertEquals(30f, crescent(curve = custom), 0.01f)
+        assertEquals(0f, crescent(rowCenterY = 0f, curve = custom), 0.01f)
+        val legacyMiddle = crescent(rowCenterY = 300f)
+        val customMiddle = crescent(rowCenterY = 300f, curve = custom)
+        assertTrue(kotlin.math.abs(legacyMiddle - customMiddle) > 1f)
+    }
+
+    @Test
     fun `unmeasured or meaningless inputs give no offset`() {
         assertEquals(0f, crescent(rowCenterY = 200f, viewportCenterY = 200f, viewportHeight = 0f), 0f)
         assertEquals(0f, crescent(rowCenterY = 200f, viewportCenterY = 200f, viewportHeight = -400f), 0f)
@@ -152,11 +162,13 @@ class FlowGridMathTest {
         viewportHeight: Float = 400f,
         bulgePx: Float = 30f,
         direction: FlowCrescentDirection = FlowCrescentDirection.Right,
+        curve: FlowShapeCurve = FlowShapeCurve.Crescent,
     ): Float = flowCrescentOffsetPx(
         rowCenterY = rowCenterY,
         viewportCenterY = viewportCenterY,
         viewportHeight = viewportHeight,
         bulgePx = bulgePx,
         direction = direction,
+        curve = curve,
     )
 }

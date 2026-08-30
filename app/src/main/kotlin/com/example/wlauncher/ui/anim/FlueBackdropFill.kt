@@ -32,6 +32,12 @@ private const val BACKDROP_MAX_BLUR_RADIUS_PX = 64
 private const val BACKDROP_SHARED_MAX_BLUR_RADIUS_PX = 128
 
 /**
+ * 九宫格镜像层重录的 progress 死区：低于这个变化量沿用上一次录制。
+ * 0.5% 的 progress ≈ 2px 级别的镜像几何差，在 20% 压暗 + 全屏模糊之下不可见。
+ */
+private const val MAGNIFIED_RECORD_PROGRESS_EPSILON = 0.005f
+
+/**
  * The backdrop animation is sampled every frame. Reusing a small fixed set of
  * effects keeps that sampling cheap while a two-pixel step remains visually
  * continuous on a full-screen, darkened backdrop.
@@ -86,6 +92,16 @@ internal fun legacyBackdropViewportMatches(
     layerSize: IntSize,
 ): Boolean = viewportWidth == layerSize.width && viewportHeight == layerSize.height
 
+internal fun shouldDrawLiveBackdropContent(
+    overlayActive: Boolean,
+    hardwareCaptureRequired: Boolean = false,
+    capturedFrameAvailable: Boolean,
+): Boolean = when {
+    !overlayActive -> true
+    hardwareCaptureRequired -> false
+    else -> !capturedFrameAvailable
+}
+
 /** API 27-30 transition hot path: one cached bitmap draw, with no recording. */
 private fun DrawScope.drawLegacyBackdropCover(
     image: ImageBitmap,
@@ -132,6 +148,8 @@ private class BackdropCaptureState {
     var lastCaptureUptimeMs: Long = Long.MIN_VALUE
     var capturedSize: IntSize = IntSize.Zero
     var capturedPixelCopyGeneration: Long = Long.MIN_VALUE
+    /** 上次重录九宫格镜像层时的 progress；变化小于阈值就不重录。 */
+    var recordedProgress: Float = Float.NaN
 }
 
 /**
@@ -168,6 +186,8 @@ internal fun Modifier.flueBackdropFill(
     hardwareCapturedFrame: LegacyWatchFaceCapturedFrame? = null,
     /** Never fall back to preview/Compose recording when the face needs PixelCopy. */
     hardwareCaptureRequired: Boolean = false,
+    /** Skip the live face once a matching captured frame is available. */
+    freezeLiveContentWhenCaptured: Boolean = false,
     /** Disable system blur together with the advanced-material setting. */
     advancedMaterialEnabled: Boolean = true,
 ): Modifier {
@@ -258,6 +278,16 @@ internal fun Modifier.flueBackdropFill(
             val matchingFrames = legacyFrames?.takeIf {
                 legacyBackdropViewportMatches(it.viewportWidth, it.viewportHeight, layerSize)
             }
+            val capturedLegacyFrameAvailable =
+                hardwareCapturedFrame?.let { captured ->
+                    !captured.bitmap.isRecycled &&
+                        matchingFrames?.capturedGeneration == captured.generation
+                } == true
+            val drawLiveContent = shouldDrawLiveBackdropContent(
+                overlayActive = freezeLiveContentWhenCaptured,
+                hardwareCaptureRequired = hardwareCaptureRequired,
+                capturedFrameAvailable = capturedLegacyFrameAvailable,
+            )
             val fallback = matchingFrames?.let { Color(it.fallbackArgb) } ?: Color(0xFF10151D)
             drawRect(fallback.copy(alpha = 1f))
             if (matchingFrames != null) {
@@ -275,7 +305,7 @@ internal fun Modifier.flueBackdropFill(
                 // shrinking live face. It never substitutes for the clear
                 // watch face itself.
                 drawLegacyBackdropCover(
-                    image = blurredFrame,
+                    image = if (!drawLiveContent) matchingFrames.clear else blurredFrame,
                     frames = matchingFrames,
                     layerSize = layerSize,
                     contentScale = legacyScale,
@@ -283,9 +313,11 @@ internal fun Modifier.flueBackdropFill(
                     alpha = blend.clearAlpha,
                 )
             }
-            // Keep the real rendered watch face as the clear layer on every
-            // API 27-30 frame, then cross-fade only the prepared blur over it.
-            drawContent()
+            // Keep the real rendered watch face as the clear layer unless the
+            // overlay already has a matching captured frame. In that case the
+            // captured frame above is the clear layer and drawing the Android
+            // view again would defeat the freeze.
+            if (drawLiveContent) drawContent()
             if (matchingFrames != null) {
                 drawLegacyBackdropCover(
                     image = if (legacyDarkMode) matchingFrames.darkBlurred else matchingFrames.lightBlurred,
@@ -313,6 +345,16 @@ internal fun Modifier.flueBackdropFill(
             legacyBackdropViewportMatches(it.viewportWidth, it.viewportHeight, layerSize)
         }
         if (preparedHardwareFrames != null) {
+            val preparedFrameAvailable =
+                hardwareCapturedFrame?.let { captured ->
+                    !captured.bitmap.isRecycled &&
+                        preparedHardwareFrames.capturedGeneration == captured.generation
+                } == true
+            val drawLiveContent = shouldDrawLiveBackdropContent(
+                overlayActive = freezeLiveContentWhenCaptured,
+                hardwareCaptureRequired = hardwareCaptureRequired,
+                capturedFrameAvailable = preparedFrameAvailable,
+            )
             val preparedScale = (contentScale?.invoke() ?: (1f - 0.08f * p))
                 .coerceIn(0.01f, 1f)
             val preparedTranslationY =
@@ -344,9 +386,11 @@ internal fun Modifier.flueBackdropFill(
             }
             magnifiedLayer.alpha = 1f
             clipRect { drawLayer(magnifiedLayer) }
-            // Android 12 以下保持原有结构：预制帧只负责边缘和模糊混合，
-            // 上面的真实表盘仍实时绘制，不能被静态预览整张覆盖。
-            drawContent()
+            // Keep the old live path until an actual captured frame is
+            // available. A captured frame can safely replace the live view for
+            // the whole gesture, including Android 12 with advanced material
+            // disabled.
+            if (drawLiveContent) drawContent()
             drawRect(Color.Black.copy(alpha = 0.20f * p))
             return@drawWithContent
         }
@@ -370,17 +414,29 @@ internal fun Modifier.flueBackdropFill(
             captureState.capturedSize = layerSize
         }
         if (!captureState.hasFrame || captureState.capturedSize != layerSize) {
-            // PixelCopy 尚未返回时不用缩略图，也不能用纯色整张盖住表盘造成
-            // 一次闪黑。先铺不透明边底，再保留当前实时表盘；捕获到达后才
-            // 切成完整的单层扩边画面。
+            // PixelCopy 尚未返回时，硬件捕获路径不能继续画实时表盘：
+            // Watchmaker 的 tick/media 已经冻结，继续 drawContent() 会让表盘
+            // 在等待窗口里走另一条实时绘制路径，正是手势首帧卡顿的来源。
+            // 捕获到达后才切成完整的单层扩边画面；普通录制路径仍保留实时
+            // 内容，避免没有硬件帧时出现不必要的空白。
+            val drawLiveContent = shouldDrawLiveBackdropContent(
+                overlayActive = freezeLiveContentWhenCaptured,
+                hardwareCaptureRequired = hardwareCaptureRequired,
+                capturedFrameAvailable = false,
+            )
             drawRect(fallbackColor.copy(alpha = 1f))
-            drawContent()
+            if (drawLiveContent) drawContent()
             drawRect(Color.Black.copy(alpha = 0.20f * p))
             return@drawWithContent
         }
+        val liveContentFrozen = !shouldDrawLiveBackdropContent(
+            overlayActive = freezeLiveContentWhenCaptured,
+            hardwareCaptureRequired = hardwareCaptureRequired,
+            capturedFrameAvailable = captureState.hasFrame,
+        )
         // 真实内容只负责推进内部弹簧/时钟，随后被完整不透明的单层扩边画面
         // 覆盖，不会再与回填层同时出现在屏幕上。
-        drawContent()
+        if (!liveContentFrozen) drawContent()
         backdropLayer.renderEffect = null
         backdropLayer.alpha = 1f
         backdropLayer.colorFilter = null
@@ -397,23 +453,31 @@ internal fun Modifier.flueBackdropFill(
         val insetRight = insetLeft + size.width * insetScale
         val insetBottom = insetTop + size.height * insetScale
 
-        magnifiedLayer.record(this, layoutDirection, layerSize) {
-            fun drawSource(
-                translateX: Float,
-                translateY: Float,
-                scaleX: Float,
-                scaleY: Float,
-            ) {
-                translate(left = translateX, top = translateY) {
-                    scale(
-                        scaleX = scaleX,
-                        scaleY = scaleY,
-                        pivot = Offset.Zero,
-                    ) {
-                        drawLayer(backdropLayer)
+        // 九宫格镜像重录节流：转场动画的每一帧 progress 都在变，但变化低于
+        // 阈值时镜像几何的差异只有零点几像素，且整层还要过 20% 压暗 + 模糊，
+        // 重录九个 clipRect 分区属于纯浪费。跳帧期间沿用上一次的录制内容。
+        val magnifiedGeometryMoved = !(
+            kotlin.math.abs(p - captureState.recordedProgress) < MAGNIFIED_RECORD_PROGRESS_EPSILON &&
+                captureState.capturedSize == layerSize
+            )
+        if (magnifiedGeometryMoved) {
+            magnifiedLayer.record(this, layoutDirection, layerSize) {
+                fun drawSource(
+                    translateX: Float,
+                    translateY: Float,
+                    scaleX: Float,
+                    scaleY: Float,
+                ) {
+                    translate(left = translateX, top = translateY) {
+                        scale(
+                            scaleX = scaleX,
+                            scaleY = scaleY,
+                            pivot = Offset.Zero,
+                        ) {
+                            drawLayer(backdropLayer)
+                        }
                     }
                 }
-            }
 
             // 中心：和正在下沉的前景保持完全相同的几何位置。
             clipRect(
@@ -486,6 +550,8 @@ internal fun Modifier.flueBackdropFill(
                     )
                 }
             }
+        }
+            captureState.recordedProgress = p
         }
         // Mirror handles convolution sampling beyond the physical screen;
         // the mirrored center/strips/corners already fill the visible area.

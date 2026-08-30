@@ -40,6 +40,8 @@ import androidx.compose.ui.unit.IntSize
 import com.flue.launcher.watchface.BUILT_IN_PHOTO_WATCHFACE_ID
 import com.flue.launcher.watchface.BUILT_IN_VIDEO_WATCHFACE_ID
 import com.flue.launcher.watchface.BUILT_IN_WATCHFACE_ID
+import com.flue.launcher.watchface.standard.WatchmakerBitmapConsumer
+import com.flue.launcher.watchface.standard.WatchmakerBitmapLease
 import com.flue.launcher.watchface.WatchFaceDescriptor
 import java.io.File
 import kotlinx.coroutines.Dispatchers
@@ -74,6 +76,8 @@ data class LegacyWatchFaceBackdropFrames(
     val overscanY: Int,
     val fallbackArgb: Int,
     val allocationBytes: Int,
+    /** PixelCopy generation used to produce [clear], or MIN_VALUE for fallback media. */
+    val capturedGeneration: Long = Long.MIN_VALUE,
 )
 
 /** A real, already-composited launcher watch-face frame captured while idle. */
@@ -82,6 +86,7 @@ internal data class LegacyWatchFaceCapturedFrame(
     val boundsKey: String,
     val generation: Long,
     val bitmap: Bitmap,
+    val lease: WatchmakerBitmapLease = WatchmakerBitmapLease(),
 )
 
 /**
@@ -114,15 +119,16 @@ internal fun rememberLegacyWatchFacePixelCopyFrame(
     }
 
     val latestCaptureAllowed = rememberUpdatedState(captureAllowed)
-    // captureAllowed 进入 key：覆层一旦开始显示就取消仍未完成的捕获，避免第二次
-    // 手势把上一次页面残影采进表盘帧。被取消时继续沿用上一张干净缓存。
-    LaunchedEffect(visualKey, boundsKey, window, captureRequestToken, captureAllowed) {
+    // captureAllowed 不进入 key：覆层开始时不能取消 DOWN 已经发出的首笔
+    // PixelCopy，否则背衬永远等不到冻结帧。状态变化只由下面的 latest 值控制：
+    // 首笔立即请求允许完成，延迟替换请求则必须在稳定 Face 状态下才继续。
+    LaunchedEffect(visualKey, boundsKey, window, captureRequestToken) {
         val requestedWindow = window ?: return@LaunchedEffect
         val requestedRect = requestedBounds ?: return@LaunchedEffect
         val requestedKey = boundsKey ?: return@LaunchedEffect
         val explicitRequest = captureRequestToken != observedRequestToken
         observedRequestToken = captureRequestToken
-        if (!captureAllowed || requestedRect.isEmpty) {
+        if ((!captureAllowed && !explicitRequest) || requestedRect.isEmpty) {
             return@LaunchedEffect
         }
         val sameVisual = captured?.let {
@@ -141,10 +147,16 @@ internal fun rememberLegacyWatchFacePixelCopyFrame(
         } else {
             longArrayOf(280L, 720L)
         }
+        var allowFirstCaptureAfterOverlay = explicitRequest
         for (settleDelay in delays) {
             if (settleDelay > 0L) delay(settleDelay)
             ensureActive()
-            if (!latestCaptureAllowed.value) return@LaunchedEffect
+            if (settleDelay > 0L && !latestCaptureAllowed.value) return@LaunchedEffect
+            val allowResultAfterOverlay = allowFirstCaptureAfterOverlay
+            // Only the first, immediate capture belongs to the gesture that
+            // requested it. Any delayed replacement must observe the current
+            // stable-Face gate before it is accepted.
+            allowFirstCaptureAfterOverlay = false
             val frame = requestWindowPixelCopy(
                 window = requestedWindow,
                 requestedBounds = requestedRect,
@@ -154,23 +166,23 @@ internal fun rememberLegacyWatchFacePixelCopyFrame(
             var frameOwnedByEffect = true
             try {
                 ensureActive()
-                if (!latestCaptureAllowed.value) continue
+                if (!latestCaptureAllowed.value && !allowResultAfterOverlay) continue
                 val previous = captured
-                captured = LegacyWatchFaceCapturedFrame(
+                val next = LegacyWatchFaceCapturedFrame(
                     visualKey = visualKey,
                     boundsKey = requestedKey,
                     generation = generation.incrementAndGet(),
                     bitmap = frame,
+                    lease = capturedFrameLease(frame),
                 )
+                next.lease.acquire(WatchmakerBitmapConsumer.COMPOSE)
+                next.lease.acquire(WatchmakerBitmapConsumer.RENDER_THREAD)
+                captured = next
                 frameOwnedByEffect = false
-                // Compose draw may still hold the previous ImageBitmap wrapper for
-                // this frame. Give it two VSYNCs before recycling the backing Bitmap.
-                previous?.bitmap?.let { old ->
-                    Handler(Looper.getMainLooper()).postDelayed(
-                        { recycleCapturedBitmapSafely(old) },
-                        48L,
-                    )
-                }
+                // Compose may still hold the previous ImageBitmap wrapper and its
+                // display list may still be queued on RenderThread. Retire both
+                // consumers together after two frame callbacks.
+                previous?.let(::retireCapturedFrame)
             } finally {
                 if (frameOwnedByEffect) recycleCapturedBitmapSafely(frame)
             }
@@ -178,10 +190,32 @@ internal fun rememberLegacyWatchFacePixelCopyFrame(
     }
     val latestCaptured by rememberUpdatedState(captured)
     DisposableEffect(Unit) {
-        onDispose { latestCaptured?.bitmap?.let(::recycleCapturedBitmapSafely) }
+        onDispose {
+            // 不要就地回收：dispose 发生在组合期，本帧的绘制指令可能仍引用这张位图，
+            // RenderThread 要到几毫秒后才采样它。与换帧路径一样留两个 VSYNC 余量。
+            latestCaptured?.let(::retireCapturedFrame)
+        }
     }
 
-    return captured?.takeIf { it.visualKey == visualKey && it.boundsKey == boundsKey }
+    return captured?.takeIf {
+        it.visualKey == visualKey && it.boundsKey == boundsKey && !it.bitmap.isRecycled
+    }
+}
+
+private fun capturedFrameLease(bitmap: Bitmap): WatchmakerBitmapLease =
+    WatchmakerBitmapLease { recycleCapturedBitmapSafely(bitmap) }
+
+private fun retireCapturedFrame(frame: LegacyWatchFaceCapturedFrame) {
+    frame.lease.retire()
+    Handler(Looper.getMainLooper()).postDelayed(
+        {
+            frame.lease.release(WatchmakerBitmapConsumer.COMPOSE)
+            frame.lease.release(WatchmakerBitmapConsumer.RENDER_THREAD)
+        },
+        // Two VSYNCs is a conservative grace period for Compose display-list
+        // retirement on the low-refresh Wear devices supported by this app.
+        48L,
+    )
 }
 
 private fun recycleCapturedBitmapSafely(bitmap: Bitmap) {
@@ -247,13 +281,17 @@ private suspend fun requestWindowPixelCopy(
             continuation.resume(null)
             return@suspendCancellableCoroutine
         }
-        // 协程在 PixelCopy 回来之前被取消（覆层开始显示就会取消）时，
-        // 回调里的 isActive 分支不再持有位图所有权，必须在这里兜底回收。
-        continuation.invokeOnCancellation {
-            synchronized(destination) {
-                if (!destination.isRecycled) destination.recycle()
-            }
+        val pixelCopyLease = WatchmakerBitmapLease {
+            recycleCapturedBitmapSafely(destination)
         }
+        pixelCopyLease.acquire(WatchmakerBitmapConsumer.PIXEL_COPY)
+        // 所有权只在 PixelCopy 回调里交接，绝不在 invokeOnCancellation 里回收：
+        // PixelCopy 的渲染跑在 RenderThread 上，请求取消（覆层开始显示就会取消）并不
+        // 停掉那次拷贝 —— 在取消回调里 recycle 还在被 RenderThread 写入的位图，
+        // HWUI 会直接 abort（"cannot access an invalid/free'd bitmap here!"，真机
+        // 日志里主线程 recycle 与 RenderThread abort 同刻出现）。PixelCopy 的监听器
+        // 保证每个请求恰好回调一次，且回调一定发生在拷贝完成之后：取消时这里什么都不
+        // 做，等回调里 isActive 为假再回收，时序就是安全的。
         runCatching {
             PixelCopy.request(
                 window,
@@ -261,20 +299,21 @@ private suspend fun requestWindowPixelCopy(
                 destination,
                 { result ->
                     if (result == PixelCopy.SUCCESS && continuation.isActive) {
+                        pixelCopyLease.release(WatchmakerBitmapConsumer.PIXEL_COPY)
                         continuation.resume(destination)
                     } else {
-                        synchronized(destination) {
-                            if (!destination.isRecycled) destination.recycle()
-                        }
+                        pixelCopyLease.release(WatchmakerBitmapConsumer.PIXEL_COPY)
+                        pixelCopyLease.retire()
                         if (continuation.isActive) continuation.resume(null)
                     }
                 },
                 pixelCopyCallbackHandler,
             )
         }.onFailure {
-            synchronized(destination) {
-                if (!destination.isRecycled) destination.recycle()
-            }
+            // 走到这里说明请求根本没提交出去，不存在在途的 RenderThread 写入，
+            // 就地回收是安全的。
+            pixelCopyLease.release(WatchmakerBitmapConsumer.PIXEL_COPY)
+            pixelCopyLease.retire()
             if (continuation.isActive) continuation.resume(null)
         }
     }
@@ -394,6 +433,7 @@ internal fun rememberLegacyWatchFaceBackdropFrames(
                 targetWidth = targetWidth,
                 targetHeight = targetHeight,
                 capturedBitmap = matchingCapture?.bitmap,
+                capturedGeneration = matchingCapture?.generation ?: Long.MIN_VALUE,
             )
         }
         if (prepared != null) {
@@ -444,6 +484,7 @@ private fun prepareLegacyBackdropFrames(
     targetWidth: Int,
     targetHeight: Int,
     capturedBitmap: Bitmap? = null,
+    capturedGeneration: Long = Long.MIN_VALUE,
 ): LegacyWatchFaceBackdropFrames? {
     val capturedCopy = capturedBitmap?.let { bitmap ->
         synchronized(bitmap) {
@@ -500,6 +541,7 @@ private fun prepareLegacyBackdropFrames(
         allocationBytes = clearBitmap.allocationByteCount +
             lightBlurred.allocationByteCount +
             darkBlurred.allocationByteCount,
+        capturedGeneration = capturedGeneration,
     )
 }
 

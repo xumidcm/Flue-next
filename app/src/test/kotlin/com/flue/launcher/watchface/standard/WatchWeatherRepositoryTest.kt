@@ -181,6 +181,39 @@ class WatchWeatherRepositoryTest {
         )
     }
 
+    @Test
+    fun coarseOnlyPermissionDropsTheProvidersThatRequireFineLocation() {
+        val discovered = listOf("fused", "network", "gps", "passive", "vendor_location")
+
+        // 只授予「大致位置」时 `getCurrentLocation(gps)` 抛的 SecurityException 会被
+        // `runCatching` 吞掉，于是那一轮**永远等不到 fix**：定位请求挂在 GPS 上、
+        // latch 一直等到超时，可用的 network/fused 结果也跟着一起白等。所以无 FINE
+        // 权限时干脆别把这两个 provider 报上去。
+        assertEquals(
+            listOf("fused", "network", "vendor_location"),
+            filterWatchWeatherLocationProvidersByPermission(
+                discovered,
+                hasFineLocationPermission = false,
+            ),
+        )
+        // 有 FINE 就一个都不筛，顺序也不动（排序是 prioritize 的活）。
+        assertEquals(
+            discovered,
+            filterWatchWeatherLocationProvidersByPermission(
+                discovered,
+                hasFineLocationPermission = true,
+            ),
+        )
+        // provider 名的大小写由平台决定，不能只认小写字面量。
+        assertEquals(
+            listOf("network"),
+            filterWatchWeatherLocationProvidersByPermission(
+                listOf("GPS", "network", "PASSIVE"),
+                hasFineLocationPermission = false,
+            ),
+        )
+    }
+
     private class TrackingChunkedInputStream(
         private val payload: ByteArray,
         private val chunkSize: Int,

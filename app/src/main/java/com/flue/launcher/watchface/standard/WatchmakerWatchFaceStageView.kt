@@ -53,6 +53,8 @@ internal class WatchmakerWatchFaceStageView @JvmOverloads constructor(
 
     private var appliedSignature: String? = null
     private var playing = true
+    private var windowVisible = true
+    private val overlayRenderGate = WatchmakerOverlayRenderGate()
     private val clipPath = Path()
     private var roundClip = false
     /**
@@ -119,6 +121,27 @@ internal class WatchmakerWatchFaceStageView @JvmOverloads constructor(
     fun setEditorAnimationInteractionFrozen(frozen: Boolean) =
         forEachCanvasSegment { it.setEditorAnimationInteractionFrozen(frozen) }
 
+    /**
+     * Freezes every Canvas segment for launcher overlay gestures as one
+     * transition. The Stage also pauses TextureView layers directly, so a
+     * player cannot continue changing behind the captured Compose frame.
+     */
+    fun setOverlayTransitionActive(active: Boolean) {
+        if (active) {
+            if (!overlayRenderGate.beginOverlayFreeze()) return
+            forEachCanvasSegment { it.setOverlayRenderFrozen(true) }
+            videoViews.forEach { it.setPlaying(false) }
+            // The launcher backdrop already owns the captured pixels. The
+            // renderer-side pause is synchronous and needs no extra render.
+            overlayRenderGate.markFrozenFrameReady()
+        } else {
+            if (!overlayRenderGate.beginOverlayResume()) return
+            forEachCanvasSegment { it.setOverlayRenderFrozen(false) }
+            videoViews.forEach { it.setPlaying(playing && windowVisible) }
+            overlayRenderGate.markResumeComplete()
+        }
+    }
+
     private inline fun forEachCanvasSegment(action: (WatchmakerWatchFaceView) -> Unit) {
         action(primaryView)
         extraViews.forEach(action)
@@ -126,7 +149,9 @@ internal class WatchmakerWatchFaceStageView @JvmOverloads constructor(
 
     private fun onPlaybackChanged(shouldPlay: Boolean) {
         playing = shouldPlay
-        videoViews.forEach { it.setPlaying(shouldPlay) }
+        videoViews.forEach {
+            it.setPlaying(shouldPlay && windowVisible && !overlayRenderGate.dynamicWorkPaused)
+        }
     }
 
     private fun onTransitionOverlayChanged(overlayVisible: Boolean) {
@@ -194,7 +219,9 @@ internal class WatchmakerWatchFaceStageView @JvmOverloads constructor(
         playable.forEachIndexed { index, entry ->
             val videoView = videoViews[index]
             videoView.bindSource(entry.absolutePath)
-            videoView.setPlaying(playing)
+            videoView.setPlaying(
+                playing && windowVisible && !overlayRenderGate.dynamicWorkPaused,
+            )
             addView(videoView)
             videoLayerIndices += entry.layerIndex
 
@@ -302,8 +329,17 @@ internal class WatchmakerWatchFaceStageView @JvmOverloads constructor(
 
     override fun onAttachedToWindow() {
         super.onAttachedToWindow()
+        windowVisible = true
         // 重新上屏时按当前分段结构把播放器建回来。
         if (videoLayerIndices.isNotEmpty()) syncVideoSegments()
+    }
+
+    override fun onWindowVisibilityChanged(visibility: Int) {
+        super.onWindowVisibilityChanged(visibility)
+        windowVisible = visibility == VISIBLE
+        videoViews.forEach {
+            it.setPlaying(playing && windowVisible && !overlayRenderGate.dynamicWorkPaused)
+        }
     }
 
     fun dispose() {

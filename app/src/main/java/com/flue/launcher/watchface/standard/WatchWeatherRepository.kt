@@ -1,6 +1,5 @@
 package com.flue.launcher.watchface.standard
 
-import android.Manifest
 import android.annotation.SuppressLint
 import android.content.Context
 import android.location.Geocoder
@@ -11,7 +10,6 @@ import android.os.Build
 import android.os.Bundle
 import android.os.CancellationSignal
 import android.os.Looper
-import androidx.core.content.ContextCompat
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.ByteArrayOutputStream
@@ -33,6 +31,16 @@ data class WatchWeatherLocation(
     val latitude: Double,
     val longitude: Double,
     val label: String? = null,
+    /**
+     * {aalt} 的海拔（米）。
+     *
+     * 不是传感器读数，也不是 `Location.getAltitude()`（手表大多没有气压计，那个值常年是
+     * 0）—— 而是 Open-Meteo 响应顶层就带的 `elevation`，即该坐标处地形的海拔。天气请求
+     * 本来就在打那个接口，顺手取回来即可，不额外发一次网络。
+     *
+     * null 表示还没刷过天气；渲染侧会按上游口径当 0 处理。
+     */
+    val elevation: Double? = null,
 ) {
     init {
         require(latitude.isFinite() && latitude in -90.0..90.0) { "latitude out of range" }
@@ -42,6 +50,29 @@ data class WatchWeatherLocation(
 
 fun interface WatchWeatherLocationSource {
     fun current(): WatchWeatherLocation?
+}
+
+/**
+ * 按当前**实际授予**的权限过滤 provider。
+ *
+ * GPS 与 passive 都要求 `ACCESS_FINE_LOCATION`。只授予了「大致位置」时对它们调
+ * `getCurrentLocation` 会抛 SecurityException，而那一层是 `runCatching` 包着的 ——
+ * 异常被吞掉，看起来像「请求发出去了但一直没回」：latch 一路等到 6 秒超时，
+ * 连同一轮里可用的 network/fused 结果也一起白等，于是永远拿不到 fix、
+ * {alat} 永远没有数据源。宁可不报这两个，也别让整轮定位挂在它们身上。
+ *
+ * 排序不管（那是 [prioritizeWatchWeatherLocationProviders] 的活），只做筛除。
+ */
+internal fun filterWatchWeatherLocationProvidersByPermission(
+    providers: Iterable<String>,
+    hasFineLocationPermission: Boolean,
+): List<String> {
+    if (hasFineLocationPermission) return providers.toList()
+    return providers.filterNot { provider ->
+        // provider 名的大小写由平台决定，不能只比小写字面量。
+        provider.equals(LocationManager.GPS_PROVIDER, ignoreCase = true) ||
+            provider.equals(LocationManager.PASSIVE_PROVIDER, ignoreCase = true)
+    }
 }
 
 internal fun prioritizeWatchWeatherLocationProviders(providers: Iterable<String>): List<String> =
@@ -205,11 +236,59 @@ class WatchWeatherRepository(
     /**
      * 当前生效的坐标（手动选点优先，否则用已缓存的系统定位）。
      *
-     * 给 `{alat}` / `{alon}` 一族用：那几个变量与天气**共用同一份已授权的定位**，
-     * 绝不为它们再单独申请一次位置权限，也不在这里发起新的定位请求 —— 只读已经
-     * 落盘的那份，没有就返回 null 让标签渲染 `--`。
+     * 给 `{alat}` / `{alon}` / `{aalt}` 一族用：那几个变量与天气**共用同一份已授权的
+     * 定位**，绝不为它们再单独申请一次位置权限，也不在这里发起新的定位请求 —— 只读
+     * 已经落盘的那份。授权引导由 UI 层走 [WatchLocationPermissionPolicy]。
+     *
+     * 返回 null 时渲染侧按上游口径给 0（clox 的 `WF.location.latitude or 0`），
+     * 不再显示 `--`。
      */
-    internal fun activeLocation(): WatchWeatherLocation? = manualLocation ?: readSystemLocation()
+    internal fun activeLocation(): WatchWeatherLocation? {
+        val base = manualLocation ?: readSystemLocation() ?: return null
+        if (base.elevation != null) return base
+        return base.copy(elevation = persistedElevationFor(base))
+    }
+
+    /**
+     * 落盘的海拔，且**只在坐标对得上时才认**。
+     *
+     * 海拔是「某一个坐标处的地形高度」，换了城市就是另一个数。所以连它所属的坐标一起
+     * 存、读的时候比一遍 —— 与 [loadPersistedSnapshot] 校验 `sourceLatitude` 同一个
+     * 道理：宁可让 {aalt} 显示 0，也不能把上海的海拔挂在拉萨的坐标上。
+     *
+     * 坐标变了不必主动清理：这里比对一次就自然失配，而下一次天气刷新（软 TTL 15 分钟，
+     * 且换地点会立刻 requestRefresh）就会写入新坐标的海拔。
+     */
+    private fun persistedElevationFor(location: WatchWeatherLocation): Double? {
+        val elevation = preferences.getString(KEY_ELEVATION, null)
+            ?.toDoubleOrNull()
+            ?.takeIf(Double::isFinite)
+            ?: return null
+        val latitude = preferences.getString(KEY_ELEVATION_LATITUDE, null)?.toDoubleOrNull()
+            ?: return null
+        val longitude = preferences.getString(KEY_ELEVATION_LONGITUDE, null)?.toDoubleOrNull()
+            ?: return null
+        if (
+            abs(latitude - location.latitude) > ELEVATION_LOCATION_TOLERANCE_DEGREES ||
+            abs(longitude - location.longitude) > ELEVATION_LOCATION_TOLERANCE_DEGREES
+        ) return null
+        return elevation
+    }
+
+    /** 把 Open-Meteo 那个 `elevation` 连同它所属的坐标一起写下来。 */
+    private fun persistElevation(location: WatchWeatherLocation, elevation: Double?) {
+        val editor = preferences.edit()
+        if (elevation == null || !elevation.isFinite()) {
+            editor.remove(KEY_ELEVATION)
+                .remove(KEY_ELEVATION_LATITUDE)
+                .remove(KEY_ELEVATION_LONGITUDE)
+        } else {
+            editor.putString(KEY_ELEVATION, elevation.toString())
+                .putString(KEY_ELEVATION_LATITUDE, location.latitude.toString())
+                .putString(KEY_ELEVATION_LONGITUDE, location.longitude.toString())
+        }
+        editor.apply()
+    }
 
     /**
      * Resolves multiple forward-geocoding candidates. This method performs IO;
@@ -419,6 +498,9 @@ class WatchWeatherRepository(
      * Old Wear OS/vendor Android builds may expose their usable coarse source
      * as a legacy `fused` or vendor provider rather than NETWORK_PROVIDER.
      * Discover the device providers instead of assuming the three AOSP names.
+     *
+     * 报上来之前先按**实际授予**的权限筛一遍 —— 只有粗定位时把 GPS / passive 留在
+     * 名单里会让整轮定位卡到超时，理由见 [filterWatchWeatherLocationProvidersByPermission]。
      */
     private fun systemLocationProviders(
         manager: LocationManager,
@@ -434,16 +516,20 @@ class WatchWeatherRepository(
             add(LocationManager.GPS_PROVIDER)
             add(LocationManager.PASSIVE_PROVIDER)
         }
-        return prioritizeWatchWeatherLocationProviders(candidates).filter { provider ->
+        val permitted = filterWatchWeatherLocationProvidersByPermission(
+            candidates,
+            hasFineLocationPermission = hasFineLocationPermission(),
+        )
+        return prioritizeWatchWeatherLocationProviders(permitted).filter { provider ->
             !enabledOnly || runCatching { manager.isProviderEnabled(provider) }.getOrDefault(false)
         }
     }
 
     private fun hasLocationPermission(): Boolean =
-        ContextCompat.checkSelfPermission(appContext, Manifest.permission.ACCESS_COARSE_LOCATION) ==
-            android.content.pm.PackageManager.PERMISSION_GRANTED ||
-            ContextCompat.checkSelfPermission(appContext, Manifest.permission.ACCESS_FINE_LOCATION) ==
-            android.content.pm.PackageManager.PERMISSION_GRANTED
+        WatchLocationPermissionPolicy.isGranted(appContext)
+
+    private fun hasFineLocationPermission(): Boolean =
+        WatchLocationPermissionPolicy.hasFineLocation(appContext)
 
     @Suppress("DEPRECATION")
     private fun reverseGeocodeLabel(location: WatchWeatherLocation): String? {
@@ -733,6 +819,10 @@ class WatchWeatherRepository(
             "&hourly=temperature_2m,weather_code,is_day&forecast_hours=13" +
             "&forecast_days=6&timezone=auto"
         val root = JSONObject(transport.get(url, USER_AGENT) ?: return null)
+        // {aalt} 的数据源。Open-Meteo 在响应**顶层**给该坐标处地形的海拔（米）——
+        // 之前没解析，于是 `altitudeMeters` 全代码库没有任何赋值点，{aalt} 永远读不出来。
+        // 不用 `Location.getAltitude()`：手表大多没有气压计，那个值常年是 0。
+        persistElevation(location, root.optDoubleOrNull("elevation"))
         val current = root.optJSONObject("current") ?: root.optJSONObject("current_weather") ?: return null
         val currentCode = current.optIntOrNull("weather_code")
             ?: current.optIntOrNull("weathercode")
@@ -870,6 +960,10 @@ class WatchWeatherRepository(
         const val KEY_SYSTEM_LOCATION_LABEL = "system_location_label"
         const val KEY_SYSTEM_LATITUDE = "system_latitude"
         const val KEY_SYSTEM_LONGITUDE = "system_longitude"
+        /** {aalt} 的海拔，以及它是在哪个坐标上取到的。三个键必须一起读写。 */
+        const val KEY_ELEVATION = "elevation_meters"
+        const val KEY_ELEVATION_LATITUDE = "elevation_latitude"
+        const val KEY_ELEVATION_LONGITUDE = "elevation_longitude"
         const val KEY_CACHE_RECEIVED_AT = "cache_received_at"
         const val KEY_CACHE_JSON = "cache_json"
         const val KEY_TEMPERATURE_UNIT = "temperature_unit"
@@ -879,6 +973,15 @@ class WatchWeatherRepository(
         private const val CURRENT_LOCATION_TIMEOUT_MS = 6_000L
         private const val SYSTEM_LOCATION_LABEL_TOLERANCE_DEGREES = 0.005
         private const val CACHE_LOCATION_TOLERANCE_DEGREES = 0.00001
+
+        /**
+         * 海拔与坐标的绑定容差，约 1 km。
+         *
+         * 比缓存天气的容差（[CACHE_LOCATION_TOLERANCE_DEGREES]，几乎逐位相等）宽得多，
+         * 因为地形海拔在一公里内基本不变，而每次微小漂移都丢掉海拔只会让 {aalt} 一直
+         * 闪回 0。真正换了城市远超这个量级，一比就失配。
+         */
+        private const val ELEVATION_LOCATION_TOLERANCE_DEGREES = 0.01
 
         @Volatile
         private var defaultInstance: WatchWeatherRepository? = null
@@ -914,6 +1017,11 @@ internal fun parseWatchWeatherLocationSearch(
         ).filterNotNull().distinct().joinToString(", ").ifBlank { fallbackLabel }
         runCatching { WatchWeatherLocation(latitude, longitude, label) }
             .getOrNull()
+            // geocoding 的每条结果也带 `elevation`，顺手收下 —— 手动选城市的用户不用等到
+            // 下一次天气刷新才有 {aalt}。缺这个字段（老响应）时仍是 null，按 0 渲染。
+            ?.let { parsedLocation ->
+                parsedLocation.copy(elevation = result.optDoubleOrNull("elevation"))
+            }
             ?.let(parsed::add)
     }
     return parsed

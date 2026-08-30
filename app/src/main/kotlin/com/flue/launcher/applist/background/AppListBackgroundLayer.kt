@@ -106,6 +106,7 @@ fun rememberAppListBackgroundPainting(
     builtInPhotoPath: String?,
     builtInVideoPath: String?,
     watchFaceRefreshToken: Int,
+    blurPercentOverride: Int? = null,
 ): AppListBackgroundPainting {
     val source = remember(
         config.effectiveMode,
@@ -131,7 +132,7 @@ fun rememberAppListBackgroundPainting(
         source = source,
         targetWidth = viewportWidthPx,
         targetHeight = viewportHeightPx,
-        blurPercent = config.blurPercent,
+        blurPercent = blurPercentOverride ?: config.blurPercent,
     )
     return remember(config, image, fallbackColor, darkMode) {
         AppListBackgroundPainting(

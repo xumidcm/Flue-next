@@ -109,6 +109,72 @@ class WatchmakerRuntimePrimitivesTest {
                 assertTrue(raw, WatchTapActionParser.parse(raw) is WatchTapAction.Unsupported)
             }
     }
+
+    @Test
+    fun `color switch actions parse with upstream directions`() {
+        assertEquals(
+            WatchTapAction.ColorSwitch(direction = 1),
+            WatchTapActionParser.parse("color_switch_next"),
+        )
+        assertEquals(
+            WatchTapAction.ColorSwitch(direction = -1),
+            WatchTapActionParser.parse(" COLOR_SWITCH_PREV "),
+        )
+        assertEquals(
+            WatchTapAction.ColorSwitch(direction = 1),
+            WatchTapActionParser.parse("color_switch_select"),
+        )
+    }
+
+    @Test
+    fun `tap selection uses the nearest eligible centre instead of layer order`() {
+        val candidates = listOf(
+            WatchTapHitCandidate(containsPoint = true, centerDistance = 2f, opacity = 0f),
+            WatchTapHitCandidate(containsPoint = true, centerDistance = 5f, opacity = 0f),
+        )
+
+        assertEquals(0, selectNearestWatchTapHitIndex(candidates))
+    }
+
+    @Test
+    fun `tap selection excludes only opacity minus one and keeps the 50 unit grace radius`() {
+        val candidates = listOf(
+            WatchTapHitCandidate(containsPoint = true, centerDistance = 1f, opacity = -1f),
+            WatchTapHitCandidate(containsPoint = false, centerDistance = 49.999f, opacity = 0f),
+            WatchTapHitCandidate(containsPoint = false, centerDistance = 50f, opacity = 0f),
+        )
+
+        assertEquals(1, selectNearestWatchTapHitIndex(candidates))
+        assertNull(
+            selectNearestWatchTapHitIndex(
+                listOf(
+                    WatchTapHitCandidate(false, 1f, -1f),
+                    WatchTapHitCandidate(false, 50f, 0f),
+                ),
+            ),
+        )
+    }
+
+    @Test
+    fun `color switch palette cycles through 41 colors and restores a persisted index`() {
+        assertEquals(41, WATCH_COLOR_SWITCH_PALETTE.size)
+        assertEquals(
+            WatchColorSwitchSelection(index = 1, color = "5987b2"),
+            selectWatchColor("abcdef", currentIndex = 0, direction = 1),
+        )
+        assertEquals(
+            WatchColorSwitchSelection(index = 41, color = "ffffff"),
+            selectWatchColor("abcdef", currentIndex = 0, direction = -1),
+        )
+        assertEquals(
+            WatchColorSwitchSelection(index = 0, color = "abcdef"),
+            selectWatchColor("abcdef", currentIndex = 41, direction = 1),
+        )
+        assertEquals(
+            WatchColorSwitchSelection(index = 13, color = "306a9f"),
+            selectWatchColor("abcdef", currentIndex = 13, direction = 0),
+        )
+    }
     @Test
     fun animatedImageFallbackIdentityChangesWhenReusedLayerGetsNewMaterial() {
         val imported = WatchImageFallbackKey(

@@ -196,7 +196,15 @@ object WatchFeatureDetector {
 
     private const val MOON_TAG = "wmp"
 
-    private val LOCATION_TAGS = setOf(
+    /**
+     * `WM_TAGS.md` §Location。
+     *
+     * 与 `WatchmakerTagResolver.LOCATION_TAGS` 是同一份名单，只是用途不同：这边算导出包
+     * 的 `features`，那边判断「这张表盘要不要一次位置权限引导」。两份必须逐字相同，
+     * `WatchmakerStudioTagValuesTest` 有一条断言钉住 —— 漂移的后果是「市场上标着用了
+     * 定位、运行时却从不申请权限」。刻意没有跨包互相引用：detector 这一层不依赖渲染层。
+     */
+    internal val LOCATION_TAGS = setOf(
         "aalt", "alat", "alatd", "alatdd", "alon", "alond", "alondd",
         "aw3w", "aw3w1", "aw3w2", "aw3w3",
     )

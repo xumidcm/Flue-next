@@ -67,6 +67,7 @@
     <string name="settings_flow_crescent_direction_left">Arc bulges to the left</string>
     <string name="settings_flow_crescent_bulge">Crescent Curvature</string>
     <string name="settings_flow_crescent_bulge_sub">How far the middle rows bulge outward</string>
+    <string name="settings_flow_curve_parameter_fmt">Shape curve %1$s</string>
     <string name="settings_rotary_haptics">Rotary Haptics</string>
     <string name="settings_rotary_haptics_on">Keep a light pulse while scrolling with the crown</string>
     <string name="settings_rotary_haptics_off">Disable crown scroll haptics</string>
@@ -153,6 +154,7 @@
     <string name="settings_app_list_background_blur_sub">Same blur as the control centre; pre-baked below Android 12</string>
     <string name="settings_app_list_background_scrim">Scrim strength</string>
     <string name="settings_app_list_background_scrim_sub">Darkens in dark mode, lightens in light mode, so icons and labels stay readable</string>
+    <string name="settings_app_list_background_reset">Reset background effects</string>
     <string name="app_list_background_crop_title">Crop background image</string>
     <string name="app_list_background_crop_hint">Drag to move, pinch to zoom; the frame is locked to the screen ratio</string>
     <string name="image_crop_failed">This image could not be read</string>
@@ -736,6 +738,7 @@
     <string name="backup_item_watch_files_sub">Imported third-party .watch face files</string>
     <string name="backup_summary_none">None</string>
     <string name="wf_tools_promo">For more advanced watch face editing, get “WFTools”</string>
+    <string name="wf_tools_watch_document">Read the .watch watch-face documentation</string>
     <string name="wf_tools_no_browser_fmt">No browser found. Please visit %1$s manually.</string>
     <string name="watch_face_tap_unavailable_fmt">Watch face tap action unavailable: %1$s</string>
     <string name="watch_face_tap_missing_app_fmt">App not found: %1$s</string>
@@ -830,7 +833,6 @@
     <string name="watch_editor_error_ffmpeg_unsupported">FFmpeg video import is not supported on this device architecture</string>
     <string name="watch_editor_error_read_video">Couldn\'t read the selected video</string>
     <string name="watch_editor_status_converting_video_fmt">Converting video %1$d%%</string>
-    <string name="watch_editor_status_copying_video_fmt">Importing original video %1$d%%</string>
     <string name="watch_editor_error_video_import">Video import failed</string>
     <string name="watch_editor_status_importing_watch">Importing .watch</string>
     <string name="watch_editor_error_read_file">Couldn\'t read the selected file</string>
@@ -958,8 +960,6 @@
     <string name="watch_editor_converting_video">Converting video</string>
     <string name="watch_editor_video_conversion_message">FFmpeg will convert the selected clip into looping watch-face frames.</string>
     <string name="watch_editor_video_reencode_message">FFmpeg will re-encode the selected clip into a watch-face video.</string>
-    <string name="watch_editor_video_passthrough_message">Copying the original video into the watch face without re-encoding.</string>
-    <string name="watch_editor_copying_video">Importing original video</string>
     <string name="watch_editor_cancel_conversion">Cancel conversion</string>
     <string name="watch_editor_collapse_child_layers">Collapse child layers</string>
     <string name="watch_editor_expand_child_layers">Expand child layers</string>
@@ -979,8 +979,6 @@
     <string name="watch_editor_import_image_path">Import image into path</string>
     <string name="watch_editor_import_image_sequence">Import images as a looping background</string>
     <string name="watch_editor_import_video_frames">Import video as looping frames</string>
-    <string name="watch_editor_error_frames_need_ffmpeg">This device is 32-bit and cannot convert to looping frames. A video layer can still import the file directly.</string>
-    <string name="watch_editor_error_reencode_need_ffmpeg">This device is 32-bit and cannot crop or re-encode video. Import it with its original settings instead.</string>
     <string name="watch_editor_text_entry_animation">Text entrance animation</string>
     <string name="watch_editor_text_exit_animation">Text exit animation</string>
     <string name="watch_editor_select_app_title">Choose an app to launch</string>
@@ -1165,6 +1163,11 @@
     <string name="watch_store_my_collections">My collections</string>
     <string name="watch_store_no_favorites">No favorites yet</string>
     <string name="watch_store_profile">Profile</string>
+    <string name="watch_store_logout_confirm">Sign out of this watch store account?</string>
+    <string name="watch_store_login_web">Sign in on the web</string>
+    <string name="watch_store_login_web_import">Sign in</string>
+    <string name="watch_store_login_web_imported_fmt">Web login imported (%1$s)</string>
+    <string name="watch_store_login_web_missing">No web login was detected</string>
     <string name="watch_store_profile_saving">Saving…</string>
     <string name="watch_store_profile_saved">Saved</string>
     <string name="watch_store_profile_not_set">Not set</string>
@@ -1180,6 +1183,7 @@
     <string name="watch_store_profile_avatar_unreadable">That image cannot be read — try another one</string>
     <string name="watch_store_profile_avatar_too_large">Still over 2MB after compression — try another image</string>
     <string name="watch_store_profile_change_password">Change password</string>
+    <string name="watch_store_profile_change_password_action">Tap to change</string>
     <string name="watch_store_profile_current_password">Current password</string>
     <string name="watch_store_profile_new_password">New password</string>
     <string name="watch_store_profile_password_changed">Password updated</string>
@@ -1231,6 +1235,7 @@
     <string name="watch_store_installed">Installed</string>
     <string name="watch_store_retry">Retry</string>
     <string name="watch_store_custom_market_url">Custom market URL</string>
+    <string name="settings_watch_store_market_url_allow_local">Allow self-hosted or local network addresses (security risk)</string>
     <string name="settings_tap_actions">Watch face tap actions</string>
     <string name="settings_tap_actions_sub">Point actions like music or dialer at your apps</string>
     <string name="settings_tap_actions_categories_sub">Choose a purpose, then bind each action to an app</string>
@@ -1355,6 +1360,7 @@
     <string name="watch_store_edit_comment_a11y">Edit comment</string>
     <string name="watch_store_delete_comment_a11y">Delete comment</string>
     <string name="watch_store_reply_a11y">Reply to comment</string>
+    <string name="watch_store_expand_replies_fmt">Show %1$d more replies</string>
     <string name="watch_store_cancel_reply">Cancel reply</string>
     <string name="watch_store_stat_downloads">Downloads</string>
     <string name="watch_store_stat_favorites">Likes</string>
@@ -1400,7 +1406,8 @@
     <string name="watch_store_select_replacement_file">Choose a new .watch file</string>
     <string name="watch_store_export">Export</string>
     <string name="watch_store_custom_name">Custom name</string>
-    <string name="watch_store_delete_installed">Delete installed watch face</string>
+    <string name="watch_store_delete_installed">Delete watch face</string>
+    <string name="watch_store_reinstall">Reinstall watch face</string>
     <string name="watch_store_download_and_install">Download and install</string>
     <string name="watch_store_status_loading_detail">Loading details…</string>
     <string name="watch_store_status_preparing_detail">Preparing details…</string>
@@ -1640,9 +1647,9 @@
     <string name="watch_editor_attribute_pct_complete">Progress percentage</string>
     <string name="watch_editor_attribute_end_style">End cap style</string>
     <string name="watch_editor_attribute_outside_opacity">Unfilled opacity</string>
-    <string name="watch_editor_attribute_color2">Color 2 Â· gradient end</string>
-    <string name="watch_editor_attribute_color3">Color 3 Â· track</string>
-    <string name="watch_editor_attribute_color4">Color 4 Â· border</string>
+    <string name="watch_editor_attribute_color2">Color 2 · gradient end</string>
+    <string name="watch_editor_attribute_color3">Color 3 · track</string>
+    <string name="watch_editor_attribute_color4">Color 4 · border</string>
     <string name="watch_editor_attribute_outline">Outline mode</string>
     <string name="watch_editor_attribute_o_color">Outline color</string>
     <string name="watch_editor_attribute_o_size">Outline size</string>
@@ -1682,4 +1689,10 @@
     <string name="watch_editor_shape_kind_hexagon">Hexagon</string>
     <string name="watch_editor_shape_kind_star">Star</string>
     <string name="watch_editor_shape_kind_heart">Heart</string>
+
+    <!-- P0 batch additions -->
+    <string name="watch_store_login_or_register">Sign in / Register</string>
+    <string name="watch_store_login_required">Sign in to use this</string>
+    <string name="watch_store_web_view_outdated_fmt">The built-in browser is too old (%1$s); opened in the system browser instead</string>
+    <string name="watch_store_web_view_render_failed">The web store failed to load; opened in the system browser instead</string>
 </resources>

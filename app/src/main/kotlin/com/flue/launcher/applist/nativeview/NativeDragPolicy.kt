@@ -108,7 +108,16 @@ internal class NativeFolderHoverGate(
             speedPxPerMs.isFinite() && abs(speedPxPerMs) <= policy.folderHoverMaxSpeedPxPerMs
         }
         if (validCandidate == null) {
-            reset()
+            if (candidateKey == null) {
+                reset()
+                return null
+            }
+            // 候选还在、只是这一采样超速（手抖 / 快速掠过）：只重置停留时钟。
+            // 以前这里整门重置 —— 目标与「停稳过」的最慢速度证据一起被抹掉，
+            // 悬停在 0.55px/ms 门槛附近抖两下就永远凑不满 dwell，老师报的
+            // 「经常组不上文件夹」就是它。目标换了仍走下面的整门重启。
+            startedAtMillis = nowMillis
+            armed = false
             return null
         }
         if (targetKey != validCandidate) {
@@ -127,21 +136,8 @@ internal class NativeFolderHoverGate(
         return null
     }
 
-    /**
-     * 按「停得多稳」在下限与上限之间插值出这一次需要的停留时长。
-     *
-     * 完全停住（最慢采样 = 0）取 [NativeDragPolicy.folderHoverSettledMillis]；
-     * 一直贴着速度门槛漂移取 [NativeDragPolicy.folderHoverMillis]。
-     */
-    private fun requiredDwellMillis(): Long {
-        val ceiling = policy.folderHoverMillis
-        val floor = policy.folderHoverSettledMillis.coerceIn(0L, ceiling)
-        val limit = policy.folderHoverMaxSpeedPxPerMs
-        if (limit <= 0f || !limit.isFinite()) return ceiling
-        val settled = slowestSpeedPxPerMs.takeIf { it.isFinite() } ?: limit
-        val normalized = (settled / limit).coerceIn(0f, 1f)
-        return floor + ((ceiling - floor) * normalized).toLong()
-    }
+    private fun requiredDwellMillis(): Long =
+        nativeFolderDwellMillis(policy, slowestSpeedPxPerMs)
 
     fun reset() {
         targetKey = null
@@ -150,6 +146,41 @@ internal class NativeFolderHoverGate(
         armed = false
     }
 }
+
+/**
+ * 合成所需停留时长的**唯一真源**：按「停得多稳」在下限与上限之间插值。
+ *
+ * 完全停住（最慢采样 = 0）取 [NativeDragPolicy.folderHoverSettledMillis]；
+ * 一直贴着速度门槛漂移取 [NativeDragPolicy.folderHoverMillis]。
+ *
+ * 抽成顶层纯函数、不留在 [NativeFolderHoverGate] 里，是因为
+ * [NativeAppListDragController] 也要按同一条法则排「到期回调」——
+ * 以前那边直接读 `policy.folderHoverMillis`，与 gate 内部的插值门槛是两个来源，
+ * 改插值曲线时只会改到一半。
+ */
+internal fun nativeFolderDwellMillis(
+    policy: NativeDragPolicy,
+    slowestSpeedPxPerMs: Float,
+): Long {
+    val ceiling = policy.folderHoverMillis
+    val floor = policy.folderHoverSettledMillis.coerceIn(0L, ceiling)
+    val limit = policy.folderHoverMaxSpeedPxPerMs
+    if (limit <= 0f || !limit.isFinite()) return ceiling
+    val settled = slowestSpeedPxPerMs.takeIf { it.isFinite() } ?: limit
+    val normalized = (settled / limit).coerceIn(0f, 1f)
+    return floor + ((ceiling - floor) * normalized).toLong()
+}
+
+/**
+ * 停留时长的**最晚**可能取值，也就是控制器该把「到期回调」排在哪一刻。
+ *
+ * 为什么排在上限而不是当前插值值：[NativeFolderHoverGate] 的门槛只会随后续采样
+ * **下降**（它记的是最慢采样，单调不增），所以上限就是「无论如何都已经该武装了」
+ * 的那一刻。回调只是一次轮询 —— 真正的判定权在 gate 手里，它在回调里按自己那一刻
+ * 的门槛决定要不要武装。排早了会在门槛还没满足时空跑一次；排在上限则一次到位。
+ */
+internal fun nativeFolderDwellPollMillis(policy: NativeDragPolicy): Long =
+    nativeFolderDwellMillis(policy, policy.folderHoverMaxSpeedPxPerMs)
 
 internal fun nativeFolderTargetAllowed(
     source: NativeAppListBoundRow<*>,

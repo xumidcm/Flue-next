@@ -260,7 +260,8 @@ fun WatchFaceLayer(
         onLongPress = onLongPress,
         onDoubleTap = onDoubleTap,
         showClock = true,
-        keepVideoAliveWhenHidden = true,
+        // 视频是高耗能资源，桌面离开表盘时交给 isFaceVisible 统一暂停，并保留静态首帧。
+        keepVideoAliveWhenHidden = false,
         modifier = modifier
     )
 }
@@ -1261,12 +1262,13 @@ private fun rememberClockSnapshot(showSeconds: Boolean): ClockSnapshot {
             if (locale.language.startsWith("zh")) "M\u6708d\u65E5 EEEE" else "MMM d, EEEE",
             locale
         )
+        // Calendar.getInstance() 是重量级分配，秒级循环里复用同一个实例。
+        val calendar = Calendar.getInstance()
         while (true) {
-            val now = Date()
-            val calendar = Calendar.getInstance().apply { time = now }
+            calendar.timeInMillis = System.currentTimeMillis()
             snapshot = ClockSnapshot(
-                time = timeFmt.format(now),
-                date = dateFmt.format(now),
+                time = timeFmt.format(calendar.time),
+                date = dateFmt.format(calendar.time),
                 hour = calendar.get(Calendar.HOUR_OF_DAY),
                 minute = calendar.get(Calendar.MINUTE),
                 second = calendar.get(Calendar.SECOND),

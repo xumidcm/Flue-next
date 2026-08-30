@@ -2,9 +2,15 @@ package com.flue.launcher.layout
 
 import com.flue.launcher.ui.navigation.LayoutMode
 import com.flue.launcher.util.FlowCrescentDirection
+import com.flue.launcher.util.FlowShapeCurve
 import java.util.UUID
 
-const val FLUE_LAYOUT_SCHEMA_VERSION: Int = 1
+const val FLUE_LAYOUT_SCHEMA_VERSION: Int = 3
+
+const val FLUE_LAYOUT_NARROW_COLUMNS_MIN: Int = 1
+const val FLUE_LAYOUT_NARROW_COLUMNS_MAX: Int = 5
+const val FLUE_LAYOUT_APP_LIST_SCALE_MIN: Int = 50
+const val FLUE_LAYOUT_APP_LIST_SCALE_MAX: Int = 200
 
 /** 生效行数：从中心往外数几行参与缩放。 */
 const val FLUE_LAYOUT_FISHEYE_RANGE_ROWS_MIN: Int = 1
@@ -100,6 +106,11 @@ data class FlueLayoutProfile(
     val crescentDirection: FlowCrescentDirection,
     /** 心流专属：月牙弧度。 */
     val crescentBulgePercent: Int,
+    /** 网格类布局的窄屏列数。 */
+    val narrowColumns: Int = 3,
+    /** 列表和图标的整体缩放。 */
+    val appListScalePercent: Int = 100,
+    val flowShapeCurve: FlowShapeCurve = FlowShapeCurve.Crescent,
 ) {
     fun requireValid(): FlueLayoutProfile {
         require(schemaVersion == FLUE_LAYOUT_SCHEMA_VERSION) {
@@ -137,6 +148,14 @@ data class FlueLayoutProfile(
             "crescentBulgePercent must be in " +
                 "$FLUE_LAYOUT_CRESCENT_BULGE_MIN..$FLUE_LAYOUT_CRESCENT_BULGE_MAX"
         }
+        require(narrowColumns in FLUE_LAYOUT_NARROW_COLUMNS_MIN..FLUE_LAYOUT_NARROW_COLUMNS_MAX) {
+            "narrowColumns must be in $FLUE_LAYOUT_NARROW_COLUMNS_MIN..$FLUE_LAYOUT_NARROW_COLUMNS_MAX"
+        }
+        require(appListScalePercent in FLUE_LAYOUT_APP_LIST_SCALE_MIN..FLUE_LAYOUT_APP_LIST_SCALE_MAX) {
+            "appListScalePercent must be in $FLUE_LAYOUT_APP_LIST_SCALE_MIN..$FLUE_LAYOUT_APP_LIST_SCALE_MAX"
+        }
+        require(flowShapeCurve.x1 in 0f..1f && flowShapeCurve.x2 in 0f..1f)
+        require(flowShapeCurve.y1 in 0f..1f && flowShapeCurve.y2 in 0f..1f)
         return this
     }
 
@@ -163,6 +182,15 @@ data class FlueLayoutProfile(
             FLUE_LAYOUT_CRESCENT_BULGE_MIN,
             FLUE_LAYOUT_CRESCENT_BULGE_MAX,
         ),
+        narrowColumns = narrowColumns.coerceIn(
+            FLUE_LAYOUT_NARROW_COLUMNS_MIN,
+            FLUE_LAYOUT_NARROW_COLUMNS_MAX,
+        ),
+        appListScalePercent = appListScalePercent.coerceIn(
+            FLUE_LAYOUT_APP_LIST_SCALE_MIN,
+            FLUE_LAYOUT_APP_LIST_SCALE_MAX,
+        ),
+        flowShapeCurve = flowShapeCurve.sanitized(),
     )
 
     fun customCopy(

@@ -75,6 +75,9 @@ internal fun WatchTapActionPresetDialog(
 
     FlueAlertDialog(
         onDismissRequest = onDismiss,
+        // T-06：同 WatchAppPickerDialog —— 正文是长列表，关掉外壳整块滚动，
+        // 列表才能按剩余空间自适应、「取消」才钉得住。
+        scrollableContent = false,
         title = {
             Text(
                 stringResource(R.string.watch_editor_tap_action_preset),
@@ -104,9 +107,10 @@ internal fun WatchTapActionPresetDialog(
                 )
                 Spacer(Modifier.height(6.dp))
                 LazyColumn(
-                    // 固定高度，和应用选择器同一个理由：弹窗卡片自己会滚，列表再按内容
-                    // 长高就会撞上无限高度约束（FlueDialog 里嵌 verticalScroll 崩过一次）。
-                    modifier = Modifier.height(250.dp),
+                    // T-06：高度交给外壳（`scrollableContent = false`），不再写死 250dp。
+                    // 理由与 WatchAppPicker 那处同源：写死 dp 会把内容涨到超过可用卡高，
+                    // 而列表吞掉纵向拖动、外层又滚不动，「取消」就永远点不到。
+                    modifier = Modifier.weight(1f, fill = false),
                     verticalArrangement = Arrangement.spacedBy(2.dp),
                 ) {
                     groups.forEach { (category, actions) ->

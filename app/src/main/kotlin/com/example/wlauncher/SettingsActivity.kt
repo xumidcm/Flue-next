@@ -26,6 +26,7 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.annotation.StringRes
 import androidx.activity.result.contract.ActivityResultContracts.RequestPermission
+import androidx.activity.result.contract.ActivityResultContracts.RequestMultiplePermissions
 import androidx.activity.result.contract.ActivityResultContracts.CreateDocument
 import androidx.activity.result.contract.ActivityResultContracts.OpenDocument
 import androidx.activity.compose.setContent
@@ -52,6 +53,7 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.togetherWith
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.foundation.background
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -231,6 +233,8 @@ import com.flue.launcher.ui.theme.RoundElementRole
 import com.flue.launcher.ui.theme.roundAwareCardShape
 import com.flue.launcher.ui.theme.roundAwareCompactShape
 import com.flue.launcher.util.RecentsVisibility
+import com.flue.launcher.util.FlowCrescentDirection
+import com.flue.launcher.util.flowCrescentOffsetPx
 import com.flue.launcher.viewmodel.LauncherViewModel
 import com.flue.launcher.watchface.BUILT_IN_PHOTO_WATCHFACE_ID
 import com.flue.launcher.watchface.BUILT_IN_VIDEO_WATCHFACE_ID
@@ -241,6 +245,7 @@ import com.flue.launcher.watchface.standard.WatchDateLocale
 import com.flue.launcher.watchface.standard.WatchTemperatureUnit
 import com.flue.launcher.watchface.standard.WatchWeatherLocation
 import com.flue.launcher.watchface.standard.WatchWeatherRepository
+import com.flue.launcher.watchface.standard.WatchLocationPermissionPolicy
 import com.flue.launcher.watchface.standard.hasHeartRatePermission
 import com.flue.launcher.watchface.standard.requiredHeartRatePermission
 import com.flue.launcher.watchface.store.WatchStoreRepository
@@ -735,11 +740,8 @@ private fun SettingsRootScreen(
             }
         }
     }
-    var coarseLocationPermissionGranted by remember(context) {
-        mutableStateOf(
-            ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_COARSE_LOCATION) ==
-                PackageManager.PERMISSION_GRANTED,
-        )
+    var locationPermissionGranted by remember(context) {
+        mutableStateOf(WatchLocationPermissionPolicy.isGranted(context))
     }
     // 表盘日程（{cex} / {cNxx}）。与心率完全同一套：只有用户主动点这一行才申请
     // READ_CALENDAR，没授权时那些标签渲染 `--`，一次查询都不会发。
@@ -786,11 +788,9 @@ private fun SettingsRootScreen(
             }
         }
     }
-    val coarseLocationPermissionLauncher = rememberLauncherForActivityResult(RequestPermission()) { granted ->
-        coarseLocationPermissionGranted = granted ||
-            ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_COARSE_LOCATION) ==
-            PackageManager.PERMISSION_GRANTED
-        if (coarseLocationPermissionGranted) {
+    val locationPermissionLauncher = rememberLauncherForActivityResult(RequestMultiplePermissions()) {
+        locationPermissionGranted = WatchLocationPermissionPolicy.isGranted(context)
+        if (locationPermissionGranted) {
             resolveAndUseSystemWeatherLocation()
         } else {
             Toast.makeText(
@@ -1024,6 +1024,9 @@ private fun SettingsRootScreen(
         builtInPhotoPath = builtInPhotoPath,
         builtInVideoPath = builtInVideoPath,
         watchFaceRefreshToken = watchFaceRefreshToken,
+        blurPercentOverride = if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S &&
+            appListBackgroundBlurDrag != null
+        ) 0 else null,
     )
     var backStack by remember {
         mutableStateOf(initialSettingsBackStack(launchConfig.initialDestination, launchConfig.returnToFaceOnBack))
@@ -1398,11 +1401,7 @@ private fun SettingsRootScreen(
                 accessibilityServiceEnabled = FlueAccessibilityService.isEnabled(context) || accessibilityServiceConnected
                 deviceAdminEnabled = FlueDeviceAdminController.isActive(context)
                 bodySensorsPermissionGranted = hasBodySensorsPermission(context)
-                coarseLocationPermissionGranted =
-                    ContextCompat.checkSelfPermission(
-                        context,
-                        Manifest.permission.ACCESS_COARSE_LOCATION,
-                    ) == PackageManager.PERMISSION_GRANTED
+                locationPermissionGranted = WatchLocationPermissionPolicy.isGranted(context)
                 weatherLocationLabel = weatherRepository.activeLocationLabel().orEmpty()
                 weatherUsingSystemLocation = weatherRepository.isUsingSystemLocation()
                 weatherTemperatureUnit = weatherRepository.temperatureUnit()
@@ -2063,7 +2062,7 @@ private fun SettingsRootScreen(
                         title = stringResource(R.string.settings_watch_weather_city),
                         subtitle = weatherLocationLabel.takeIf(String::isNotBlank)?.let { label ->
                             stringResource(R.string.settings_watch_weather_city_selected_fmt, label)
-                        } ?: if (coarseLocationPermissionGranted && weatherUsingSystemLocation) {
+                        } ?: if (locationPermissionGranted && weatherUsingSystemLocation) {
                             stringResource(R.string.settings_watch_weather_city_system)
                         } else {
                             stringResource(R.string.settings_watch_weather_city_unset)
@@ -2089,7 +2088,7 @@ private fun SettingsRootScreen(
                 row("watch_weather_system_location") { position ->
                     ActionCard(
                         title = stringResource(R.string.settings_watch_weather_use_system),
-                        subtitle = if (coarseLocationPermissionGranted && weatherUsingSystemLocation) {
+                        subtitle = if (locationPermissionGranted && weatherUsingSystemLocation) {
                             weatherLocationLabel.takeIf(String::isNotBlank)?.let { label ->
                                 stringResource(R.string.settings_watch_weather_use_system_active_fmt, label)
                             } ?: stringResource(R.string.settings_watch_weather_use_system_active)
@@ -2106,10 +2105,10 @@ private fun SettingsRootScreen(
                             SettingsIcon(material = OfficialMiuixIcons.OfficialRefresh, miuix = OfficialMiuixIcons.OfficialRefresh)
                         },
                         onClick = {
-                            if (coarseLocationPermissionGranted) {
+                            if (locationPermissionGranted) {
                                 resolveAndUseSystemWeatherLocation()
                             } else {
-                                coarseLocationPermissionLauncher.launch(Manifest.permission.ACCESS_COARSE_LOCATION)
+                                locationPermissionLauncher.launch(WatchLocationPermissionPolicy.PERMISSIONS)
                             }
                         },
                         groupPosition = position,
@@ -2769,7 +2768,7 @@ private fun SettingsRootScreen(
                             valueText = "${appListBackground.blurPercent}%",
                             localValueText = { "${it.roundToInt()}%" },
                             range = 0f..100f,
-                            steps = 19,
+                            steps = 0,
                             // 拖动值只喂预览卡，不落盘。
                             onValueChange = {
                                 appListBackgroundBlurDrag = it.roundToInt()
@@ -2778,6 +2777,7 @@ private fun SettingsRootScreen(
                             // 每帧都提交等于拖动时连烘十几张。
                             onValueChangeFinished = {
                                 vm.setAppListBackgroundBlurPercent(it.roundToInt())
+                                appListBackgroundBlurDrag = null
                             },
                             supportingText = stringResource(
                                 R.string.settings_app_list_background_blur_sub,
@@ -2789,6 +2789,18 @@ private fun SettingsRootScreen(
                                 screenHeightPx,
                             ),
                             groupPosition = position,
+                            footer = {
+                                FlueButton(
+                                    onClick = {
+                                        appListBackgroundBlurDrag = null
+                                        appListBackgroundScrimDrag = null
+                                        vm.resetAppListBackgroundEffects()
+                                    },
+                                    modifier = Modifier.fillMaxWidth(),
+                                ) {
+                                    Text(stringResource(R.string.settings_app_list_background_reset))
+                                }
+                            },
                         )
                     }
                     row("app_list_background_scrim") { position ->
@@ -2798,12 +2810,13 @@ private fun SettingsRootScreen(
                             valueText = "${appListBackground.scrimPercent}%",
                             localValueText = { "${it.roundToInt()}%" },
                             range = 0f..100f,
-                            steps = 19,
+                            steps = 0,
                             onValueChange = {
                                 appListBackgroundScrimDrag = it.roundToInt()
                             },
                             onValueChangeFinished = {
                                 vm.setAppListBackgroundScrimPercent(it.roundToInt())
+                                appListBackgroundScrimDrag = null
                             },
                             supportingText = stringResource(
                                 R.string.settings_app_list_background_scrim_sub,
@@ -3358,6 +3371,24 @@ private fun SettingsRootScreen(
                 }
             }
             if (layoutMode == LayoutMode.Flow) {
+                item("app_list_flow_shape_preview") {
+                    val previewScale = itemFisheye(
+                        listState,
+                        "app_list_flow_shape_preview",
+                        screenCenterY,
+                        screenHeightPx,
+                    )
+                    AppListFlowShapePreview(
+                        bulgePercent = appListFlowCrescentBulgePercent,
+                        toRight = appListFlowCrescentToRight,
+                        curve = activeLayoutProfile.flowShapeCurve,
+                        modifier = Modifier.graphicsLayer {
+                            scaleX = previewScale
+                            scaleY = previewScale
+                            alpha = previewScale.coerceIn(0.55f, 1f)
+                        },
+                    )
+                }
                 flueSettingsGroup {
                     row("app_list_flow_crescent_direction") { position ->
                         SettingsSwitchRow(
@@ -3389,6 +3420,41 @@ private fun SettingsRootScreen(
                             scale = itemFisheye(listState, "app_list_flow_crescent_bulge", screenCenterY, screenHeightPx),
                             groupPosition = position,
                         )
+                    }
+                    listOf(
+                        "X1" to activeLayoutProfile.flowShapeCurve.x1,
+                        "Y1" to activeLayoutProfile.flowShapeCurve.y1,
+                        "X2" to activeLayoutProfile.flowShapeCurve.x2,
+                        "Y2" to activeLayoutProfile.flowShapeCurve.y2,
+                    ).forEach { (parameter, value) ->
+                        row("app_list_flow_curve_$parameter") { position ->
+                            SettingsSliderRow(
+                                title = stringResource(R.string.settings_flow_curve_parameter_fmt, parameter),
+                                value = value,
+                                valueText = "%.2f".format(Locale.US, value),
+                                localValueText = { "%.2f".format(Locale.US, it) },
+                                range = 0f..1f,
+                                steps = 19,
+                                onValueChange = { next ->
+                                    val current = activeLayoutProfile.flowShapeCurve
+                                    vm.setAppListFlowShapeCurve(
+                                        when (parameter) {
+                                            "X1" -> current.copy(x1 = next)
+                                            "Y1" -> current.copy(y1 = next)
+                                            "X2" -> current.copy(x2 = next)
+                                            else -> current.copy(y2 = next)
+                                        },
+                                    )
+                                },
+                                scale = itemFisheye(
+                                    listState,
+                                    "app_list_flow_curve_$parameter",
+                                    screenCenterY,
+                                    screenHeightPx,
+                                ),
+                                groupPosition = position,
+                            )
+                        }
                     }
                 }
             }
@@ -4847,11 +4913,15 @@ private fun SettingsRootScreen(
             FlueAlertDialog(
                 onDismissRequest = { weatherCityDialogVisible = false },
                 title = { Text(stringResource(R.string.settings_watch_weather_city_dialog_title)) },
+                // T-06：关掉外壳整块滚动，「搜索 / 取消」才钉得住卡底。
+                // 候选城市能出七八条，原来叠着两层滚动（外壳 + 这里的 verticalScroll），
+                // 内层吞掉纵向拖动、外层滚不动，按钮就摸不到了。
+                scrollableContent = false,
                 text = {
                     Column(
-                        modifier = Modifier
-                            .heightIn(max = 360.dp)
-                            .verticalScroll(rememberScrollState()),
+                        // 高度不再写死 360dp：`scrollableContent = false` 之后这里拿到的是
+                        // 「卡高减掉标题与按钮」的剩余约束，内容超出时由这一层自己滚。
+                        modifier = Modifier.verticalScroll(rememberScrollState()),
                         verticalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
                         Text(stringResource(R.string.settings_watch_weather_city_dialog_message))
@@ -5043,6 +5113,53 @@ private fun SettingsRootScreen(
                     }
                 },
             )
+        }
+    }
+}
+
+@Composable
+private fun AppListFlowShapePreview(
+    bulgePercent: Int,
+    toRight: Boolean,
+    curve: com.flue.launcher.util.FlowShapeCurve,
+    modifier: Modifier = Modifier,
+) {
+    val style = LauncherTheme.style
+    Box(
+        modifier = modifier
+            .fillMaxWidth()
+            .height(112.dp)
+            .clip(style.compactShape)
+            .background(style.pressedCardColor),
+        contentAlignment = Alignment.Center,
+    ) {
+        Canvas(Modifier.fillMaxSize().padding(horizontal = 22.dp, vertical = 12.dp)) {
+            val centerX = size.width / 2f
+            val centerY = size.height / 2f
+            val rowGap = size.height / 4.5f
+            val direction = if (toRight) FlowCrescentDirection.Right else FlowCrescentDirection.Left
+            repeat(5) { index ->
+                val y = centerY + (index - 2) * rowGap
+                val offset = flowCrescentOffsetPx(
+                    rowCenterY = y,
+                    viewportCenterY = centerY,
+                    viewportHeight = size.height,
+                    bulgePx = size.width * 0.24f * bulgePercent / 100f,
+                    direction = direction,
+                    curve = curve,
+                )
+                drawCircle(
+                    color = style.accentColor,
+                    radius = 8.dp.toPx(),
+                    center = Offset(centerX + offset, y),
+                )
+                drawLine(
+                    color = style.secondaryTextColor.copy(alpha = 0.28f),
+                    start = Offset(centerX, y),
+                    end = Offset(centerX + offset, y),
+                    strokeWidth = 1.dp.toPx(),
+                )
+            }
         }
     }
 }
@@ -6108,9 +6225,7 @@ private fun SettingsSliderRow(
                     value = localValue,
                     onValueChange = {
                         localValue = it
-                        if (onValueChangeFinished == null) {
-                            onValueChange(it)
-                        }
+                        onValueChange(it)
                     },
                     valueRange = range,
                     steps = steps,
@@ -6187,9 +6302,7 @@ private fun SettingsSliderRow(
                 value = localValue,
                 onValueChange = {
                     localValue = it
-                    if (onValueChangeFinished == null) {
-                        onValueChange(it)
-                    }
+                    onValueChange(it)
                 },
                 onValueChangeFinished = {
                     onValueChangeFinished?.invoke(localValue)

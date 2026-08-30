@@ -9,6 +9,7 @@ import android.graphics.LinearGradient
 import android.graphics.Paint
 import android.graphics.Shader
 import android.util.AttributeSet
+import android.view.Choreographer
 import android.view.MotionEvent
 import android.view.View
 import android.view.HapticFeedbackConstants
@@ -23,7 +24,6 @@ import com.flue.launcher.applist.model.AppItemKey
 import kotlin.math.abs
 import kotlin.math.cos
 import kotlin.math.hypot
-import kotlin.math.min
 import kotlin.math.roundToInt
 
 private const val NATIVE_DRAG_SETTLE_DURATION_MS = 130L
@@ -106,16 +106,23 @@ class NativeAppListView @JvmOverloads constructor(
     private val childVisualScrollListener = object : OnScrollListener() {
         override fun onScrolled(recyclerView: RecyclerView, dx: Int, dy: Int) {
             applyAttachedChildVisuals()
-            // 指示器画在宿主自己的 display list 上，不属于任何子 View，所以子项被
-            // offsetChildrenVertical 挪走并不会让它重绘。滚动时必须显式失效一次，
-            // 否则滑块只在「顺手被别的原因重绘」的那几帧才跟上，看起来是一顿一顿的。
-            if (currentConfig.value.scrollIndicatorEnabled) invalidate()
+            // 滚动中让滑块跟上内容：只失效指示器那一条脏区（[invalidateScrollIndicatorStrip]）
+            // 就够 —— 滚动时列表本来每帧都在重绘，脏区搭车零成本；整屏 invalidate 会让每行
+            // 重走一遍鱼眼/模糊绘制，滚动期间每帧一次是纯浪费。
+            if (currentConfig.value.scrollIndicatorEnabled) invalidateScrollIndicatorStrip()
+            // 活动时间戳在这里也记一份：惯性帧由 ViewFlinger 驱动，与子类钩子
+            // onScrolled 是两条路，谁漏了另一份都兜得住「滑动中指示器常亮」。
+            if (dx != 0 || dy != 0) markScrollIndicatorActivity()
         }
 
         override fun onScrollStateChanged(recyclerView: RecyclerView, newState: Int) {
             removeCallbacks(restoreMotionBlur)
             if (newState != SCROLL_STATE_DRAGGING) clearGlidePressed()
             if (newState == SCROLL_STATE_IDLE) {
+                // 惯性收尾回 IDLE：把指示器的保持窗口重起算一枚钉子。快甩抬手后
+                // 的「保持 + 淡出」全靠最后一次活动时间 + 定时器，这里无论最后一条
+                // 滚动事件从哪条路来的，淡出都必然有调度。
+                markScrollIndicatorActivity()
                 // Avoid reattaching multiple RenderEffects on the exact frame
                 // a fling settles; let the final composite frame land first.
                 postDelayed(restoreMotionBlur, MOTION_BLUR_RESTORE_DELAY_MS)
@@ -212,6 +219,9 @@ class NativeAppListView @JvmOverloads constructor(
     private var dragPreviewAnimationGeneration = 0L
     private var dragPreviewOriginalOrder: List<AppItemKey> = emptyList()
     private var dragPreviewOrder: List<AppItemKey> = emptyList()
+    private var hasLastReorderProbe = false
+    private var lastReorderProbeX = 0f
+    private var lastReorderProbeY = 0f
     private val topFadePaint = Paint(Paint.ANTI_ALIAS_FLAG)
     private val bottomFadePaint = Paint(Paint.ANTI_ALIAS_FLAG)
     private var topFadeHeight = 0f
@@ -245,6 +255,24 @@ class NativeAppListView @JvmOverloads constructor(
     private var scrollIndicatorThumbBaseAlpha = 0
     private var scrollIndicatorActivityUptimeMs = 0L
     private var scrollIndicatorFrameUptimeMs = 0L
+    /** 淡入淡出帧循环是否已挂在 Choreographer 上（防止重复 post）。 */
+    private var scrollIndicatorLoopScheduled = false
+    private val scrollIndicatorHoldEnd = Runnable {
+        if (!released) {
+            // The hold period is not part of the fade-out duration. Reset the
+            // animation clock before waking the first post-hold frame, then
+            // the normal frame loop advances the alpha over 320ms.
+            scrollIndicatorFrameUptimeMs = AnimationUtils.currentAnimationTimeMillis()
+            startScrollIndicatorLoop()
+        }
+    }
+    /**
+     * 手指此刻是否按在列表上。
+     *
+     * 单独记一份而不是读 `scrollState`：那个状态在拖图标那条链路里会永久停在
+     * DRAGGING（UP 事件被自己吞掉，RecyclerView 从没收到），于是指示器再也不淡出。
+     */
+    private var scrollIndicatorPointerDown = false
     private var pullOffsetPx = 0f
     private val springEdgeEffects = FlueSpringEdgeEffectFactory(
         owner = this,
@@ -428,7 +456,7 @@ class NativeAppListView @JvmOverloads constructor(
             return
         }
         if (scrollIndicatorThumbPaint.strokeWidth <= 0f) return
-        val fade = advanceScrollIndicatorAlpha()
+        val fade = scrollIndicatorAlpha
         if (fade <= 0f) return
         scrollIndicatorTrackPaint.alpha = (scrollIndicatorTrackBaseAlpha * fade).roundToInt()
         scrollIndicatorThumbPaint.alpha = (scrollIndicatorThumbBaseAlpha * fade).roundToInt()
@@ -536,13 +564,18 @@ class NativeAppListView @JvmOverloads constructor(
         updateGesturePointer(event)
         prepareLegacyEdgePointer(event)
         when (event.actionMasked) {
-            MotionEvent.ACTION_DOWN ->
+            MotionEvent.ACTION_DOWN -> {
                 // The pointer window opens here — dispatchTouchEvent is the only
                 // funnel guaranteed to see every sample of every stream.
                 // onInterceptTouchEvent early-returns while inactive and
                 // onTouchEvent only runs for self-owned streams, so both used to
                 // drop terminal samples and leak the window forward.
                 springEdgeEffects.beginGesture()
+                // 指示器按下即淡入 —— 不再等「内容真的移动」。已经到顶/到底还在拖的
+                // 时候内容不动，原来那条 onScrolled 触发条件就一次都不成立。
+                scrollIndicatorPointerDown = true
+                markScrollIndicatorActivity()
+            }
             MotionEvent.ACTION_POINTER_DOWN ->
                 // A pointer-down can be delivered to the currently touched row
                 // without another parent interception pass. Cancel at the outer
@@ -563,6 +596,10 @@ class NativeAppListView @JvmOverloads constructor(
             if (springEdgeEffects.endGesture(terminalUp = canCommitFace)) {
                 onScrollToTop?.invoke()
             }
+            // 松手把指示器的保持窗口重新起算：延迟是「松手之后」的，不是「内容最后
+            // 一次移动之后」的。
+            scrollIndicatorPointerDown = false
+            markScrollIndicatorActivity()
             dragController.finishAdditionalPointer()
             resetLegacyEdgeGesture()
         }
@@ -598,6 +635,12 @@ class NativeAppListView @JvmOverloads constructor(
                 resetLegacyEdgeGesture()
                 clearGlidePressed()
                 clearGesturePointer()
+                // 手势被转场截断时 UP 走的是这里而不是上面 active 的分支 —— 不复位
+                // 的话 scrollIndicatorPointerDown 永远卡在 true，目标不透明度恒 1，
+                // 指示器再也淡不出去（老师报的「经常不自动隐藏、有时又正常」正是
+                // 取决于这次手势有没有被截断）。
+                scrollIndicatorPointerDown = false
+                markScrollIndicatorActivity()
             }
         }
         return false
@@ -614,6 +657,9 @@ class NativeAppListView @JvmOverloads constructor(
         springEdgeEffects.finish()
         finishOwnedTouch(scheduleMotionBlurRestore = false)
         removeCallbacks(restoreMotionBlur)
+        // 摘出窗口时事件流随之断掉，UP 不会再来了；不清标志的话重挂后指示器
+        // 会带着恒 1 的目标一直亮着。
+        resetScrollIndicatorState()
         cancelEntryAnimation(resetProgress = true)
         super.onDetachedFromWindow()
     }
@@ -837,6 +883,11 @@ class NativeAppListView @JvmOverloads constructor(
         withLegacyForwardedPointer(event) {
             super.onInterceptTouchEvent(event)
         }
+        // 这条链路里 RecyclerView 从没拿到过真正的 UP/CANCEL（拦截在上面就返回了），
+        // mScrollState 会一直停在 DRAGGING。强制回 IDLE，否则一切「按滚动状态判断」的
+        // 逻辑都会以为列表还在被拖着。此时不可能有惯性在跑 —— 拖拽被消费的那一帧
+        // 已经 stopScroll() 过了，所以这里不会掐掉正常的甩动。
+        stopScroll()
         recyclerGestureNeedsTerminal = false
     }
 
@@ -1108,6 +1159,9 @@ class NativeAppListView @JvmOverloads constructor(
             resetLegacyEdgeGesture()
             clearGlidePressed()
             cancelActiveDrag(externalChange = true)
+            // UP 完全没送达的兜底（有的转场会把整条事件流截走）：列表一旦转
+            // inactive，按压标志、延迟任务和 Choreographer 回调都必须一起作废。
+            resetScrollIndicatorState()
         }
         nativeAdapter.setConfig(next)
         if (activeChanged || shouldStartEntryAnimation) {
@@ -1126,7 +1180,10 @@ class NativeAppListView @JvmOverloads constructor(
             dragOverlayView?.applyConfig(next)
         }
         if (edgeFadeChanged) updateEdgeFadeShaders()
-        if (scrollIndicatorChanged) updateScrollIndicatorPaints()
+        if (scrollIndicatorChanged) {
+            if (!next.value.scrollIndicatorEnabled) resetScrollIndicatorState()
+            updateScrollIndicatorPaints()
+        }
         if (contentOverlayEffectChanged) applyContentOverlayBlur()
         if (geometryChanged) updateViewportPadding(height)
         (layoutManager as? NativeSpatialAppListLayoutManager)?.reapplyChildVisuals()
@@ -1151,6 +1208,7 @@ class NativeAppListView @JvmOverloads constructor(
         }
         cancelActiveDrag()
         stopScroll()
+        resetScrollIndicatorState()
         itemAnimator?.endAnimations()
         resetAttachedChildVisuals()
         val previousLayoutManager = layoutManager
@@ -1186,6 +1244,7 @@ class NativeAppListView @JvmOverloads constructor(
         dragPreviewAnimator?.cancel()
         dragPreviewAnimator = null
         released = true
+        resetScrollIndicatorState()
         removeCallbacks(restoreMotionBlur)
         stopScroll()
         removeOnScrollListener(childVisualScrollListener)
@@ -1288,11 +1347,27 @@ class NativeAppListView @JvmOverloads constructor(
         val next = offset.takeIf(Float::isFinite) ?: 0f
         if (pullOffsetPx == next) return
         pullOffsetPx = next
-        for (index in 0 until childCount) {
-            (getChildAt(index) as? NativeAppListRowView)
-                ?.setContentTranslationY(next)
+        if (usesHostChildVisualPass(activeLayoutStrategy)) {
+            // 单遍完成「写 contentTranslationY + 重算行视觉」：鱼眼/弦宽都是
+            // 行心 y（含 contentTranslationY）的函数，必须先写后算。原来是
+            // 三遍全 child 扫描（写位移、LM 重放、host 重放）+ 双份失效，
+            // 回弹动画期间每帧白跑两遍。
+            for (index in 0 until childCount) {
+                val child = getChildAt(index) ?: continue
+                (child as? NativeAppListRowView)?.setContentTranslationY(next)
+                applyChildVisual(child)
+            }
+            draggedSourceKey?.let { key ->
+                holderForKey(key)?.itemView?.alpha = 0f
+            }
+        } else {
+            // 空间布局的行视觉由 LayoutManager 重放；contentTranslationY 先行写入。
+            for (index in 0 until childCount) {
+                (getChildAt(index) as? NativeAppListRowView)
+                    ?.setContentTranslationY(next)
+            }
+            (layoutManager as? NativeSpatialAppListLayoutManager)?.reapplyChildVisuals()
         }
-        applyMoveFrameVisuals()
         invalidate()
     }
 
@@ -1402,24 +1477,45 @@ class NativeAppListView @JvmOverloads constructor(
         origin: NativeDragPreviewSlot,
         positionDelta: Int,
     ): NativeDragPreviewSlot {
-        val distance = when (currentConfig.value.presentation) {
-            NativeAppListPresentation.LINEAR -> currentConfig.value.rowHeightPx.toFloat()
+        val config = currentConfig.value
+        val distance = when (config.presentation) {
+            NativeAppListPresentation.LINEAR -> config.rowHeightPx.toFloat()
             NativeAppListPresentation.HONEYCOMB ->
-                currentConfig.value.honeycombCellSizePx.takeIf { it > 0f }
-                    ?: currentConfig.value.iconSizePx.toFloat()
+                config.honeycombCellSizePx.takeIf { it > 0f }
+                    ?: config.iconSizePx.toFloat()
             NativeAppListPresentation.FLOW ->
-                currentConfig.value.flowCellSizePx.takeIf { it > 0f }
-                    ?: currentConfig.value.iconSizePx.toFloat()
+                config.flowCellSizePx.takeIf { it > 0f }
+                    ?: config.iconSizePx.toFloat()
             NativeAppListPresentation.RING ->
-                currentConfig.value.ringCellSizePx.takeIf { it > 0f }
-                    ?: currentConfig.value.iconSizePx.toFloat()
+                config.ringCellSizePx.takeIf { it > 0f }
+                    ?: config.iconSizePx.toFloat()
             NativeAppListPresentation.DENSE_GRID ->
-                currentConfig.value.denseGridMinimumItemHeightPx
-                    .coerceAtLeast(currentConfig.value.iconSizePx.toFloat())
+                config.denseGridMinimumItemHeightPx
+                    .coerceAtLeast(config.iconSizePx.toFloat())
+        }
+        // 目标格没挂到窗口上（在屏幕外）时只能按索引差估算落点。网格布局的索引差
+        // 同时含行与列：以前一律折算成纯纵向位移，星环/网格上「往右挪一格」的目标
+        // 会被摆到正下方一格 —— 预览位移方向错了，观感就是图标乱跳、赖在原地。
+        // 按列数拆成 行差×列差，列差走横向；LINEAR 单列，行为与从前一致。
+        // （蜂窝的宽窄行不是严格网格，这里的拆法是近似，但恒优于只走纵向。）
+        val columns = when (config.presentation) {
+            NativeAppListPresentation.LINEAR -> 1
+            NativeAppListPresentation.HONEYCOMB ->
+                config.honeycombNarrowColumns.coerceAtLeast(1)
+            NativeAppListPresentation.FLOW -> config.flowColumns.coerceAtLeast(1)
+            NativeAppListPresentation.RING -> config.honeycombNarrowColumns.coerceAtLeast(1)
+            NativeAppListPresentation.DENSE_GRID -> config.denseGridColumns.coerceAtLeast(1)
+        }
+        val rowDelta = positionDelta.floorDiv(columns)
+        val columnDelta = positionDelta.mod(columns)
+        val horizontalDistance = when (config.presentation) {
+            NativeAppListPresentation.DENSE_GRID ->
+                config.denseGridItemSpacingPx + config.denseGridMinimumItemWidthPx
+            else -> distance
         }
         return NativeDragPreviewSlot(
-            centerX = origin.centerX,
-            centerY = origin.centerY + positionDelta * distance,
+            centerX = origin.centerX + columnDelta * horizontalDistance,
+            centerY = origin.centerY + rowDelta * distance,
         )
     }
 
@@ -1552,11 +1648,33 @@ class NativeAppListView @JvmOverloads constructor(
         override val viewportHeightPx: Float
             get() = height.toFloat()
 
+        override fun beginDrag(key: AppItemKey, pointerX: Float, pointerY: Float) {
+            beginDrag(
+                key = key,
+                pointerX = pointerX,
+                pointerY = pointerY,
+                downX = pointerX,
+                downY = pointerY,
+            )
+        }
+
         override fun keyAt(x: Float, y: Float): AppItemKey? {
             return keyAtPoint(x, y)
         }
 
         override fun reorderKeyAt(x: Float, y: Float): AppItemKey? {
+            // Reorder follows the current pointer sample against fixed layout
+            // slots. The overlay intentionally starts without a visual jump on
+            // the threshold-crossing MOVE, so using its center here would keep
+            // the hit probe in the source slot until a later MOVE and make
+            // adjacent icons stick together at the midpoint.
+            val probeX = x
+            val probeY = y
+            val directionX = if (hasLastReorderProbe) probeX - lastReorderProbeX else 0f
+            val directionY = if (hasLastReorderProbe) probeY - lastReorderProbeY else 0f
+            hasLastReorderProbe = true
+            lastReorderProbeX = probeX
+            lastReorderProbeY = probeY
             if (dragPreviewOrder.isNotEmpty()) {
                 // During a drag the hit test must run against the *fixed layout
                 // slots* (preview-exclusive coordinates), then map slot → the
@@ -1565,17 +1683,24 @@ class NativeAppListView @JvmOverloads constructor(
                 // coordinates, so a reorder's own preview displacement became
                 // the next hit test's input — a frame-rate feedback loop that
                 // read as the whole list convulsing while dragging.
-                return dragPreviewOrder.getOrNull(slotIndexAtPoint(x, y))
+                return dragPreviewOrder.getOrNull(
+                    slotIndexAtPoint(
+                        x = probeX,
+                        y = probeY,
+                        directionX = directionX,
+                        directionY = directionY,
+                    ),
+                )
             }
-            keyAtPoint(x, y)?.let { return it }
+            keyAtPoint(probeX, probeY)?.let { return it }
             val manager = layoutManager as? NativeSpatialAppListLayoutManager ?: return null
             val excludedPosition = draggedSourceKey
                 ?.let(::holderForKey)
                 ?.bindingAdapterPosition
                 ?: -1
             val position = manager.findNearestVisiblePosition(
-                x = x,
-                y = y,
+                x = probeX,
+                y = probeY,
                 maximumDistancePx = nativeSpatialReorderRadiusPx(currentConfig.value),
                 excludedPosition = excludedPosition,
             )
@@ -1587,23 +1712,100 @@ class NativeAppListView @JvmOverloads constructor(
          * ignoring preview/flow translations so the answer is stable while the
          * preview animates. Returns -1 when no adapter child is attached.
          */
-        private fun slotIndexAtPoint(x: Float, y: Float): Int {
+        private fun slotIndexAtPoint(
+            x: Float,
+            y: Float,
+            directionX: Float,
+            directionY: Float,
+        ): Int {
             var bestPosition = -1
             var bestDistance = Float.MAX_VALUE
+            var bestCenterX = 0f
+            var bestCenterY = 0f
+            var sourcePosition = -1
+            var sourceDistance = Float.MAX_VALUE
+            var sourceCenterX = 0f
+            var sourceCenterY = 0f
+
+            fun isPreferredCandidate(
+                candidateDistance: Float,
+                currentDistance: Float,
+                candidateCenterX: Float,
+                candidateCenterY: Float,
+                currentCenterX: Float,
+                currentCenterY: Float,
+            ): Boolean = candidateDistance < currentDistance ||
+                nativeReorderTiePrefersForwardCandidate(
+                    candidateDistance = candidateDistance,
+                    bestDistance = currentDistance,
+                    candidateCenterX = candidateCenterX,
+                    candidateCenterY = candidateCenterY,
+                    bestCenterX = currentCenterX,
+                    bestCenterY = currentCenterY,
+                    directionX = directionX,
+                    directionY = directionY,
+                )
+
             for (index in 0 until childCount) {
                 val row = getChildAt(index) as? NativeAppListRowView ?: continue
                 val holder = getChildViewHolder(row) as?
                     NativeAppListAdapter.AppItemViewHolder ?: continue
                 val position = holder.bindingAdapterPosition
                 if (position == RecyclerView.NO_POSITION) continue
+                val centerX = row.iconCenterXInParentForHitTest()
+                val centerY = row.iconCenterYInParentForHitTest()
                 val distance = hypot(
-                    x - row.iconCenterXInParentForHitTest(),
-                    y - row.iconCenterYInParentForHitTest(),
+                    x - centerX,
+                    y - centerY,
                 )
-                if (distance < bestDistance) {
+                val isSourceSlot = dragPreviewOrder.getOrNull(position) == draggedSourceKey
+                if (isSourceSlot) {
+                    if (isPreferredCandidate(
+                            candidateDistance = distance,
+                            currentDistance = sourceDistance,
+                            candidateCenterX = centerX,
+                            candidateCenterY = centerY,
+                            currentCenterX = sourceCenterX,
+                            currentCenterY = sourceCenterY,
+                        )
+                    ) {
+                        sourceDistance = distance
+                        sourcePosition = position
+                        sourceCenterX = centerX
+                        sourceCenterY = centerY
+                    }
+                } else if (isPreferredCandidate(
+                        candidateDistance = distance,
+                        currentDistance = bestDistance,
+                        candidateCenterX = centerX,
+                        candidateCenterY = centerY,
+                        currentCenterX = bestCenterX,
+                        currentCenterY = bestCenterY,
+                    )
+                ) {
                     bestDistance = distance
                     bestPosition = position
+                    bestCenterX = centerX
+                    bestCenterY = centerY
                 }
+            }
+
+            if (
+                sourcePosition >= 0 &&
+                bestPosition >= 0 &&
+                sourceDistance <= bestDistance + 0.5f
+            ) {
+                val towardNeighbour =
+                    directionX * (bestCenterX - sourceCenterX) +
+                        directionY * (bestCenterY - sourceCenterY)
+                // Once the source occupies a virtual slot, keep it there while
+                // the pointer is stationary or moving deeper into that slot.
+                // As soon as the pointer starts back toward the nearest real
+                // neighbour, select that neighbour before the pointer crosses
+                // the whole gap. This removes the sticky two-icon boundary
+                // without making a stationary sample flip the preview back.
+                if (towardNeighbour > 0.0001f) return bestPosition
+                return sourcePosition
             }
             return bestPosition
         }
@@ -1612,24 +1814,30 @@ class NativeAppListView @JvmOverloads constructor(
             // 探针取拖拽浮层图标中心而不是裸手指坐标：LINEAR 下浮层 X 被钉在
             // 图标列，手指若按着行文字拖动，指针整程不与任何图标重叠，dwell
             // 永远武装不了。浮层中心才是用户眼里"正在拖的图标"所在。
+            // reorderKeyAt 用的是同一个探针，两条互斥判定必须看同一个点。
             val overlay = dragOverlayView
             val probeX = overlay?.iconCenterXInParentWithoutFlow() ?: x
             val probeY = overlay?.iconCenterYInParentWithoutFlow() ?: y
 
-            var bestRow: NativeAppListRowView? = null
             var bestKey: AppItemKey? = null
             var bestDistance = Float.MAX_VALUE
             for (index in childCount - 1 downTo 0) {
                 val child = getChildAt(index) as? NativeAppListRowView ?: continue
                 val holder = getChildViewHolder(child) as?
                     NativeAppListAdapter.AppItemViewHolder ?: continue
-                // 候选按 preview 前的固定槽位判定并反查原占位键：重排 preview
-                // 是零延迟抢槽的，悬停目标下一帧就被挪走；若按位移后坐标命中
-                // 当前显示键，候选键会被立即拔掉、dwell 计时永远走不完。
+                // 先找**最近的布局槽位**（iconCenter…ForHitTest 不含预览位移，所以在
+                // 预览动画期间是稳定的），再把槽位映射成**此刻显示在那里**的键。
+                //
+                // 映射源必须是 dragPreviewOrder，与 reorderKeyAt 同源。用
+                // dragPreviewOriginalOrder（= 适配器仍然绑着的键）会拿到一个已经挪走
+                // 的键：原始 [A,B,C,D] 拖 A 到位置 2 → 显示 [B,C,A,D]，槽位 1 眼看着
+                // 是 C，旧写法却返回 B —— 用户以为在跟 C 合并，实际跟 B 合并，而 A 腾出
+                // 的槽位 0 返回 source 被跳过，那块区域既不合并也不避让。这就是老师报的
+                // 「拖到别的图标以前的空位置也能组成文件夹」。
                 val position = holder.bindingAdapterPosition
                 val key = (
                     if (position != RecyclerView.NO_POSITION) {
-                        dragPreviewOriginalOrder.getOrNull(position)
+                        dragPreviewOrder.getOrNull(position)
                     } else {
                         null
                     }
@@ -1641,18 +1849,24 @@ class NativeAppListView @JvmOverloads constructor(
                 )
                 if (distance < bestDistance) {
                     bestDistance = distance
-                    bestRow = child
                     bestKey = key
                 }
             }
-            val row = bestRow ?: return null
             val key = bestKey ?: return null
-            // 核心半径门槛：扫过即武装会让路过的每个图标都闪一次 hover。
-            val coreRadius = min(
-                row.iconWidthForSafeGeometry(),
-                row.iconHeightForSafeGeometry(),
-            ) * 0.42f
-            if (bestDistance > coreRadius) return null
+            // 核心区门槛：扫过即武装会让路过的每个图标都闪一次 hover。
+            //
+            // 判定落在**显示该键的那一行**上，而不是占着那个布局槽位的那一行 ——
+            // 预览期间两者是不同的 View（槽位 1 的 holder 绑着 B，但显示在槽位 1 的是 C）。
+            // containsTransformedIconPoint 读的是 translation + scale 之后的真实图标框，
+            // 所以对「显示者」问才有意义。
+            //
+            // 同时它是 **scale-aware** 的，这是旧写法的第二个 bug：以前用
+            // iconWidthForSafeGeometry() * 0.42f 当半径，而那个 getter 返回布局值、
+            // 不含 visualScale，边缘行鱼眼缩到 0.58 时判定圈比看到的图标大约 1.7 倍，
+            // 擦边也会高亮。0.84 = 0.42 * 2，与旧的半径门槛在缩放 1.0 时完全等价。
+            val displayedRow = holderForKey(key)?.itemView as? NativeAppListRowView
+                ?: return null
+            if (!displayedRow.containsTransformedIconPoint(probeX, probeY, 0.84f)) return null
             val targetRow = nativeAdapter.rowForKey(key) ?: return null
             val sourceRow = draggedSourceKey
                 ?.let(nativeAdapter::rowForKey)
@@ -1772,7 +1986,13 @@ class NativeAppListView @JvmOverloads constructor(
             holderForKey(key)?.itemView?.isLongClickable = !suppress
         }
 
-        override fun beginDrag(key: AppItemKey, pointerX: Float, pointerY: Float) {
+        override fun beginDrag(
+            key: AppItemKey,
+            pointerX: Float,
+            pointerY: Float,
+            downX: Float,
+            downY: Float,
+        ) {
             cancelDragSettle(removeOverlay = true)
             clearGlidePressed()
             val holder = holderForKey(key) ?: return
@@ -1784,6 +2004,11 @@ class NativeAppListView @JvmOverloads constructor(
             val source = holder.itemView as? NativeAppListRowView ?: return
             val row = holder.boundRowOrNull() ?: return
             draggedSourceKey = key
+            hasLastReorderProbe = false
+            // The overlay is created on the first threshold-crossing MOVE.
+            // Seed the grab offset from that actual pointer sample; using the
+            // original DOWN position would apply the threshold delta twice and
+            // make the overlay jump before reorder hit testing starts.
             draggedViewTouchOffsetX = pointerX - (source.left + source.translationX)
             draggedViewTouchOffsetY = pointerY - (source.top + source.translationY)
             draggedPointerX = pointerX
@@ -2050,6 +2275,9 @@ class NativeAppListView @JvmOverloads constructor(
 
     private fun finishDragVisualState(sourceKey: AppItemKey?) {
         draggedSourceKey = null
+        hasLastReorderProbe = false
+        lastReorderProbeX = 0f
+        lastReorderProbeY = 0f
         folderSettleCenterX = Float.NaN
         folderSettleCenterY = Float.NaN
         folderSettleTargetKey = null
@@ -2112,8 +2340,11 @@ class NativeAppListView @JvmOverloads constructor(
     private fun applyChildVisual(child: View) {
         if (!usesHostChildVisualPass(activeLayoutStrategy)) return
         val rowView = child as? NativeAppListRowView
+        // 不含重排预览：圆屏列表的弦宽缩放与安全轮廓收边都是行心 y 的函数，读了预览
+        // 位移就成了「预览 → 收边/缩放 → 命中坐标 → 新预览」的帧率级自反馈环，与心流
+        // 那条同源（见 NativeAppListRowView.positionTranslationYWithoutPreviewOrFlow）。
         val positionTranslationY =
-            rowView?.positionTranslationYWithoutFlow() ?: child.translationY
+            rowView?.positionTranslationYWithoutPreviewOrFlow() ?: child.translationY
         val baseCenterY = child.top + child.height / 2f + positionTranslationY
         val visual = nativeLinearChildVisual(
             childCenterY = baseCenterY,
@@ -2122,38 +2353,58 @@ class NativeAppListView @JvmOverloads constructor(
             output = childVisualScratch,
             edgeCenterY = baseCenterY,
         )
-        if (rowView != null && currentConfig.value.deviceShape == NativeDeviceShape.ROUND) {
+        // 圆屏列表的「曲线」：整行再乘一次弦宽缩放，行两端于是沿内切圆收进去。
+        // 乘而不是取代鱼眼缩放 —— 两者管的是不同的事（鱼眼是焦点强调，弦宽是圆屏裁切），
+        // 谁替换谁都会让另一项在圆屏上凭空失效。方屏时 nativeRoundChordScale 恒返回 1f。
+        //
+        val roundLinearList = currentConfig.value.deviceShape == NativeDeviceShape.ROUND &&
+            currentConfig.value.presentation == NativeAppListPresentation.LINEAR
+        // A LINEAR round-screen row keeps its layout slot; only the rendered
+        // content is scaled to the inscribed chord at that row's centre.
+        val chordScale = if (roundLinearList) {
+            nativeRoundChordScale(
+                childCenterY = baseCenterY,
+                viewportWidthPx = width.toFloat(),
+                viewportHeightPx = height.toFloat(),
+                deviceShape = currentConfig.value.deviceShape,
+            )
+        } else {
+            1f
+        }
+        val childScale = visual.scale * chordScale
+        if (
+            rowView != null &&
+            currentConfig.value.deviceShape == NativeDeviceShape.ROUND &&
+            !roundLinearList
+        ) {
             val safe = roundGeometryAdapter.resolve(
-                centerX = rowView.iconCenterXInParentWithoutFlow(),
-                centerY = rowView.iconCenterYInParentWithoutFlow(),
+                centerX = rowView.iconCenterXInParentWithoutPreviewOrFlow(),
+                centerY = rowView.iconCenterYInParentWithoutPreviewOrFlow(),
                 viewportWidth = width.toFloat(),
                 viewportHeight = height.toFloat(),
                 itemWidth = rowView.iconWidthForSafeGeometry(),
                 itemHeight = rowView.iconHeightForSafeGeometry(),
                 config = currentConfig.value,
                 output = roundGeometryScratch,
+                // 图标尺寸的两个 getter 只给布局值；鱼眼 / 弦宽把边缘行画小之后，
+                // 轮廓仍按 1.0 倍留位会把边缘行多推进来，正是圆屏顶/底重叠的成因之一。
+                visualScale = childScale,
             )
             rowView.setFlowTranslation(
                 x = safe.translationX,
                 y = safe.translationY + visual.translationY,
             )
         } else {
+            // LINEAR round-screen rows are already constrained horizontally by
+            // the chord scale. Feeding their vertical slot through the spatial
+            // safe-outline solver would pull edge rows toward the circle's
+            // centre and collapse adjacent list slots during a drag.
             rowView?.setFlowTranslationY(visual.translationY)
         }
         val centerPivotX = child.width / 2f
         val centerPivotY = child.height / 2f
         if (child.pivotX != centerPivotX) child.pivotX = centerPivotX
         if (child.pivotY != centerPivotY) child.pivotY = centerPivotY
-        // 圆屏列表的「曲线」：整行再乘一次弦宽缩放，行两端于是沿内切圆收进去。
-        // 乘而不是取代鱼眼缩放 —— 两者管的是不同的事（鱼眼是焦点强调，弦宽是圆屏裁切），
-        // 谁替换谁都会让另一项在圆屏上凭空失效。方屏时 nativeRoundChordScale 恒返回 1f。
-        val chordScale = nativeRoundChordScale(
-            childCenterY = baseCenterY,
-            viewportWidthPx = width.toFloat(),
-            viewportHeightPx = height.toFloat(),
-            deviceShape = currentConfig.value.deviceShape,
-        )
-        val childScale = visual.scale * chordScale
         if (rowView != null) {
             rowView.setVisualScale(childScale)
         } else {
@@ -2338,17 +2589,33 @@ class NativeAppListView @JvmOverloads constructor(
     }
 
     private fun markScrollIndicatorActivity() {
+        if (released || !currentConfig.value.scrollIndicatorEnabled) return
         scrollIndicatorActivityUptimeMs = AnimationUtils.currentAnimationTimeMillis()
-        scheduleScrollIndicatorFrame()
+        removeCallbacks(scrollIndicatorHoldEnd)
+        // While the hold window is active, alpha already equals its target and
+        // the frame loop intentionally stops. Wake it after the hold expires
+        // so fade-out can begin even when no more scroll events arrive.
+        postDelayed(scrollIndicatorHoldEnd, NATIVE_SCROLL_INDICATOR_HOLD_MS + 1L)
+        startScrollIndicatorLoop()
+    }
+
+    /** Clears every callback and timestamp owned by the indicator lifecycle. */
+    private fun resetScrollIndicatorState() {
+        scrollIndicatorPointerDown = false
+        removeCallbacks(scrollIndicatorHoldEnd)
+        cancelScrollIndicatorLoop()
+        scrollIndicatorAlpha = 0f
+        scrollIndicatorActivityUptimeMs = 0L
+        scrollIndicatorFrameUptimeMs = 0L
     }
 
     /**
-     * 只失效指示器那一条，不是整个列表。
+     * 滚动中让滑块跟上内容：只失效指示器那一条脏区。
      *
-     * 整屏 invalidate 会让每一行都重走一遍鱼眼/模糊的绘制，而淡出期间内容根本没变 ——
-     * 那是一次纯浪费的全列表重绘，手表上看得出来。
+     * 这条路径只配滚动中使用 —— 滚动时列表本来每帧都在重绘，脏区搭车零成本；
+     * 静止列表上不要指望它（见 [scrollIndicatorFrameLoop] 的注释）。
      */
-    private fun scheduleScrollIndicatorFrame() {
+    private fun invalidateScrollIndicatorStrip() {
         if (!isAttachedToWindow || width <= 0 || height <= 0) return
         val density = resources.displayMetrics.density
         // 右侧那条的横向占用：边距 + 线宽，再宽松留一个线宽给圆头和抗锯齿。
@@ -2372,12 +2639,59 @@ class NativeAppListView @JvmOverloads constructor(
     }
 
     /**
-     * 推进一帧淡入淡出，返回这一帧该用的不透明度。
+     * 淡入淡出的驱动：Choreographer 帧循环 + **全量** invalidate。
      *
-     * 时间用 [AnimationUtils.currentAnimationTimeMillis]：它在同一帧内是同一个值，
-     * 拿 `SystemClock` 会让同一帧里的多次读数产生微小差异。
+     * ## 为什么不能只靠脏区失效自己续帧
+     *
+     * 淡出发生在「列表已经停稳」的静止窗口里，没有任何别的绘制活动。以前用
+     * `postInvalidateOnAnimation(脏区)` 自己约下一帧续链，实测这条链在静止列表上
+     * 会丢帧断链 —— 表现为惯性自然停稳后指示器冻结在最后一帧的全亮上，而手指
+     * 拦停的那次（弹簧回弹、按压清除、motion blur 恢复带来源源不断的重绘）反而
+     * 一切正常。 Choreographer 的帧回调由系统动画时钟保证触发，不依赖视图恰好
+     * 有别的绘制；每帧再配一次全量 invalidate（强保证：一定调度一次完整绘制），
+     * `advanceScrollIndicatorAlpha` 在绘制里推进 alpha，到位即停，不留常驻回调。
      */
-    private fun advanceScrollIndicatorAlpha(): Float {
+    private fun startScrollIndicatorLoop() {
+        if (scrollIndicatorLoopScheduled || !isAttachedToWindow) return
+        scrollIndicatorLoopScheduled = true
+        Choreographer.getInstance().postFrameCallback(scrollIndicatorFrameLoop)
+    }
+
+    private fun cancelScrollIndicatorLoop() {
+        Choreographer.getInstance().removeFrameCallback(scrollIndicatorFrameLoop)
+        scrollIndicatorLoopScheduled = false
+    }
+
+    private val scrollIndicatorFrameLoop = object : Choreographer.FrameCallback {
+        override fun doFrame(frameTimeNanos: Long) {
+            scrollIndicatorLoopScheduled = false
+            if (released || !isAttachedToWindow) return
+            val needsNextFrame = advanceScrollIndicatorAlpha()
+            // Advance the animation before invalidating. The frame driver must
+            // converge even when a test or a detached transition does not
+            // deliver a RecyclerView draw callback for every Choreographer
+            // frame.
+            invalidateScrollIndicatorStrip()
+            if (needsNextFrame) startScrollIndicatorLoop()
+        }
+    }
+
+    /** 此刻推进一帧，并返回是否还需要继续排帧。 */
+    private fun advanceScrollIndicatorAlpha(): Boolean {
+        if (!currentConfig.value.scrollIndicatorEnabled) {
+            scrollIndicatorAlpha = 0f
+            return false
+        }
+        if (scrollIndicatorThumbPaint.strokeWidth <= 0f) return false
+        val state = nativeScrollIndicatorState(
+            scrollOffsetPx = computeVerticalScrollOffset(),
+            scrollRangePx = computeVerticalScrollRange(),
+            viewportHeightPx = computeVerticalScrollExtent(),
+        )
+        if (!state.visible) {
+            scrollIndicatorAlpha = 0f
+            return false
+        }
         val now = AnimationUtils.currentAnimationTimeMillis()
         // 首帧没有上一帧可比，按 0 推进（只取目标方向，不跳变）。
         val elapsedMs = if (scrollIndicatorFrameUptimeMs == 0L) {
@@ -2387,17 +2701,26 @@ class NativeAppListView @JvmOverloads constructor(
         }
         scrollIndicatorFrameUptimeMs = now
         val target = nativeScrollIndicatorTargetAlpha(
-            scrolling = scrollState != SCROLL_STATE_IDLE,
+            // DRAGGING 只在手指确实还按着时才算「在动」：那个状态会被拖图标的链路
+            // 留成脏值。SETTLING（惯性）同病同治 —— 只在活动时间戳还新鲜（真的还有
+            // 滚动事件进来）时才算在动；快速甩动抬手后某条路径把状态留在 SETTLING
+            // 不回 IDLE 的话，没有这道窗口指示器就永远全亮不淡出。
+            scrolling = when (scrollState) {
+                SCROLL_STATE_DRAGGING -> scrollIndicatorPointerDown
+                SCROLL_STATE_IDLE -> false
+                else ->
+                    now - scrollIndicatorActivityUptimeMs <=
+                        NATIVE_SCROLL_INDICATOR_SETTLING_FRESH_MS
+            },
             millisSinceScrollActivity = now - scrollIndicatorActivityUptimeMs,
+            pointerDown = scrollIndicatorPointerDown,
         )
         scrollIndicatorAlpha = nativeScrollIndicatorAdvanceAlpha(
             currentAlpha = scrollIndicatorAlpha,
             targetAlpha = target,
             elapsedMillis = elapsedMs,
         )
-        // 还没到位就自己约下一帧。到位即停，不留一条永远在重绘的零透明杠。
-        if (scrollIndicatorAlpha != target) scheduleScrollIndicatorFrame()
-        return scrollIndicatorAlpha
+        return scrollIndicatorAlpha != target
     }
 }
 

@@ -3,6 +3,7 @@ package com.flue.launcher.applist.nativeview
 import com.flue.launcher.motion.FlueMotionProfile
 import com.flue.launcher.motion.FlueMotionProfiles
 import com.flue.launcher.util.FlowCrescentDirection
+import com.flue.launcher.util.FlowShapeCurve
 import com.flue.launcher.util.flowCrescentOffsetPx
 import kotlin.math.abs
 import kotlin.math.hypot
@@ -31,17 +32,15 @@ enum class NativeAppListPresentation {
     FLOW,
 
     /**
-     * 星环：铺满屏幕的正交方格 + 圆屏上四边一起往屏心收拢。
+     * 星环：铺满屏幕的正交方格，两种屏形**同一套**平铺渲染。
      *
-     * 与 [DENSE_GRID] 同为规则网格，两处差别：
+     * 与 [DENSE_GRID] 同为规则网格，格子是**正方形且吃满可用宽度**
+     * （`availableWidth / columns`，见 [nativeRingCellSizePx]），横纵都不留内边距 ——
+     * 参考图里图标是铺满整屏的。
      *
-     * 1. 格子是**正方形且吃满可用宽度**（`availableWidth / columns`，见
-     *    [nativeRingCellSizePx]），横纵都不留内边距 —— 参考图里图标是铺满整屏的；
-     * 2. 圆屏上再叠一道**径向收拢**（[nativeRingConvergenceOffset]）：每个格子按
-     *    自己离屏心的距离往屏心压。压的是径向量，所以一整行的外侧列被压得比内侧
-     *    多，直排自然弯成弧 —— 上下左右四条边同时有弧度，这就是「星环」。
-     *
-     * 方屏不加那道位移，退化成规规矩矩的平铺网格（老师指定）。鱼眼缩放两种屏都吃。
+     * 鱼眼只在上下边缘的触发带内缩小图标，带宽由「生效行数」控制；触发带之外
+     * 就是规规矩矩的平铺网格。（2026-08 删掉了圆屏专属的径向收拢与安全轮廓，
+     * 星环不再按屏形分叉；列表模式 LINEAR 的圆屏适配走另一条路，不受影响。）
      */
     RING,
 }
@@ -111,6 +110,7 @@ data class NativeAppListConfig(
     val flowCrescentBulgeFraction: Float = 0f,
     /** 月牙朝哪一侧鼓出。 */
     val flowCrescentDirection: FlowCrescentDirection = FlowCrescentDirection.Right,
+    val flowShapeCurve: FlowShapeCurve = FlowShapeCurve.Crescent,
     /**
      * 星环格心间距（= 正方格边长）。0 时按 [nativeRingCellSizePx] 现算。
      *
@@ -640,6 +640,51 @@ internal class NativeSpatialChildVisual(
     }
 }
 
+/**
+ * 左侧安全内缩，夹到视口内。
+ *
+ * 抽出来是为了让左右两侧只有一处夹取实现 —— 原先五个几何各写一遍
+ * `leftSafeInsetPx.coerceIn(0, viewportWidthPx - 1)`，右侧那份则压根不存在。
+ */
+internal fun nativeSafeLeftPx(leftSafeInsetPx: Int, viewportWidthPx: Float): Float {
+    if (!viewportWidthPx.isFinite() || viewportWidthPx <= 0f) return 0f
+    return leftSafeInsetPx.coerceAtLeast(0).toFloat()
+        .coerceAtMost((viewportWidthPx - 1f).coerceAtLeast(0f))
+}
+
+/**
+ * 内容真正能用的横向宽度 = 视口宽 − 左安全内缩 − 右安全内缩。
+ *
+ * 右侧那一份以前全体系恒为 0（`NativeAppListConfig.rightSafeInsetPx` 从来没被赋过非零值），
+ * 于是滚动指示器画在哪里、图标就压在哪里。心流最明显：它的基准 X 被刻意定成
+ * 「月牙峰值贴住可用区右边界」，可用区不减掉指示器就永远贴着最右。
+ *
+ * 所有布局都必须走这一个函数，不要各自再减一遍 —— 两处夹取不一致会给
+ * `SafeOutline.create` 送进互相冲突的 safeBounds，圆屏布局期直接 require 失败。
+ */
+internal fun nativeSafeContentWidthPx(
+    leftSafeInsetPx: Int,
+    rightSafeInsetPx: Int,
+    viewportWidthPx: Float,
+): Float {
+    if (!viewportWidthPx.isFinite() || viewportWidthPx <= 0f) return 1f
+    val left = nativeSafeLeftPx(leftSafeInsetPx, viewportWidthPx)
+    val right = rightSafeInsetPx.coerceAtLeast(0).toFloat()
+        .coerceAtMost((viewportWidthPx - left - 1f).coerceAtLeast(0f))
+    return (viewportWidthPx - left - right).coerceAtLeast(1f)
+}
+
+/** [nativeSafeContentWidthPx] 的整数视口重载，给几何层用。 */
+internal fun nativeSafeContentWidthPx(
+    leftSafeInsetPx: Int,
+    rightSafeInsetPx: Int,
+    viewportWidthPx: Int,
+): Float = nativeSafeContentWidthPx(
+    leftSafeInsetPx = leftSafeInsetPx,
+    rightSafeInsetPx = rightSafeInsetPx,
+    viewportWidthPx = viewportWidthPx.toFloat(),
+)
+
 internal fun nativeHoneycombChildVisual(
     centerX: Float,
     centerY: Float,
@@ -669,15 +714,17 @@ internal fun nativeHoneycombChildVisual(
     ) {
         return output.set(1f, 1f, 0f, 0f, 0f, 1f)
     }
-    val screenCenterX = config.leftSafeInsetPx +
-        (viewportWidth - config.leftSafeInsetPx) / 2f
+    val contentWidth = nativeSafeContentWidthPx(
+        leftSafeInsetPx = config.leftSafeInsetPx,
+        rightSafeInsetPx = config.rightSafeInsetPx,
+        viewportWidthPx = viewportWidth,
+    )
+    val screenCenterX = nativeSafeLeftPx(config.leftSafeInsetPx, viewportWidth) +
+        contentWidth / 2f
     val screenCenterY = viewportHeight / 2f
     val strength = config.fisheyeStrength.coerceIn(0f, 2f)
     val minimumScale = (1f - 0.42f * strength).coerceIn(0.16f, 1f)
-    val screenRadius = minOf(
-        viewportWidth - config.leftSafeInsetPx,
-        viewportHeight,
-    ) / 2f
+    val screenRadius = minOf(contentWidth, viewportHeight) / 2f
     val maximumDistance = screenRadius *
         (config.honeycombFisheyeRangeRows.coerceIn(1, 8) * 0.42f).coerceAtLeast(0.42f)
     val distance = if (verticalOnlyFisheye) {
@@ -762,12 +809,14 @@ internal fun nativeFlowCrescentTranslationX(
     toRight: Boolean,
     childCenterY: Float,
     viewportHeight: Float,
+    curve: FlowShapeCurve = FlowShapeCurve.Crescent,
 ): Float = flowCrescentOffsetPx(
     rowCenterY = childCenterY,
     viewportCenterY = viewportHeight / 2f,
     viewportHeight = viewportHeight,
     bulgePx = bulgePx,
     direction = if (toRight) FlowCrescentDirection.Right else FlowCrescentDirection.Left,
+    curve = curve,
 )
 
 internal fun nativeDenseGridChildVisual(
@@ -785,9 +834,12 @@ internal fun nativeDenseGridChildVisual(
         return output.set(1f, 1f, 0f, 0f, 0f, 1f)
     }
 
-    val safeLeft = config.leftSafeInsetPx.coerceAtLeast(0).toFloat()
-        .coerceAtMost(viewportWidth)
-    val screenCenterX = safeLeft + (viewportWidth - safeLeft) / 2f
+    val safeLeft = nativeSafeLeftPx(config.leftSafeInsetPx, viewportWidth)
+    val screenCenterX = safeLeft + nativeSafeContentWidthPx(
+        leftSafeInsetPx = config.leftSafeInsetPx,
+        rightSafeInsetPx = config.rightSafeInsetPx,
+        viewportWidthPx = viewportWidth,
+    ) / 2f
     val screenCenterY = viewportHeight / 2f
     val bottomFisheyeStartY = viewportHeight * 0.52f
     val topFisheyeStartY = viewportHeight * 0.48f
@@ -868,159 +920,49 @@ internal fun nativeDenseGridChildVisual(
 }
 
 /**
- * 星环的径向进度：格心离屏心多远，按内切圆半径归一化。
+ * 星环的鱼眼进度：按行心到上下边缘的距离计算。
  *
- * ## 为什么按内切圆而不是「几行」
- *
- * 鱼眼那条「生效行数」在线性 / 蜂窝里是纵向行数，星环是二维的，硬换算成半径会让
- * 同一个数字在不同列数下含义完全不同（列数一多格子就小，四行的半径连屏心那块都盖不住，
- * 弧直接消失）。所以半径固定取屏幕内切圆 —— 屏幕形状是这套布局唯一的几何基准 ——
- * 而「生效行数」改去控制**中心那块不收拢的稳定核**有多大（见 [nativeRingStableCoreFraction]）。
- * 行数越多 = 参与的圈越多 = 稳定核越小 = 弧越深，与滑杆方向一致。
- *
- * 返回值**可以大于 1**：圆屏四个角上的格子本来就在内切圆之外，那一段正是要被收得最狠的。
- * 缩放侧自己夹到 1（否则角上图标会缩到看不见），位移侧刻意不夹（见
- * [nativeRingConvergenceFraction]）。
+ * 星环**不分屏形**（2026-08 老师要求删掉圆屏专属的径向收拢/安全轮廓，两种屏一律
+ * 按方屏平铺渲染；列表模式 LINEAR 的圆屏适配不在此列，走的是另一条路）。缩放带
+ * 宽度取「生效行数」行真实格边长，因此格心在带外时严格返回 0，屏心行不会被
+ * 横向位置误判成鱼眼。
  */
-internal fun nativeRingRadialProgress(
-    centerX: Float,
+internal fun nativeRingFisheyeProgress(
     centerY: Float,
-    viewportWidth: Float,
     viewportHeight: Float,
     config: NativeAppListConfig,
+    viewportWidth: Float = viewportHeight,
 ): Float {
     if (
-        viewportWidth <= 0f || viewportHeight <= 0f ||
-        !centerX.isFinite() || !centerY.isFinite()
+        !config.fisheyeEnabled ||
+        !centerY.isFinite() ||
+        !viewportHeight.isFinite() ||
+        viewportHeight <= 0f
     ) {
         return 0f
     }
-    val safeLeft = config.leftSafeInsetPx.coerceAtLeast(0).toFloat().coerceAtMost(viewportWidth)
-    val screenCenterX = safeLeft + (viewportWidth - safeLeft) / 2f
-    val screenCenterY = viewportHeight / 2f
-    val screenRadius = minOf(viewportWidth - safeLeft, viewportHeight) / 2f
-    if (screenRadius <= 0f) return 0f
-    val normalized = hypot(centerX - screenCenterX, centerY - screenCenterY) / screenRadius
-    val core = nativeRingStableCoreFraction(config)
-    return ((normalized - core) / (1f - core)).coerceAtLeast(0f)
-}
-
-/**
- * 中心那块「完全不收拢」的稳定核，占内切圆半径的比例。
- *
- * 由鱼眼的「生效行数」换算：8 行 = 整屏都参与（核为 0），1 行 = 只有最外一圈卷边（核 0.75）。
- * 上限刻意留在 0.75 而不是更高 —— 再大就只剩贴边那一圈动，看起来是「图标被边缘吸住」
- * 而不是一张收拢的网。
- */
-private fun nativeRingStableCoreFraction(config: NativeAppListConfig): Float =
-    (1f - config.honeycombFisheyeRangeRows.coerceIn(1, 8) / 8f).coerceIn(0f, 0.75f)
-
-/**
- * 星环的收拢比例：格子往屏心方向移动自身径向距离的百分之几。
- *
- * 形状是 `k·t² / (1 + k·t²)`（桶形畸变那一族），选它有三个原因：
- *
- * 1. **恒小于 1**，所以任何设置下格子都只会靠近屏心，绝不会穿过屏心翻到对面 ——
- *    线性的 `k·t²` 一旦 k 调大就会翻面，那是纯粹的乱码画面；
- * 2. **t 不必夹**：角上的格子（t > 1）继续被收得更狠，正好把圆外那圈拉回可视区。
- *    夹到 1 的话角上格子会永远停在圆外，圆屏那条安全轮廓只能把它们堆在弧边上；
- * 3. 中心附近 ≈ `k·t²`，二次起步，屏心那几个格子几乎不动 —— 弧才有「从中间鼓出去」
- *    的观感，而不是整张网平移。
- *
- * 强度取鱼眼强度的一半（0..200% → 0..1）：100% 是出厂档，还留一倍的余量给老师往上调。
- *
- * **方屏恒为 0**（老师指定「上面下面左边右边都平铺」）。形状判定放在这条纯函数里而不是
- * 布局管理器里，是为了让「方屏平铺」这件事本身可单测 —— 摆在 View 层就只能靠肉眼验。
- */
-internal fun nativeRingConvergenceFraction(
-    radialProgress: Float,
-    config: NativeAppListConfig,
-): Float {
-    if (!config.fisheyeEnabled || config.deviceShape != NativeDeviceShape.ROUND) return 0f
-    val progress = radialProgress.takeIf(Float::isFinite)?.coerceAtLeast(0f) ?: return 0f
-    val strength = config.fisheyeStrength.takeIf(Float::isFinite)?.coerceIn(0f, 2f) ?: return 0f
-    val curvature = RING_MAX_CURVATURE * (strength / 2f)
-    if (curvature <= 0f) return 0f
-    val weighted = curvature * progress * progress
-    return weighted / (1f + weighted)
-}
-
-/** 星环收拢位移的两个分量。复用同一个对象，热路径不分配。 */
-internal class NativeRingOffset(
-    var x: Float = 0f,
-    var y: Float = 0f,
-) {
-    fun set(x: Float, y: Float): NativeRingOffset {
-        this.x = x
-        this.y = y
-        return this
-    }
-}
-
-/**
- * 星环的径向收拢位移：把格心往屏心拉 [nativeRingConvergenceFraction] 那么多。
- *
- * ## 为什么它是四条边一起弯
- *
- * 收的是**径向**分量，而径向距离里含着另一个轴的偏移。于是同一行里越靠外的列
- * `t` 越大、被拉得越多 —— 纵向分量把那一行拽成一道弧，横向分量把它收窄。列同理。
- * 一个公式同时给出上、下、左、右四条弧，不需要按边分四段（分段必然在四个角上接不平）。
- *
- * ## 为什么单独一个函数、不并进 [nativeRingChildVisual]
- *
- * 与心流的月牙同一个原因：圆屏那条路会用 [NativeDrawerGeometryAdapter] **整体替换**
- * translationX/Y（把图标收进内切圆的安全轮廓）。位移先加进视觉里就会被那次替换吃掉，
- * 而圆屏正是这套布局的目标机型。调用方的做法是把「收拢后的位置」当作期望格心喂给
- * 那个适配器，再把这一份位移加回它给出的 translation 上（见 [NativeRingLayoutManager]）。
- *
- * ## 为什么方屏不调它
- *
- * 老师指定方屏「上面下面左边右边都平铺」。方屏没有弧线边界，收拢只会让四角空出一片
- * 无用的留白。形状判定留给调用方，这个函数保持纯粹的几何。
- */
-internal fun nativeRingConvergenceOffset(
-    centerX: Float,
-    centerY: Float,
-    viewportWidth: Float,
-    viewportHeight: Float,
-    config: NativeAppListConfig,
-    output: NativeRingOffset = NativeRingOffset(),
-): NativeRingOffset {
-    if (
-        viewportWidth <= 0f || viewportHeight <= 0f ||
-        !centerX.isFinite() || !centerY.isFinite()
-    ) {
-        return output.set(0f, 0f)
-    }
-    val fraction = nativeRingConvergenceFraction(
-        radialProgress = nativeRingRadialProgress(
-            centerX = centerX,
-            centerY = centerY,
-            viewportWidth = viewportWidth,
-            viewportHeight = viewportHeight,
-            config = config,
-        ),
-        config = config,
+    val availableWidth = nativeSafeContentWidthPx(
+        leftSafeInsetPx = config.leftSafeInsetPx,
+        rightSafeInsetPx = config.rightSafeInsetPx,
+        viewportWidthPx = viewportWidth,
     )
-    if (fraction <= 0f) return output.set(0f, 0f)
-    val safeLeft = config.leftSafeInsetPx.coerceAtLeast(0).toFloat().coerceAtMost(viewportWidth)
-    val screenCenterX = safeLeft + (viewportWidth - safeLeft) / 2f
-    val screenCenterY = viewportHeight / 2f
-    return output.set(
-        x = -(centerX - screenCenterX) * fraction,
-        y = -(centerY - screenCenterY) * fraction,
-    )
+    val cellSize = config.ringCellSizePx.takeIf { it.isFinite() && it > 0f }
+        ?: availableWidth / config.honeycombNarrowColumns.coerceIn(1, NATIVE_RING_MAX_COLUMNS)
+    // 触发带跟着「生效行数」走。以前写死一行：老师把行数滑杆调到几，
+    // 星环都只缩最贴边那一排 —— 设置是摆设。上限仍是半屏高：带再宽也不能盖过屏心。
+    val triggerRange = (
+        cellSize * config.honeycombFisheyeRangeRows.coerceIn(1, 8).toFloat()
+        ).coerceAtMost(viewportHeight / 2f)
+    if (!triggerRange.isFinite() || triggerRange <= 0f) return 0f
+    val distanceToNearestEdge = minOf(centerY, viewportHeight - centerY)
+    return ((triggerRange - distanceToNearestEdge) / triggerRange).coerceIn(0f, 1f)
 }
 
 /**
- * 星环的子项视觉：径向鱼眼缩放 / 透明度 + 入场动效 + 边缘模糊。
+ * 星环的子项视觉：按行数触发的边缘鱼眼 + 入场动效 + 边缘模糊。
  *
- * 缩放曲线与蜂窝同档（`1 - 0.42·强度` 的最小缩放），只是半径改成二维径向且按内切圆归一化，
- * 于是「离屏心越远越小」在四个方向上一致 —— 蜂窝那份是给绕中心铺开的六边形网用的，
- * 直接复用会连带它那条**只作用于横向**的间距压缩，与星环的径向收拢重复计一次横向。
- *
- * 缩放这里的径向进度**必须夹到 1**：圆屏角上的格子 t 可以到 1.8，不夹的话它们会被缩到
- * 最小缩放以下（实测缩成一个点），而位移侧刚好相反 —— 那边靠 t > 1 把它们拉回可视区。
+ * 缩放只按行心到上下边缘的距离计算，与屏形无关 —— 同一个设置在圆屏和方屏上
+ * 表现一致。鱼眼关掉时缩放恒为 1（图标统一大小）。
  */
 internal fun nativeRingChildVisual(
     centerX: Float,
@@ -1038,14 +980,13 @@ internal fun nativeRingChildVisual(
     }
     val strength = config.fisheyeStrength.takeIf(Float::isFinite)?.coerceIn(0f, 2f) ?: 0f
     val minimumScale = (1f - 0.42f * strength).coerceIn(0.16f, 1f)
-    val radialProgress = nativeRingRadialProgress(
-        centerX = centerX,
+    val fisheyeProgress = nativeRingFisheyeProgress(
         centerY = centerY,
-        viewportWidth = viewportWidth,
         viewportHeight = viewportHeight,
         config = config,
-    ).coerceIn(0f, 1f)
-    val eased = radialProgress * radialProgress * (3f - 2f * radialProgress)
+        viewportWidth = viewportWidth,
+    )
+    val eased = fisheyeProgress * fisheyeProgress * (3f - 2f * fisheyeProgress)
     val scale = if (config.fisheyeEnabled) {
         1f - (1f - minimumScale) * eased
     } else {
@@ -1083,21 +1024,12 @@ internal fun nativeRingChildVisual(
         scale = scale * nativeEntryScale(entryEased),
         alpha = (if (config.fisheyeEnabled) scale.coerceIn(0.24f, 1f) else 1f) *
             entryProgress * compatibilityFade,
-        // 收拢位移不在这里：它必须叠在圆屏安全轮廓之后（见 nativeRingConvergenceOffset）。
         translationX = 0f,
         translationY = translationY,
         blurRadiusPx = blur,
         saturation = nativeLiteEdgeSaturation(fadeProgress, config.blurTier),
     )
 }
-
-/**
- * 星环收拢的曲率上限（鱼眼强度 200% 那一档）。
- *
- * 0.45 对应「最外圈约收进 31%、角上约收进 59%」。再大下去内切圆里的格子会互相重叠 ——
- * 收拢只压位置不压格距，重叠了就是图标叠图标。
- */
-private const val RING_MAX_CURVATURE = 0.45f
 
 internal fun nativeLiteEdgeAlpha(progress: Float): Float =
     1f - 0.38f * progress.takeIf(Float::isFinite)?.coerceIn(0f, 1f).orZero()

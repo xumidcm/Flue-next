@@ -2,6 +2,7 @@ package com.flue.launcher.layout
 
 import com.flue.launcher.ui.navigation.LayoutMode
 import com.flue.launcher.util.FlowCrescentDirection
+import com.flue.launcher.util.FlowShapeCurve
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -49,7 +50,7 @@ object FlueLayoutProfileJson {
     fun decodeLibrary(payload: String): List<FlueLayoutProfile> {
         requireDocumentSize(payload)
         val root = JSONObject(payload)
-        require(root.requireInt("schemaVersion") == FLUE_LAYOUT_SCHEMA_VERSION) {
+        require(root.requireInt("schemaVersion") in 1..FLUE_LAYOUT_SCHEMA_VERSION) {
             "Unsupported layout library schema"
         }
         val profilesJson = root.optJSONArray("profiles")
@@ -81,6 +82,14 @@ object FlueLayoutProfileJson {
         leftSafeInsetPercent = json.requireInt("leftSafeInsetPercent"),
         crescentDirection = json.requireCrescentDirection("crescentDirection"),
         crescentBulgePercent = json.requireInt("crescentBulgePercent"),
+        narrowColumns = json.optInt("narrowColumns", 3),
+        appListScalePercent = json.optInt("appListScalePercent", 100),
+        flowShapeCurve = FlowShapeCurve(
+            x1 = json.optDouble("flowShapeX1", 1.0 / 3.0).toFloat(),
+            y1 = json.optDouble("flowShapeY1", 0.0).toFloat(),
+            x2 = json.optDouble("flowShapeX2", 2.0 / 3.0).toFloat(),
+            y2 = json.optDouble("flowShapeY2", 1.0 / 3.0).toFloat(),
+        ),
     )
 
     private fun FlueLayoutProfile.toJson(): JSONObject = JSONObject()
@@ -96,6 +105,12 @@ object FlueLayoutProfileJson {
         .put("leftSafeInsetPercent", leftSafeInsetPercent)
         .put("crescentDirection", crescentDirection.wireName())
         .put("crescentBulgePercent", crescentBulgePercent)
+        .put("narrowColumns", narrowColumns)
+        .put("appListScalePercent", appListScalePercent)
+        .put("flowShapeX1", flowShapeCurve.x1.toDouble())
+        .put("flowShapeY1", flowShapeCurve.y1.toDouble())
+        .put("flowShapeX2", flowShapeCurve.x2.toDouble())
+        .put("flowShapeY2", flowShapeCurve.y2.toDouble())
 
     private fun LayoutMode.wireName(): String = when (this) {
         LayoutMode.Honeycomb -> MODE_HONEYCOMB

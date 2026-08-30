@@ -8,9 +8,8 @@ internal class NativeHoneycombLayoutManager(
     configProvider: () -> NativeAppListConfig,
 ) : NativeAppGridLayoutManager(configProvider) {
     private val childVisualScratch = NativeSpatialChildVisual()
-    private val safeGeometryScratch = NativeSpatialChildVisual()
-    private val safeGeometryAdapter = NativeDrawerGeometryAdapter()
     private var geometryLeftInset = Int.MIN_VALUE
+    private var geometryRightInset = Int.MIN_VALUE
     private var geometryNarrowColumns = Int.MIN_VALUE
     private var geometryIconSize = Int.MIN_VALUE
     private var geometryCellSize = Float.NaN
@@ -19,12 +18,14 @@ internal class NativeHoneycombLayoutManager(
         config: NativeAppListConfig,
     ): Boolean =
         geometryLeftInset == config.leftSafeInsetPx &&
+        geometryRightInset == config.rightSafeInsetPx &&
             geometryNarrowColumns == config.honeycombNarrowColumns &&
             geometryIconSize == config.iconSizePx &&
             geometryCellSize == config.honeycombCellSizePx
 
     override fun rememberGeometryConfig(config: NativeAppListConfig) {
         geometryLeftInset = config.leftSafeInsetPx
+        geometryRightInset = config.rightSafeInsetPx
         geometryNarrowColumns = config.honeycombNarrowColumns
         geometryIconSize = config.iconSizePx
         geometryCellSize = config.honeycombCellSizePx
@@ -40,6 +41,7 @@ internal class NativeHoneycombLayoutManager(
         viewportWidthPx = viewportWidthPx,
         viewportHeightPx = viewportHeightPx,
         leftSafeInsetPx = config.leftSafeInsetPx,
+        rightSafeInsetPx = config.rightSafeInsetPx,
         narrowColumns = config.honeycombNarrowColumns,
         iconSizePx = config.iconSizePx.toFloat(),
         cellSizePx = config.honeycombCellSizePx.takeIf { it > 0f }
@@ -81,10 +83,13 @@ internal class NativeHoneycombLayoutManager(
         for (index in 0 until childCount) {
             val child = requireNotNull(getChildAt(index))
             val row = child as? NativeAppListRowView
+            // 不含重排预览：鱼眼缩放与间距压缩都是格心坐标的函数，读了预览位移
+            // 就成了帧率级自反馈环（见
+            // NativeAppListRowView.positionTranslationYWithoutPreviewOrFlow）。
             val positionTranslationX =
-                row?.positionTranslationXWithoutFlow() ?: child.translationX
+                row?.positionTranslationXWithoutPreviewOrFlow() ?: child.translationX
             val positionTranslationY =
-                row?.positionTranslationYWithoutFlow() ?: child.translationY
+                row?.positionTranslationYWithoutPreviewOrFlow() ?: child.translationY
             val centerX = getDecoratedLeft(child) + getDecoratedMeasuredWidth(child) / 2f +
                 positionTranslationX
             val centerY = getDecoratedTop(child) + getDecoratedMeasuredHeight(child) / 2f +
@@ -97,30 +102,12 @@ internal class NativeHoneycombLayoutManager(
                 config = config,
                 output = childVisualScratch,
             )
-            val safe = if (config.deviceShape == NativeDeviceShape.ROUND) {
-                safeGeometryAdapter.resolve(
-                    centerX = centerX,
-                    centerY = centerY,
-                    viewportWidth = width.toFloat(),
-                    viewportHeight = height.toFloat(),
-                    itemWidth = row?.iconWidthForSafeGeometry()
-                        ?.takeIf { it.isFinite() && it > 0f }
-                        ?: getDecoratedMeasuredWidth(child).toFloat().coerceAtLeast(1f),
-                    itemHeight = row?.iconHeightForSafeGeometry()
-                        ?.takeIf { it.isFinite() && it > 0f }
-                        ?: getDecoratedMeasuredHeight(child).toFloat().coerceAtLeast(1f),
-                    config = config,
-                    output = safeGeometryScratch,
-                )
-            } else {
-                null
-            }
-            val flowTranslationX = safe?.translationX ?: visual.translationX
-            val flowTranslationY = safe?.translationY?.plus(
-                nativeEntryTranslationY(config, height.toFloat()),
-            ) ?: visual.translationY
+            // 圆屏专属几何只保留列表与星环（老师指定），蜂窝在圆屏上与方屏一致。
+            // 以前这里按 deviceShape == ROUND 走一遍安全轮廓收边，而那道护栏会把
+            // 布局槽位已经出屏的那一两行拽回屏内钉在弧上 —— 顶部/底部图标重叠的
+            // 三个成因之一。蜂窝不需要弧线边界，直接恒不收边。
             if (row != null) {
-                row.setFlowTranslation(flowTranslationX, flowTranslationY)
+                row.setFlowTranslation(visual.translationX, visual.translationY)
                 row.setVisualScale(visual.scale)
                 row.setIconBlurRadiusPx(visual.blurRadiusPx, config.effectiveBlurTier())
                 row.setIconSaturation(visual.saturation)

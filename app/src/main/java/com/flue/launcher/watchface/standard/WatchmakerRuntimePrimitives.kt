@@ -997,6 +997,9 @@ sealed interface WatchTapAction {
 
     data object StopwatchReset : WatchTapAction
 
+    /** Renderer-owned WatchMaker accent-color cycling. `select` is the same as `next`. */
+    data class ColorSwitch(val direction: Int) : WatchTapAction
+
     /**
      * 内建媒体控制：`media_play_pause` / `media_play` / `media_pause` /
      * `media_next` / `media_prev`。
@@ -1116,6 +1119,10 @@ object WatchTapActionParser {
         // 由渲染侧直接改 [WatchStopwatch]，不经宿主的应用映射。
         if (lower == "sw_start_stop") return WatchTapAction.StopwatchStartStop
         if (lower == "sw_reset") return WatchTapAction.StopwatchReset
+        if (lower == "color_switch_next" || lower == "color_switch_select") {
+            return WatchTapAction.ColorSwitch(direction = 1)
+        }
+        if (lower == "color_switch_prev") return WatchTapAction.ColorSwitch(direction = -1)
         // 包含 / : . 的其他格式（URL、component name 等）暂不支持
         if (lower.contains('/') || lower.contains(':') || lower.contains('.'))
             return WatchTapAction.Unsupported("custom intents are disabled")
@@ -1172,5 +1179,65 @@ object WatchTapActionParser {
         "w_email", "w_sms", "w_phone", "w_maps", "w_alarm", "w_timer",
         "w_stopwatch", "w_weather", "w_calendar", "w_recorder", "w_settings",
         "m_camera", "m_clock", "m_music", "m_calculator", "m_weather",
+    )
+}
+
+/** One already-evaluated candidate in WatchMaker's local design space. */
+data class WatchTapHitCandidate(
+    val containsPoint: Boolean,
+    val centerDistance: Float,
+    val opacity: Float,
+)
+
+/**
+ * Mirrors WatchSkin's hit arbitration: opacity -1 alone disables a zone, an
+ * in-bounds or sub-50-unit candidate participates, and the nearest centre wins.
+ */
+fun selectNearestWatchTapHitIndex(
+    candidates: List<WatchTapHitCandidate>,
+    graceRadius: Float = 50f,
+): Int? {
+    var bestIndex = -1
+    var bestDistance = Float.POSITIVE_INFINITY
+    candidates.forEachIndexed { index, candidate ->
+        val distance = candidate.centerDistance
+        if (
+            candidate.opacity != -1f &&
+            distance.isFinite() &&
+            (candidate.containsPoint || distance < graceRadius) &&
+            distance < bestDistance
+        ) {
+            bestIndex = index
+            bestDistance = distance
+        }
+    }
+    return bestIndex.takeIf { it >= 0 }
+}
+
+/** UL/WatchSkin accent palette. Index 0 is intentionally reserved for the face default. */
+val WATCH_COLOR_SWITCH_PALETTE: List<String> = listOf(
+    "5987b2", "20b2aa", "a10d09", "0bf9ab", "ffa419", "e6f0fa", "f0e6fa",
+    "faecf3", "f6f5f0", "e6effa", "e6e6fa", "ffcccc", "306a9f", "fef65b",
+    "ffcccc", "e6e6fa", "a1090d", "a10900", "12e6a0", "660066", "cce5cc",
+    "004c64", "20b2aa", "40e0d0", "7fffd4", "fff8e7", "f04b23", "d8b2d8",
+    "008aa0", "3b444b", "ac8141", "1e90ff", "838da6", "8b0000", "ffcccc",
+    "e5f2e5", "cce5cc", "fbe6fb", "ffffcc", "000000", "ffffff",
+)
+
+data class WatchColorSwitchSelection(val index: Int, val color: String)
+
+/** Applies a persisted index or advances it, wrapping through default + 41 palette colors. */
+fun selectWatchColor(
+    defaultColor: String?,
+    currentIndex: Int,
+    direction: Int,
+): WatchColorSwitchSelection {
+    val colorCount = WATCH_COLOR_SWITCH_PALETTE.size + 1
+    val normalizedCurrent = ((currentIndex % colorCount) + colorCount) % colorCount
+    val nextIndex = ((normalizedCurrent + direction) % colorCount + colorCount) % colorCount
+    val normalizedDefault = defaultColor.orEmpty().trim().removePrefix("#").ifBlank { "ffffff" }
+    return WatchColorSwitchSelection(
+        index = nextIndex,
+        color = if (nextIndex == 0) normalizedDefault else WATCH_COLOR_SWITCH_PALETTE[nextIndex - 1],
     )
 }

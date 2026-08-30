@@ -65,6 +65,22 @@ import com.flue.launcher.ui.theme.UiStyle
  *
  * 所以窗口 + 遮罩 + inset + 限高 + 滚动只写一份（[FlueDialog]），三档各自只提供一个
  * 装饰 modifier（[flueDialogSurface]）。以后再加风格，加的是装饰，不是再抄一遍窗口。
+ *
+ * ## T-06：`scrollableContent` 为什么是 opt-in、为什么必须默认 `true`
+ *
+ * 老师报「应用选择弹窗显示不全下面的按钮」。根源**不在**各个选择器，在这个外壳：卡片那层
+ * 无条件套了 `verticalScroll`，于是 content 拿到的纵向最大约束是 `Infinity` ——
+ * `weight(1f)` 在无限约束下没有意义，子级只能写死 dp。三个选择器的注释都记着这个坑
+ * （`WatchAppPicker.kt` 那句「FlueDialog 里嵌 verticalScroll 崩过一次」）。
+ *
+ * 于是在 454×454 屏上：可用卡高 ≈ 209dp，而内容（内边距 48 + 标题 24 + 副标题 21 +
+ * 输入框 56 + 列表 250 + 按钮 50…）要 483dp，超出一倍多；更要命的是列表自己吞掉纵向拖动，
+ * **外层那层滚动根本滚不起来** —— 按钮就永远摸不到。
+ *
+ * 传 `false` 去掉 `verticalScroll`，content 就拿到有限纵向约束，列表能用
+ * `weight(1f, fill = false)`、按钮被钉在卡底。**但这必须是 opt-in**：另外二十几处
+ * [FlueAlertDialog] 里**没有**任何 weight 子项，去掉外层滚动后它们在长文案下会直接溢出，
+ * 而且再也滚不动 —— 那是把一个 bug 换成二十个。默认值只能是 `true`。
  */
 
 /** 各档弹窗贴边方向：Apple 与 HyperOS 贴底，Material 居中。 */
@@ -141,6 +157,7 @@ fun Modifier.flueDialogSurface(shape: Shape? = null): Modifier {
  * 卡片上的空白（标题旁、正文空隙）不能把点击冒泡到遮罩去，否则点一下正文就把弹窗关了。
  *
  * @param maxHeightFraction 内容最高占屏比。默认 0.92 —— 圆屏上留一点余量，按钮不会被挤出去。
+ * @param scrollableContent 卡片整块是否可纵向滚动。见下面那段。
  */
 @Composable
 fun FlueDialog(
@@ -150,6 +167,7 @@ fun FlueDialog(
     maxHeightFraction: Float = 0.92f,
     dismissOnBackPress: Boolean = true,
     dismissOnClickOutside: Boolean = true,
+    scrollableContent: Boolean = true,
     content: @Composable ColumnScope.() -> Unit,
 ) {
     val style = LauncherTheme.style
@@ -189,6 +207,10 @@ fun FlueDialog(
                     contentAlignment = dialogAlignment(style.uiStyle),
                 ) {
                     val maxDialogHeight = maxHeight * maxHeightFraction
+                    // 无条件 remember：`scrollableContent` 在一次组合里不会变，但把
+                    // rememberScrollState 塞进 if 分支会让 slot table 的结构跟着参数走，
+                    // 白省一个对象、换来一类难查的状态丢失。
+                    val contentScrollState = rememberScrollState()
                     Column(
                         modifier = modifier
                             .fillMaxWidth()
@@ -196,7 +218,13 @@ fun FlueDialog(
                             // 卡片吸收指针：卡片上的空白不该把点击冒泡到遮罩，
                             // 否则点一下正文就关窗了。
                             .flueAbsorbPointer()
-                            .verticalScroll(rememberScrollState())
+                            .then(
+                                if (scrollableContent) {
+                                    Modifier.verticalScroll(contentScrollState)
+                                } else {
+                                    Modifier
+                                },
+                            )
                             .flueDialogSurface(shape),
                         horizontalAlignment = Alignment.CenterHorizontally,
                         content = content,
@@ -212,6 +240,11 @@ fun FlueDialog(
  *
  * 只吃「按下 → 抬起」这一串，**不消费 change**：卡片里的滚动、输入框、按钮照常工作
  * （它们是子节点，先拿到事件）。这里等的是没人处理的那一份。
+ *
+ * T-06 之后仍然成立，而且更稳了：`awaitPointerEvent()` 走的是 Main pass（子 → 父），
+ * 列表的纵向拖动在子节点就被消费掉，这里只是看着。而 `scrollableContent = false` 的弹窗
+ * 里卡片**不再是滚动容器** —— 原来「列表 + 卡片」两层可滚容器嵌套着抢纵向手势（列表吞掉
+ * 拖动、外层滚不动，那正是按钮摸不到的另一半原因），现在纵向手势只有列表一家收。
  */
 private fun Modifier.flueAbsorbPointer(): Modifier = pointerInput(Unit) {
     awaitEachGesture {
@@ -227,6 +260,10 @@ private fun Modifier.flueAbsorbPointer(): Modifier = pointerInput(Unit) {
  * 标题 + 正文 + 按钮的常规弹窗。
  *
  * 这是那二十几处 `AlertDialog` 的落点：形状、贴边、按钮排布全部按风格走，调用点只给内容。
+ *
+ * [scrollableContent] 与插槽版同义（见那边的 T-06 段落）。这一版的 [content] 是
+ * `ColumnScope` 扩展，所以传 `false` 之后调用点可以**自己**给列表标
+ * `weight(1f, fill = false)`，不需要这里代劳。
  */
 @Composable
 fun FlueAlertDialog(
@@ -239,6 +276,7 @@ fun FlueAlertDialog(
     dismissText: String? = null,
     confirmEnabled: Boolean = true,
     dismissOnClickOutside: Boolean = true,
+    scrollableContent: Boolean = true,
     content: (@Composable ColumnScope.() -> Unit)? = null,
 ) {
     val style = LauncherTheme.style
@@ -246,6 +284,7 @@ fun FlueAlertDialog(
         onDismissRequest = onDismissRequest,
         modifier = modifier,
         dismissOnClickOutside = dismissOnClickOutside,
+        scrollableContent = scrollableContent,
     ) {
         Text(
             text = title,
@@ -398,6 +437,19 @@ private fun FlueDialogButton(
  * 塞进去的整个 Row 自然共用一枚。所以第三个动作有专门的 [extraAction]：Apple / MIUIX 档
  * 它**自己独占一行胶囊**（非主色、略矮），三个动作就是三枚胶囊；MD3 档按 Material 规范
  * 放在确认对的**左侧同一行**（那一档本来就是右对齐的文字按钮，另起一行会孤零零吊在左下角）。
+ *
+ * ## T-06：[scrollableContent] = false 时按钮怎么钉在卡底
+ *
+ * 光把外壳的 `verticalScroll` 去掉还不够。`Column` 测量非 weight 子项时给的是**当前剩余
+ * 的全部高度**，而「标题 + 正文」是第一个子项 —— 它会先把整张卡吃光，后面的 Spacer 与
+ * 按钮就被挤出去了（症状和原来一模一样，只是不再能滚）。
+ *
+ * 所以这里同时给那一块加 `weight(1f, fill = false)`：测量顺序变成「先按钮（固定高）、
+ * 剩下的才给正文」，按钮从此下不去。`fill = false` 是为了**短内容不留白** —— 只有两个
+ * 应用时卡片跟着内容收，不会撑成一整屏。
+ *
+ * 正文槽自己内部还要再传一次这个意图（把列表标成 `weight(1f, fill = false)`），因为
+ * [text] 是 `@Composable () -> Unit`、**没有** `ColumnScope`，我们没法从外面替它标。
  */
 @Composable
 fun FlueAlertDialog(
@@ -409,20 +461,30 @@ fun FlueAlertDialog(
     dismissButton: (@Composable () -> Unit)? = null,
     extraAction: (@Composable () -> Unit)? = null,
     dismissOnClickOutside: Boolean = true,
+    scrollableContent: Boolean = true,
 ) {
     val style = LauncherTheme.style
     FlueDialog(
         onDismissRequest = onDismissRequest,
         modifier = modifier,
         dismissOnClickOutside = dismissOnClickOutside,
+        scrollableContent = scrollableContent,
     ) {
         // 标题与正文的排版交给调用方给的 composable，只统一字色与居中，
         // 免得每个调用点各写一遍 onSurface。
+        //
+        // 下面那个 `weight` 写在 CompositionLocalProvider **里面**是有效的：它不产生布局
+        // 节点，所以这个 Column 的真实父级仍然是 FlueDialog 的卡片 Column，而 ColumnScope
+        // 作为外层 lambda 的 receiver 在词法上一直可见。
         androidx.compose.runtime.CompositionLocalProvider(
             androidx.compose.material3.LocalContentColor provides MaterialTheme.colorScheme.onSurface,
         ) {
             Column(
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    // 见上面 T-06 那段：不标 weight 的话这一块会把整张卡吃光，按钮被挤出屏幕。
+                    // 卡片可滚时**不能**标 —— 那时纵向约束是 Infinity，weight 无从分配。
+                    .then(if (scrollableContent) Modifier else Modifier.weight(1f, fill = false)),
                 horizontalAlignment = if (style.uiStyle == UiStyle.MATERIAL_3) {
                     Alignment.Start
                 } else {

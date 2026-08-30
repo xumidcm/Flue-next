@@ -22,17 +22,17 @@ internal data class NativeRingPlacement(
  *
  * - 密集网格留左右内边距、留格间距、格子可以是长方形（`itemAspectRatio`）；
  * - 星环**不留任何空隙**，格边长恒为 `可用宽度 / 列数`，横纵同值。参考图里图标是铺满
- *   整屏的，留内边距就会在四周多出一圈空白，圆屏上那圈空白正好压在弧线最需要图标的地方。
+ *   整屏的，留内边距就会在四周多出一圈空白。
  *
  * 图标本体比格子小一号（见 [nativeRingIconSizePx]），格与格之间的视觉空隙由那个比例给，
  * 而不是靠格间距 —— 只有这样「格心铺满」和「图标不相碰」才能同时成立。
  *
- * ## 那道弧不在这里
+ * ## 为什么绘制期什么都不加
  *
- * 四边收拢是**绘制期**按格心离屏心的距离算的 translation（见
- * [nativeRingConvergenceOffset]），刻意不进几何。进几何就会变成「收拢 → 重测量 →
- * 格心变 → 算出不同的收拢量」的自反馈抽搐；`ui/common/ChordScale.kt` 开头为这件事
- * 记过一次翻车，心流的月牙也是同一个理由留在绘制期。
+ * 曾经有圆屏专属的径向收拢（把格子往屏心压、行被拽成弧），按格心离屏心的距离在绘制期
+ * 算 translation。2026-08 老师要求删掉：星环两种屏形一律按这套平铺几何渲染，绘制期
+ * 只剩鱼眼缩放。也正因如此，进几何就自反馈的教训（收拢 → 重测量 → 格心变 → 再收拢）
+ * 记录在 `ui/common/ChordScale.kt`，心流的月牙同理留在绘制期。
  */
 internal class NativeRingGeometry private constructor(
     override val viewportHeightPx: Int,
@@ -97,10 +97,13 @@ internal class NativeRingGeometry private constructor(
             viewportWidthPx: Int,
             viewportHeightPx: Int,
             leftSafeInsetPx: Int,
+            /** 右侧安全内缩（滚动指示器占位）。0 = 指示器关掉，不留白边。 */
+            rightSafeInsetPx: Int = 0,
             columns: Int,
             cellSizePx: Float = nativeRingCellSizePx(
                 viewportWidthPx = viewportWidthPx,
                 leftSafeInsetPx = leftSafeInsetPx,
+                rightSafeInsetPx = rightSafeInsetPx,
                 columns = columns,
             ),
         ): NativeRingGeometry {
@@ -108,8 +111,12 @@ internal class NativeRingGeometry private constructor(
             require(viewportWidthPx > 0 && viewportHeightPx > 0)
             require(cellSizePx.isFinite() && cellSizePx > 0f)
             val effectiveColumns = columns.coerceIn(1, NATIVE_RING_MAX_COLUMNS)
-            val safeLeft = leftSafeInsetPx.coerceIn(0, viewportWidthPx - 1)
-            val availableWidth = (viewportWidthPx - safeLeft).toFloat().coerceAtLeast(1f)
+            val safeLeft = nativeSafeLeftPx(leftSafeInsetPx, viewportWidthPx.toFloat())
+            val availableWidth = nativeSafeContentWidthPx(
+                leftSafeInsetPx = leftSafeInsetPx,
+                rightSafeInsetPx = rightSafeInsetPx,
+                viewportWidthPx = viewportWidthPx,
+            )
             val rowWidth = effectiveColumns * cellSizePx
             // 整块网格按可用区居中。传进来的格边长通常正好铺满（差值为 0），但调用方
             // 可以给一个更小的值（例如为了让格子不至于比图标还小），那时剩下的余量要
@@ -164,10 +171,14 @@ internal fun nativeRingCellSizePx(
     viewportWidthPx: Int,
     leftSafeInsetPx: Int,
     columns: Int,
+    rightSafeInsetPx: Int = 0,
 ): Float {
     if (viewportWidthPx <= 0) return 0f
-    val safeLeft = leftSafeInsetPx.coerceIn(0, viewportWidthPx - 1)
-    val availableWidth = (viewportWidthPx - safeLeft).toFloat().coerceAtLeast(1f)
+    val availableWidth = nativeSafeContentWidthPx(
+        leftSafeInsetPx = leftSafeInsetPx,
+        rightSafeInsetPx = rightSafeInsetPx,
+        viewportWidthPx = viewportWidthPx,
+    )
     return availableWidth / columns.coerceIn(1, NATIVE_RING_MAX_COLUMNS)
 }
 
@@ -193,4 +204,4 @@ internal fun nativeRingIconSizePx(cellSizePx: Float, scale: Float): Int {
  * 0.86 是「圆和圆之间看得出一道缝，但网格仍然读作铺满」的那一档：再大圆就贴上了，
  * 再小就退化成普通稀疏网格，星环那种「密到铺满屏」的观感消失。
  */
-private const val RING_ICON_CELL_FRACTION = 0.86f
+internal const val RING_ICON_CELL_FRACTION = 0.86f

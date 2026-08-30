@@ -77,6 +77,8 @@ internal class NativeDenseGridGeometry private constructor(
             viewportWidthPx: Int,
             viewportHeightPx: Int,
             leftSafeInsetPx: Int,
+            /** 右侧安全内缩（滚动指示器占位）。0 = 指示器关掉，不留白边。 */
+            rightSafeInsetPx: Int = 0,
             columns: Int,
             horizontalPaddingPx: Float,
             itemSpacingPx: Float,
@@ -95,9 +97,13 @@ internal class NativeDenseGridGeometry private constructor(
             require(minimumItemHeightPx.isFinite() && minimumItemHeightPx > 0f)
             require(minimumVerticalPaddingPx.isFinite() && minimumVerticalPaddingPx >= 0f)
 
-            val safeLeft = leftSafeInsetPx.coerceIn(0, viewportWidthPx - 1)
+            val safeLeft = nativeSafeLeftPx(leftSafeInsetPx, viewportWidthPx.toFloat())
             val usableWidth = (
-                viewportWidthPx - safeLeft - horizontalPaddingPx * 2f
+                nativeSafeContentWidthPx(
+                    leftSafeInsetPx = leftSafeInsetPx,
+                    rightSafeInsetPx = rightSafeInsetPx,
+                    viewportWidthPx = viewportWidthPx,
+                ) - horizontalPaddingPx * 2f
                 ).coerceAtLeast(1f)
             // Do not let a narrow round-screen viewport silently create cells
             // smaller than the configured minimum. Reduce the column count
