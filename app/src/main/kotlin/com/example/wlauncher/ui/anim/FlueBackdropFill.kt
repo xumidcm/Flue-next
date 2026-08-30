@@ -94,12 +94,26 @@ internal fun legacyBackdropViewportMatches(
 
 internal fun shouldDrawLiveBackdropContent(
     overlayActive: Boolean,
-    hardwareCaptureRequired: Boolean = false,
     capturedFrameAvailable: Boolean,
-): Boolean = when {
-    !overlayActive -> true
-    hardwareCaptureRequired -> false
-    else -> !capturedFrameAvailable
+): Boolean = !overlayActive || !capturedFrameAvailable
+
+internal enum class BackdropContentSource {
+    LIVE,
+    CAPTURED,
+}
+
+internal fun resolveBackdropContentSource(
+    overlayActive: Boolean,
+    hardwareCaptureRequired: Boolean,
+    capturedFrameAvailable: Boolean,
+    cachedFrameAvailable: Boolean,
+): BackdropContentSource = if (
+    overlayActive &&
+    (capturedFrameAvailable || (hardwareCaptureRequired && cachedFrameAvailable))
+) {
+    BackdropContentSource.CAPTURED
+} else {
+    BackdropContentSource.LIVE
 }
 
 /** API 27-30 transition hot path: one cached bitmap draw, with no recording. */
@@ -236,7 +250,10 @@ internal fun Modifier.flueBackdropFill(
     if (!enabled) return this
     val backdropLayer = rememberGraphicsLayer()
     val magnifiedLayer = rememberGraphicsLayer()
-    val captureState = remember(hardwareCaptureRequired, hardwareCapturedFrame?.visualKey) {
+    // hardwareCaptureRequired flips exactly when an overlay starts. Keeping it
+    // in the remember key discarded the clean idle recording on that frame,
+    // leaving only a fallback colour until PixelCopy returned.
+    val captureState = remember(hardwareCapturedFrame?.visualKey) {
         BackdropCaptureState()
     }
     val canHardwareBlur = overlayBlurBackend(
@@ -305,6 +322,26 @@ internal fun Modifier.flueBackdropFill(
                         captureState.capturedSize = layerSize
                     }
                 }
+                when (
+                    resolveBackdropContentSource(
+                        overlayActive = freezeLiveContentWhenCaptured,
+                        hardwareCaptureRequired = hardwareCaptureRequired,
+                        capturedFrameAvailable = hasPixelCopy,
+                        cachedFrameAvailable = captureState.hasFrame &&
+                            captureState.capturedSize == layerSize &&
+                            (!hardwareCaptureRequired ||
+                                captureState.capturedPixelCopyGeneration != Long.MIN_VALUE),
+                    )
+                ) {
+                    BackdropContentSource.CAPTURED -> {
+                        backdropLayer.renderEffect = null
+                        backdropLayer.alpha = 1f
+                        backdropLayer.colorFilter = null
+                        drawLayer(backdropLayer)
+                    }
+                    BackdropContentSource.LIVE -> drawContent()
+                }
+                return@drawWithContent
             }
             drawContent()
             return@drawWithContent
@@ -327,7 +364,6 @@ internal fun Modifier.flueBackdropFill(
                 } == true
             val drawLiveContent = shouldDrawLiveBackdropContent(
                 overlayActive = freezeLiveContentWhenCaptured,
-                hardwareCaptureRequired = hardwareCaptureRequired,
                 capturedFrameAvailable = capturedLegacyFrameAvailable,
             )
             val fallback = matchingFrames?.let { Color(it.fallbackArgb) } ?: Color(0xFF10151D)
@@ -394,7 +430,6 @@ internal fun Modifier.flueBackdropFill(
                 } == true
             val drawLiveContent = shouldDrawLiveBackdropContent(
                 overlayActive = freezeLiveContentWhenCaptured,
-                hardwareCaptureRequired = hardwareCaptureRequired,
                 capturedFrameAvailable = preparedFrameAvailable,
             )
             val preparedScale = (contentScale?.invoke() ?: (1f - 0.08f * p))
@@ -466,14 +501,11 @@ internal fun Modifier.flueBackdropFill(
             captureState.capturedSize = layerSize
         }
         if (!captureState.hasFrame || captureState.capturedSize != layerSize) {
-            // PixelCopy 尚未返回时，硬件捕获路径不能继续画实时表盘：
-            // Watchmaker 的 tick/media 已经冻结，继续 drawContent() 会让表盘
-            // 在等待窗口里走另一条实时绘制路径，正是手势首帧卡顿的来源。
-            // 捕获到达后才切成完整的单层扩边画面；普通录制路径仍保留实时
-            // 内容，避免没有硬件帧时出现不必要的空白。
+            // PixelCopy 尚未返回且没有空闲缓存时，继续画已暂停的最后内容。
+            // 动态 tick/media 已由 renderer gate 停掉，所以这里不会恢复复杂
+            // 表盘工作；它只避免用纯色兜底制造可见黑帧。
             val drawLiveContent = shouldDrawLiveBackdropContent(
                 overlayActive = freezeLiveContentWhenCaptured,
-                hardwareCaptureRequired = hardwareCaptureRequired,
                 capturedFrameAvailable = false,
             )
             drawRect(fallbackColor.copy(alpha = 1f))
@@ -483,7 +515,6 @@ internal fun Modifier.flueBackdropFill(
         }
         val liveContentFrozen = !shouldDrawLiveBackdropContent(
             overlayActive = freezeLiveContentWhenCaptured,
-            hardwareCaptureRequired = hardwareCaptureRequired,
             capturedFrameAvailable = captureState.hasFrame,
         )
         // 真实内容只负责推进内部弹簧/时钟，随后被完整不透明的单层扩边画面

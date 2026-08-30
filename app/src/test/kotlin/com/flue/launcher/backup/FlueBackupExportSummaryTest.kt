@@ -1,7 +1,14 @@
 package com.flue.launcher.backup
 
+import com.flue.launcher.watchface.standard.WatchArchiveInstaller
+import com.flue.launcher.watchface.standard.WatchArchiveValidator
 import java.io.ByteArrayOutputStream
+import java.io.File
+import java.nio.file.Files
+import java.util.zip.ZipEntry
+import java.util.zip.ZipOutputStream
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -77,5 +84,60 @@ class FlueBackupExportSummaryTest {
         counting.close()
         // exportBackup 在 use 之后才读 count（ZipOutputStream 关闭时才写完中央目录）。
         assertEquals(5L, counting.count)
+    }
+
+    @Test
+    fun `watch backup archive excludes installer metadata and remains importable`() {
+        val root = Files.createTempDirectory("flue-watch-backup-test").toFile()
+        val face = File(root, "face").apply { mkdirs() }
+        val archive = File(root, "restored.watch")
+        try {
+            File(face, "watch.xml").writeText(
+                "<Watch name=\"Backup\" shape=\"R\"><Layer type=\"text\" text=\"12:34\" /></Watch>",
+                Charsets.UTF_8,
+            )
+            File(face, ".flue").mkdirs()
+            File(face, ".flue/installed-at").writeText("123", Charsets.US_ASCII)
+
+            archive.outputStream().use { output ->
+                writeBackupWatchArchive(face, output)
+            }
+
+            val manifest = WatchArchiveValidator().inspect(archive)
+            assertTrue(manifest.entries.any { it.normalizedName == "watch.xml" })
+            assertFalse(manifest.entries.any { it.normalizedName.startsWith(".flue/") })
+        } finally {
+            root.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `legacy backup watch archive is sanitized before restore`() {
+        val root = Files.createTempDirectory("flue-watch-backup-legacy-test").toFile()
+        val legacy = File(root, "legacy.watch")
+        val sanitized = File(root, "sanitized.watch")
+        try {
+            ZipOutputStream(legacy.outputStream()).use { zip ->
+                zip.putNextEntry(ZipEntry("watch.xml"))
+                zip.write(
+                    "<Watch name=\"Legacy\" shape=\"R\"><Layer type=\"text\" text=\"12:34\" /></Watch>"
+                        .toByteArray(Charsets.UTF_8),
+                )
+                zip.closeEntry()
+                zip.putNextEntry(ZipEntry(".flue/installed-at"))
+                zip.write("123".toByteArray(Charsets.US_ASCII))
+                zip.closeEntry()
+            }
+
+            sanitizeBackupWatchArchive(legacy, sanitized)
+
+            val manifest = WatchArchiveValidator().inspect(sanitized)
+            assertTrue(manifest.entries.any { it.normalizedName == "watch.xml" })
+            assertFalse(manifest.entries.any { it.normalizedName.startsWith(".flue/") })
+            val installed = WatchArchiveInstaller().install(sanitized, File(root, "installed"))
+            assertTrue(installed.watchXml.isFile)
+        } finally {
+            root.deleteRecursively()
+        }
     }
 }

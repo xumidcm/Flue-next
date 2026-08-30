@@ -18,6 +18,7 @@ import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
+import java.io.OutputStream
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -314,7 +315,7 @@ object FlueBackupManager {
                     val entry = "$FONT_ENTRY.${fontMedia.extension.ifBlank { "ttf" }}"
                     zip.writeFileEntry(entry, fontMedia)
                 }
-                if (appListBackgroundEntry != null && appListBackgroundMedia != null) {
+                if (appListBackgroundEntry != null) {
                     zip.writeFileEntry(appListBackgroundEntry, appListBackgroundMedia)
                 }
                 // 把每个已安装表盘目录打成内嵌 .watch（ZIP），写进备份包。
@@ -322,14 +323,7 @@ object FlueBackupManager {
                     watchFaceDirs.forEach { faceDir ->
                         val archiveName = "$WATCH_ARCHIVES_PREFIX${faceDir.name}.watch"
                         val watchBytes = ByteArrayOutputStream().also { baos ->
-                            ZipOutputStream(baos).use { inner ->
-                                faceDir.walkTopDown().filter { it.isFile }.forEach { file ->
-                                    val rel = file.relativeTo(faceDir).path.replace('\\', '/')
-                                    inner.putNextEntry(ZipEntry(rel))
-                                    file.inputStream().use { it.copyTo(inner) }
-                                    inner.closeEntry()
-                                }
-                            }
+                            writeBackupWatchArchive(faceDir, baos)
                         }.toByteArray()
                         zip.putNextEntry(ZipEntry(archiveName))
                         zip.write(watchBytes)
@@ -433,8 +427,10 @@ object FlueBackupManager {
                         if (entry.isNotBlank()) {
                             val archiveFile = File(tempRoot, entry)
                             if (archiveFile.isFile) {
+                                val sanitizedArchive = File(tempRoot, "sanitized-watch-$i.watch")
                                 runCatching {
-                                    WatchmakerWatchFaceStorage.importArchiveFile(context, archiveFile)
+                                    sanitizeBackupWatchArchive(archiveFile, sanitizedArchive)
+                                    WatchmakerWatchFaceStorage.importArchiveFile(context, sanitizedArchive)
                                 }
                                 // 单个表盘失败不中断整体恢复
                             }
@@ -730,3 +726,35 @@ object FlueBackupManager {
         return replace(Regex("[^A-Za-z0-9._-]"), "_").ifBlank { "unknown" }
     }
 }
+
+internal fun writeBackupWatchArchive(faceDirectory: File, output: OutputStream) {
+    ZipOutputStream(output).use { inner ->
+        faceDirectory.walkTopDown()
+            .filter { it.isFile }
+            .forEach { file ->
+                val relative = file.relativeTo(faceDirectory).invariantSeparatorsPath
+                if (isFlueInstallMetadataPath(relative)) return@forEach
+                inner.putNextEntry(ZipEntry(relative))
+                file.inputStream().use { it.copyTo(inner) }
+                inner.closeEntry()
+            }
+    }
+}
+
+internal fun sanitizeBackupWatchArchive(source: File, target: File) {
+    ZipInputStream(source.inputStream().buffered()).use { input ->
+        ZipOutputStream(target.outputStream().buffered()).use { output ->
+            generateSequence { input.nextEntry }.forEach { entry ->
+                if (!isFlueInstallMetadataPath(entry.name)) {
+                    output.putNextEntry(ZipEntry(entry.name))
+                    if (!entry.isDirectory) input.copyTo(output)
+                    output.closeEntry()
+                }
+                input.closeEntry()
+            }
+        }
+    }
+}
+
+private fun isFlueInstallMetadataPath(path: String): Boolean =
+    path.replace('\\', '/').trimStart('/').substringBefore('/').equals(".flue", ignoreCase = true)

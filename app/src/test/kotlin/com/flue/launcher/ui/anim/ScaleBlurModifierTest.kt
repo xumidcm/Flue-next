@@ -55,35 +55,59 @@ class ScaleBlurModifierTest {
         assertFalse(
             shouldDrawLiveBackdropContent(
                 overlayActive = true,
-                hardwareCaptureRequired = false,
                 capturedFrameAvailable = true,
             ),
         )
         assertTrue(
             shouldDrawLiveBackdropContent(
                 overlayActive = true,
-                hardwareCaptureRequired = false,
                 capturedFrameAvailable = false,
             ),
         )
         assertTrue(
             shouldDrawLiveBackdropContent(
                 overlayActive = false,
-                hardwareCaptureRequired = true,
                 capturedFrameAvailable = true,
             ),
         )
     }
 
     @Test
-    fun hardwareCaptureDoesNotDrawLiveBackdropWhileTheFrozenFrameIsPending() {
-        assertFalse(
+    fun hardwareCaptureKeepsThePausedFaceVisibleWhileTheFrozenFrameIsPending() {
+        assertTrue(
             shouldDrawLiveBackdropContent(
                 overlayActive = true,
-                hardwareCaptureRequired = true,
                 capturedFrameAvailable = false,
             ),
         )
+    }
+
+    @Test
+    fun frozenOverlayKeepsUsingTheCapturedFrameWhenGeometryProgressReturnsToRest() {
+        assertEquals(
+            BackdropContentSource.CAPTURED,
+            resolveBackdropContentSource(
+                overlayActive = true,
+                hardwareCaptureRequired = true,
+                capturedFrameAvailable = true,
+                cachedFrameAvailable = true,
+            ),
+        )
+        assertEquals(
+            BackdropContentSource.LIVE,
+            resolveBackdropContentSource(
+                overlayActive = false,
+                hardwareCaptureRequired = false,
+                capturedFrameAvailable = true,
+                cachedFrameAvailable = true,
+            ),
+        )
+    }
+
+    @Test
+    fun pixelCopyResultIsRejectedAfterAnOverlayHasStartedDrawing() {
+        assertTrue(shouldAcceptWatchFaceCapture(captureAllowedNow = true))
+        assertFalse(shouldAcceptWatchFaceCapture(captureAllowedNow = false))
     }
 
     @Test

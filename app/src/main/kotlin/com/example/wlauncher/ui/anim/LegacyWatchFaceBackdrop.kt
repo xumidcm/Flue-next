@@ -147,16 +147,10 @@ internal fun rememberLegacyWatchFacePixelCopyFrame(
         } else {
             longArrayOf(280L, 720L)
         }
-        var allowFirstCaptureAfterOverlay = explicitRequest
         for (settleDelay in delays) {
             if (settleDelay > 0L) delay(settleDelay)
             ensureActive()
             if (settleDelay > 0L && !latestCaptureAllowed.value) return@LaunchedEffect
-            val allowResultAfterOverlay = allowFirstCaptureAfterOverlay
-            // Only the first, immediate capture belongs to the gesture that
-            // requested it. Any delayed replacement must observe the current
-            // stable-Face gate before it is accepted.
-            allowFirstCaptureAfterOverlay = false
             val frame = requestWindowPixelCopy(
                 window = requestedWindow,
                 requestedBounds = requestedRect,
@@ -166,7 +160,11 @@ internal fun rememberLegacyWatchFacePixelCopyFrame(
             var frameOwnedByEffect = true
             try {
                 ensureActive()
-                if (!latestCaptureAllowed.value && !allowResultAfterOverlay) continue
+                // PixelCopy samples the composed Window when the request is
+                // processed, not when DOWN queued it. Accepting a late result
+                // after an overlay appeared baked that overlay into the frozen
+                // watch-face frame and produced a temporary two-layer UI.
+                if (!shouldAcceptWatchFaceCapture(latestCaptureAllowed.value)) continue
                 val previous = captured
                 val next = LegacyWatchFaceCapturedFrame(
                     visualKey = visualKey,
@@ -201,6 +199,9 @@ internal fun rememberLegacyWatchFacePixelCopyFrame(
         it.visualKey == visualKey && it.boundsKey == boundsKey && !it.bitmap.isRecycled
     }
 }
+
+internal fun shouldAcceptWatchFaceCapture(captureAllowedNow: Boolean): Boolean =
+    captureAllowedNow
 
 private fun capturedFrameLease(bitmap: Bitmap): WatchmakerBitmapLease =
     WatchmakerBitmapLease { recycleCapturedBitmapSafely(bitmap) }

@@ -1644,7 +1644,7 @@
     <string name="internal_file_browser_select_current_folder">导出到当前目录</string>
     <string name="internal_file_browser_pick_conversion">选择要转换的表盘</string>
     <string name="watch_face_loading">表盘加载中</string>
-    <string name="watch_face_loading_fallback">切换默认表盘并重启</string>
+    <string name="watch_face_loading_fallback">默认表盘并重启</string>
     <!-- ═══ 圆角矩形图层 ═══ -->
     <string name="watch_editor_layer_rounded">圆角矩形</string>
 
