@@ -116,6 +116,21 @@ internal fun resolveBackdropContentSource(
     BackdropContentSource.LIVE
 }
 
+/** Holds the complete prepared frame, including its pixels, for one overlay lifetime. */
+internal class BackdropFrameSession<T> {
+    private var active = false
+    private var retained: T? = null
+
+    fun select(overlayActive: Boolean, candidate: T?, isValid: (T) -> Boolean = { true }): T? {
+        if (!active || !overlayActive) retained = candidate
+        active = overlayActive
+        // Once the retained frame becomes unusable, keep the live fallback
+        // for this session, even if another capture or old size comes back.
+        if (retained?.let(isValid) == false) retained = null
+        return retained
+    }
+}
+
 /** API 27-30 transition hot path: one cached bitmap draw, with no recording. */
 private fun DrawScope.drawLegacyBackdropCover(
     image: ImageBitmap,
@@ -164,6 +179,7 @@ private class BackdropCaptureState {
     var capturedPixelCopyGeneration: Long = Long.MIN_VALUE
     /** 上次重录九宫格镜像层时的 progress；变化小于阈值就不重录。 */
     var recordedProgress: Float = Float.NaN
+    val frameSession = BackdropFrameSession<LegacyWatchFaceBackdropFrames>()
     val preparedRecordState = PreparedBackdropRecordState()
 }
 
@@ -246,6 +262,7 @@ internal fun Modifier.flueBackdropFill(
     freezeLiveContentWhenCaptured: Boolean = false,
     /** Disable system blur together with the advanced-material setting. */
     advancedMaterialEnabled: Boolean = true,
+    visualKey: String = hardwareCapturedFrame?.visualKey.orEmpty(),
 ): Modifier {
     if (!enabled) return this
     val backdropLayer = rememberGraphicsLayer()
@@ -253,7 +270,7 @@ internal fun Modifier.flueBackdropFill(
     // hardwareCaptureRequired flips exactly when an overlay starts. Keeping it
     // in the remember key discarded the clean idle recording on that frame,
     // leaving only a fallback colour until PixelCopy returned.
-    val captureState = remember(hardwareCapturedFrame?.visualKey) {
+    val captureState = remember(visualKey) {
         BackdropCaptureState()
     }
     val canHardwareBlur = overlayBlurBackend(
@@ -270,6 +287,28 @@ internal fun Modifier.flueBackdropFill(
         val rawProgress = progress()
         val p = if (rawProgress.isFinite()) rawProgress.coerceIn(0f, 1f) else 0f
         val layerSize = size.toIntSize()
+        val preparedFrames = captureState.frameSession.select(
+            overlayActive = freezeLiveContentWhenCaptured,
+            candidate = legacyFrames?.takeIf {
+                it.visualKey == visualKey &&
+                    legacyBackdropViewportMatches(it.viewportWidth, it.viewportHeight, layerSize) &&
+                    (!freezeLiveContentWhenCaptured || it.capturedGeneration != Long.MIN_VALUE)
+            },
+            isValid = {
+                it.visualKey == visualKey &&
+                    legacyBackdropViewportMatches(it.viewportWidth, it.viewportHeight, layerSize)
+            },
+        )
+        val sessionCapturedAvailable = preparedFrames?.capturedGeneration?.let {
+            it != Long.MIN_VALUE
+        } == true
+        // A partial or late capture must never replace the live face mid-gesture.
+        // Renderer ticks are paused separately; drawing its last display list is safe.
+        if (freezeLiveContentWhenCaptured && preparedFrames == null) {
+            drawRect(fallbackColor)
+            drawContent()
+            return@drawWithContent
+        }
         fun recordPixelCopyFrameIfAvailable(): Boolean {
             val frame = hardwareCapturedFrame ?: return false
             val image = hardwareCapturedImage ?: return false
@@ -298,6 +337,10 @@ internal fun Modifier.flueBackdropFill(
             return true
         }
         if (p <= 0.001f) {
+            if (freezeLiveContentWhenCaptured) {
+                drawContent()
+                return@drawWithContent
+            }
             if (canHardwareBlur) {
                 val hasPixelCopy = if (hardwareCaptureRequired) {
                     recordPixelCopyFrameIfAvailable()
@@ -354,7 +397,7 @@ internal fun Modifier.flueBackdropFill(
             // Never stretch a cache prepared for a different measured layer.
             // The live face remains available while the correctly-sized blur
             // triplet is rebuilt in the background.
-            val matchingFrames = legacyFrames?.takeIf {
+            val matchingFrames = preparedFrames?.takeIf {
                 legacyBackdropViewportMatches(it.viewportWidth, it.viewportHeight, layerSize)
             }
             val capturedLegacyFrameAvailable =
@@ -364,7 +407,8 @@ internal fun Modifier.flueBackdropFill(
                 } == true
             val drawLiveContent = shouldDrawLiveBackdropContent(
                 overlayActive = freezeLiveContentWhenCaptured,
-                capturedFrameAvailable = capturedLegacyFrameAvailable,
+                capturedFrameAvailable = sessionCapturedAvailable ||
+                    (!freezeLiveContentWhenCaptured && capturedLegacyFrameAvailable),
             )
             val fallback = matchingFrames?.let { Color(it.fallbackArgb) } ?: Color(0xFF10151D)
             drawRect(fallback.copy(alpha = 1f))
@@ -419,7 +463,7 @@ internal fun Modifier.flueBackdropFill(
 
         // 仅保留给 API 27-30 的预制帧兼容分支；API 31+ 外部/视频表盘走下面
         // 的真实 PixelCopy 当前帧，不再允许 preview.jpg 或视频首帧插进来。
-        val preparedHardwareFrames = legacyFrames?.takeIf {
+        val preparedHardwareFrames = preparedFrames?.takeIf {
             legacyBackdropViewportMatches(it.viewportWidth, it.viewportHeight, layerSize)
         }
         if (preparedHardwareFrames != null) {
@@ -430,7 +474,8 @@ internal fun Modifier.flueBackdropFill(
                 } == true
             val drawLiveContent = shouldDrawLiveBackdropContent(
                 overlayActive = freezeLiveContentWhenCaptured,
-                capturedFrameAvailable = preparedFrameAvailable,
+                capturedFrameAvailable = sessionCapturedAvailable ||
+                    (!freezeLiveContentWhenCaptured && preparedFrameAvailable),
             )
             val preparedScale = (contentScale?.invoke() ?: (1f - 0.08f * p))
                 .coerceIn(0.01f, 1f)
@@ -515,7 +560,8 @@ internal fun Modifier.flueBackdropFill(
         }
         val liveContentFrozen = !shouldDrawLiveBackdropContent(
             overlayActive = freezeLiveContentWhenCaptured,
-            capturedFrameAvailable = captureState.hasFrame,
+            capturedFrameAvailable = sessionCapturedAvailable ||
+                (!freezeLiveContentWhenCaptured && captureState.hasFrame),
         )
         // 真实内容只负责推进内部弹簧/时钟，随后被完整不透明的单层扩边画面
         // 覆盖，不会再与回填层同时出现在屏幕上。

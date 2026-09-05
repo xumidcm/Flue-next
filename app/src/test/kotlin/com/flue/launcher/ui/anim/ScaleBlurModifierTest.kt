@@ -9,6 +9,52 @@ import org.junit.Test
 
 class ScaleBlurModifierTest {
     @Test
+    fun backdropKeepsTheCompleteFrameObjectUntilTheOverlayCloses() {
+        val session = BackdropFrameSession<Any>()
+        val first = Any()
+        val late = Any()
+        org.junit.Assert.assertSame(first, session.select(false, first))
+        org.junit.Assert.assertSame(first, session.select(true, first))
+        org.junit.Assert.assertSame(first, session.select(true, late))
+        org.junit.Assert.assertSame(late, session.select(false, late))
+        org.junit.Assert.assertSame(late, session.select(true, late))
+    }
+
+    @Test
+    fun backdropWithoutACompleteFrameKeepsLiveContentForTheWholeGesture() {
+        val session = BackdropFrameSession<Any>()
+        org.junit.Assert.assertNull(session.select(true, null))
+        org.junit.Assert.assertNull(session.select(true, Any()))
+        val ready = Any()
+        org.junit.Assert.assertSame(ready, session.select(false, ready))
+    }
+
+    @Test
+    fun resizingAnOpenOverlayDiscardsItsFrameUntilTheNextSession() {
+        val session = BackdropFrameSession<IntSize>()
+        val original = IntSize(408, 502)
+        val resized = IntSize(502, 408)
+        assertEquals(original, session.select(true, original) { it == original })
+        org.junit.Assert.assertNull(session.select(true, resized) { it == resized })
+        org.junit.Assert.assertNull(session.select(true, original) { it == original })
+        assertEquals(resized, session.select(false, resized) { it == resized })
+    }
+
+    @Test
+    fun frozenContentStillSamplesTheCurrentAnimationFrame() {
+        val frame = LayerFrameSnapshot()
+        var current = LayerAnimValues()
+        frame.bind { current }
+        current = LayerAnimValues(scale = 0.92f, translationY = 0.03f)
+        // No graphicsLayer draw/update occurs while its content is frozen.
+        assertEquals(0.92f, frame.scale, 0f)
+        assertEquals(0.03f, frame.translationY, 0f)
+        assertTrue(frame.backdropProgress() > 0f)
+        current = LayerAnimValues()
+        assertEquals(0f, frame.backdropProgress(), 0f)
+    }
+
+    @Test
     fun preparedBackdropRecordingIsReusedUntilItsVisualInputsChange() {
         val state = PreparedBackdropRecordState()
 

@@ -1611,13 +1611,13 @@
         <item>Oops, it crashed Σ(ﾟДﾟ)</item>
         <item>Something went wrong (ﾟДﾟ;)</item>
         <item>Flue took a tumble (⊙_⊙)</item>
-        <item>Unexpected crash (°ロ°)☝</item>
+        <item>Unexpected crash</item>
     </string-array>
     <string-array name="crash_subtitles">
         <item>Copy the detailed error and send the reproduction steps to the developer. Σ(ﾟДﾟ)</item>
         <item>Stay calm, expand the log, and share the error details. (ﾟДﾟ;)</item>
         <item>This one really crashed; please bring the logs back. (⊙_⊙)</item>
-        <item>You can open Desktop settings or copy the log for help. (°ロ°)☝</item>
+        <item>You can open Desktop settings or copy the log for help.</item>
     </string-array>
     <string name="crash_open_desktop_settings">Desktop settings</string>
     <string name="watch_editor_global_script">Global script</string>

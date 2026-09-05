@@ -37,6 +37,26 @@ import java.time.Duration
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
 class NativeAppListRowViewBehaviorTest {
     @Test
+    fun unchangedSpatialTranslationDoesNotInvalidateIconContent() {
+        val row = NativeAppListRowView(RuntimeEnvironment.getApplication())
+        shadowOf(row).clearWasInvalidated()
+        repeat(30) { row.setFlowTranslation(0f, 0f) }
+        assertFalse(shadowOf(row).wasInvalidated())
+    }
+
+    @Test
+    fun spatialTransformKeepsRecordedContentReusable() {
+        val row = NativeAppListRowView(RuntimeEnvironment.getApplication())
+        shadowOf(row).clearWasInvalidated()
+        row.setFlowTranslation(12f, 18f)
+        row.setVisualScale(0.8f)
+        assertEquals(12f, row.translationX, 0f)
+        assertEquals(18f, row.translationY, 0f)
+        assertEquals(0.8f, row.scaleX, 0f)
+        assertFalse(shadowOf(row).wasInvalidated())
+    }
+
+    @Test
     fun nativeHostDisablesFrameworkOverscrollWhenOwningTheEdgeTranslation() {
         val view = NativeAppListView(RuntimeEnvironment.getApplication())
 

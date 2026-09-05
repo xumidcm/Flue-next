@@ -8,6 +8,25 @@ import org.junit.Test
 
 class AppListMotionPolicyTest {
     @Test
+    fun appListFaceShrinksAndSinksForBothStandardMotionModes() {
+        for (motion in FlueTransitionMotion.entries) {
+            val frame = faceLayerValues(com.flue.launcher.ui.navigation.ScreenState.Apps, motion)
+            assertEquals(0.92f, frame.scale, 0.0001f)
+            assertEquals(0.03f, frame.translationY, 0.0001f)
+        }
+    }
+
+    @Test
+    fun appListFaceStillRespectsDisabledShrinkAndLegacyMotion() {
+        val apps = com.flue.launcher.ui.navigation.ScreenState.Apps
+        val disabled = faceLayerValues(apps, FlueTransitionMotion.SCALE, shrinkOnFaceReturn = false)
+        assertEquals(1f, disabled.scale, 0f)
+        assertEquals(0f, disabled.translationY, 0f)
+        val legacy = faceLayerValues(apps, FlueTransitionMotion.SCALE, legacyTransition = true)
+        assertEquals(2.5f, legacy.scale, 0f)
+    }
+
+    @Test
     fun beta12AppleMotionUsesTheGoldenSingleLayerTimings() {
         val policy = appListLayerMotionPolicy(
             appleWatchStyle = true,

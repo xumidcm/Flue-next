@@ -122,7 +122,10 @@ fun faceLayerValues(
     } else if (motion == FlueTransitionMotion.SLIDE) {
         when (state) {
             ScreenState.Face -> LayerAnimValues(scale = 1f, blur = 0f, alpha = 1f)
-            ScreenState.Apps, ScreenState.Settings ->
+            ScreenState.Apps ->
+                LayerAnimValues(scale = 0.92f, blur = 7f, alpha = 0.22f, translationY = 0.03f)
+                    .shrinkGated(shrinkOnFaceReturn)
+            ScreenState.Settings ->
                 LayerAnimValues(scale = 1.22f, blur = 7f, alpha = 0.22f).shrinkGated(shrinkOnFaceReturn)
             ScreenState.App ->
                 LayerAnimValues(scale = 1.28f, blur = 9f, alpha = 0.14f).shrinkGated(shrinkOnFaceReturn)
@@ -142,22 +145,11 @@ fun faceLayerValues(
     } else {
         when (state) {
             ScreenState.Face -> LayerAnimValues(scale = 1f, blur = 0f, alpha = 1f)
-            // 返回表盘这一程改成与平移档同一套取值（老师指定）。
-            //
-            // 为什么连去程一起变了：这张表是**按状态**给目标值的，不按方向 —— 同一个
-            // `Apps` 值既是「离开表盘去列表」的终点，也是「从列表返回表盘」的起点，
-            // 弹簧只是反着跑同一段。所以「只改返回那一程」在这套结构下做不到，改端点
-            // 是唯一不产生跳变的做法（起点被静止态钉死，见下面 App 那条的注释）。
-            //
-            // 旧取值 `scale = 0.90 / blur = 14 / alpha = 0` 的问题正是老师要去掉的那种
-            // 观感：表盘从**完全不可见**且重度模糊里长出来。平移档那套（1.22 / 7 / 0.22）
-            // 是「从略大一点收回原位」，全程留着 22% 可见度，所以读起来是表盘一直在
-            // 那儿、只是退后了一点。
-            //
-            // 刻意只换这两条：Stack / Notifications / Widgets / ControlCenter 不是
-            // 「返回表盘」这一程（那是侧向覆层），应用列表层那张表也一个字没动 ——
-            // 老师说了「其他的动画不要改」。
-            ScreenState.Apps, ScreenState.Settings ->
+            // Both standard motion modes share the same reversible face transform.
+            ScreenState.Apps ->
+                LayerAnimValues(scale = 0.92f, blur = 7f, alpha = 0.22f, translationY = 0.03f)
+                    .shrinkGated(shrinkOnFaceReturn)
+            ScreenState.Settings ->
                 LayerAnimValues(scale = 1.22f, blur = 7f, alpha = 0.22f)
                     .shrinkGated(shrinkOnFaceReturn)
             ScreenState.App ->

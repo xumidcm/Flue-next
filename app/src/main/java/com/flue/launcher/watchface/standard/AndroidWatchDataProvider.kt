@@ -529,8 +529,7 @@ internal class AndroidWatchDataProvider(
                 Configuration.UI_MODE_NIGHT_YES,
             latitude = location?.latitude,
             longitude = location?.longitude,
-            // {aalt}。海拔不是传感器读数，是天气那次 Open-Meteo 请求顺带带回来的
-            // `elevation`（同一个响应里就有，不用再打一次网络）。
+            // {aalt} 只使用定位对象实际提供的海拔；中国天气未提供时保持缺失，按变量约定显示 0。
             altitudeMeters = location?.elevation,
         )
         slowState = fresh

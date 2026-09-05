@@ -458,6 +458,7 @@ internal class NativeAppListRowView(
     }
 
     fun setFlowTranslation(x: Float, y: Float) {
+        if (flowTranslationX == x && flowTranslationY == y) return
         flowTranslationX = x
         flowTranslationY = y
         applyCompositeTranslation()
@@ -505,15 +506,14 @@ internal class NativeAppListRowView(
         moveTranslationX + dragTranslationX
 
     private fun applyCompositeTranslation() {
-        translationX =
-            moveTranslationX + previewTranslationX + dragTranslationX + flowTranslationX
-        translationY =
+        val nextX = moveTranslationX + previewTranslationX + dragTranslationX + flowTranslationX
+        val nextY =
             moveTranslationY + previewTranslationY + dragTranslationY +
             flowTranslationY + contentTranslationY
-        // Translation is a RenderNode property, but cached icon effects on
-        // older watch hardware still need an explicit invalidation to commit
-        // the new composite transform in the same frame as MOVE.
-        invalidate()
+        // Transforms move the existing display list; content invalidation here
+        // re-records every visible grid icon on every scroll frame.
+        if (translationX != nextX) translationX = nextX
+        if (translationY != nextY) translationY = nextY
     }
 
     private fun updateInteractionScale() {
@@ -546,9 +546,8 @@ internal class NativeAppListRowView(
 
     private fun applyCompositeScale() {
         val scale = visualScale * interactionScale
-        scaleX = scale
-        scaleY = scale
-        invalidate()
+        if (scaleX != scale) scaleX = scale
+        if (scaleY != scale) scaleY = scale
     }
 
     fun normalizedIconOrigin(viewport: RecyclerView): NormalizedPoint {

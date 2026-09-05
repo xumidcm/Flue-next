@@ -2353,7 +2353,6 @@ private fun OneShotMarqueeText(
                 // started. Rewinding by one cycle is therefore visually identical and avoids
                 // inserting a blank viewport between copies.
                 marqueeScrollState.scrollTo(0)
-                delay(MUSIC_TEXT_MARQUEE_END_HOLD_MS)
                 val repeatScrollDurationMs = mediaMarqueeDurationMs(restingTargetPx, density.density, minimumMs = 900)
                 marqueeScrollState.animateScrollTo(
                     value = restingTargetPx,

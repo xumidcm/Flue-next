@@ -78,6 +78,8 @@ data class LegacyWatchFaceBackdropFrames(
     val allocationBytes: Int,
     /** PixelCopy generation used to produce [clear], or MIN_VALUE for fallback media. */
     val capturedGeneration: Long = Long.MIN_VALUE,
+    val visualKey: String = "",
+    val hasPreparedBlur: Boolean = true,
 )
 
 /** A real, already-composited launcher watch-face frame captured while idle. */
@@ -364,8 +366,11 @@ private object LegacyBackdropFrameCache {
         lastSuccessful = value
     }
 
-    fun lastSuccessfulFor(width: Int, height: Int): LegacyWatchFaceBackdropFrames? =
-        lastSuccessful?.takeIf { it.viewportWidth == width && it.viewportHeight == height }
+    fun lastSuccessfulFor(width: Int, height: Int, visualKey: String, prepareBlur: Boolean): LegacyWatchFaceBackdropFrames? =
+        lastSuccessful?.takeIf {
+            it.viewportWidth == width && it.viewportHeight == height &&
+                it.visualKey == visualKey && it.hasPreparedBlur == prepareBlur
+        }
 }
 
 @Composable
@@ -381,13 +386,13 @@ internal fun rememberLegacyWatchFaceBackdropFrames(
     viewportSize: IntSize?,
     advancedMaterialEnabled: Boolean = true,
 ): LegacyWatchFaceBackdropFrames? {
-    // 高级材质关闭时，Android 12+ 也回落到与 Android 12 以下相同的预制三联帧。
-    // 这样关闭开关不会变成“完全没有模糊”，只是换成低成本的旧实现。
-    val needsPreparedFrames = overlayBlurBackend(
+    // System blur only needs an opaque clear capture with mirrored edges.
+    // Older systems additionally prepare the two tinted blur variants off-thread.
+    val prepareCpuBlur = overlayBlurBackend(
         sdkInt = Build.VERSION.SDK_INT,
         advancedMaterialEnabled = advancedMaterialEnabled,
     ) == OverlayBlurBackend.LEGACY
-    if (!needsPreparedFrames) return null
+    if (!prepareCpuBlur && capturedFrame == null) return null
 
     val measuredViewport = viewportSize?.takeIf { it.width > 0 && it.height > 0 }
         ?: return null
@@ -413,14 +418,14 @@ internal fun rememberLegacyWatchFaceBackdropFrames(
     val captureSignature = matchingCapture?.let {
         "pixel-copy:${it.boundsKey}:${it.generation}"
     } ?: "fallback"
-    val cacheKey = "${source.key}|$captureSignature|${targetWidth}x${targetHeight}"
+    val cacheKey = "${source.key}|$captureSignature|${targetWidth}x${targetHeight}|cpu:$prepareCpuBlur"
 
     return produceState(
         // Keep the last complete triplet while a newly selected face is being
         // decoded. A stale blurred cover for a few frames is far less jarring
         // than the white/black fallback that previously flashed on API 27-30.
         initialValue = LegacyBackdropFrameCache.get(cacheKey)
-            ?: LegacyBackdropFrameCache.lastSuccessfulFor(targetWidth, targetHeight),
+            ?: LegacyBackdropFrameCache.lastSuccessfulFor(targetWidth, targetHeight, visualKey, prepareCpuBlur),
         key1 = cacheKey,
     ) {
         LegacyBackdropFrameCache.get(cacheKey)?.let { cached ->
@@ -435,13 +440,14 @@ internal fun rememberLegacyWatchFaceBackdropFrames(
                 targetHeight = targetHeight,
                 capturedBitmap = matchingCapture?.bitmap,
                 capturedGeneration = matchingCapture?.generation ?: Long.MIN_VALUE,
-            )
+                prepareCpuBlur = prepareCpuBlur,
+            )?.copy(visualKey = visualKey)
         }
         if (prepared != null) {
             LegacyBackdropFrameCache.put(cacheKey, prepared)
             value = prepared
         }
-    }.value
+    }.value?.takeIf { it.visualKey == visualKey && it.hasPreparedBlur == prepareCpuBlur }
 }
 
 private fun legacyBackdropSource(
@@ -486,12 +492,15 @@ private fun prepareLegacyBackdropFrames(
     targetHeight: Int,
     capturedBitmap: Bitmap? = null,
     capturedGeneration: Long = Long.MIN_VALUE,
+    prepareCpuBlur: Boolean = true,
 ): LegacyWatchFaceBackdropFrames? {
     val capturedCopy = capturedBitmap?.let { bitmap ->
         synchronized(bitmap) {
             if (bitmap.isRecycled) null else bitmap.copy(Bitmap.Config.ARGB_8888, false)
         }
     }
+    // A retired capture must not produce a preview tagged as real captured pixels.
+    if (capturedBitmap != null && capturedCopy == null) return null
     val decoded = capturedCopy ?: when (source.kind) {
         LegacyBackdropSourceKind.IMAGE -> source.path?.let {
             decodeSampledBitmap(context, it, targetWidth, targetHeight)
@@ -523,10 +532,10 @@ private fun prepareLegacyBackdropFrames(
     val clearBitmap = createMirroredOverscan(viewportBitmap, overscanX, overscanY)
     if (viewportBitmap !== clearBitmap && !viewportBitmap.isRecycled) viewportBitmap.recycle()
 
-    val stronglyBlurred = createStrongBlur(clearBitmap)
-    val lightBlurred = tintBitmap(stronglyBlurred, android.graphics.Color.WHITE, 0.12f)
-    val darkBlurred = tintBitmap(stronglyBlurred, android.graphics.Color.BLACK, 0.28f)
-    if (stronglyBlurred !== lightBlurred && stronglyBlurred !== darkBlurred && !stronglyBlurred.isRecycled) {
+    val stronglyBlurred = if (prepareCpuBlur) createStrongBlur(clearBitmap) else clearBitmap
+    val lightBlurred = if (prepareCpuBlur) tintBitmap(stronglyBlurred, android.graphics.Color.WHITE, 0.12f) else clearBitmap
+    val darkBlurred = if (prepareCpuBlur) tintBitmap(stronglyBlurred, android.graphics.Color.BLACK, 0.28f) else clearBitmap
+    if (stronglyBlurred !== clearBitmap && stronglyBlurred !== lightBlurred && stronglyBlurred !== darkBlurred && !stronglyBlurred.isRecycled) {
         stronglyBlurred.recycle()
     }
     val averageArgb = averageOpaqueColor(darkBlurred)
@@ -540,9 +549,9 @@ private fun prepareLegacyBackdropFrames(
         overscanY = overscanY,
         fallbackArgb = averageArgb,
         allocationBytes = clearBitmap.allocationByteCount +
-            lightBlurred.allocationByteCount +
-            darkBlurred.allocationByteCount,
+            if (prepareCpuBlur) lightBlurred.allocationByteCount + darkBlurred.allocationByteCount else 0,
         capturedGeneration = capturedGeneration,
+        hasPreparedBlur = prepareCpuBlur,
     )
 }
 

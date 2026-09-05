@@ -522,6 +522,7 @@ private fun SettingsRootScreen(
     var weatherTemperatureUnit by remember(weatherRepository) {
         mutableStateOf(weatherRepository.temperatureUnit())
     }
+    var weatherLocationSelectionGeneration by remember { mutableStateOf(0L) }
     var weatherCityDialogVisible by remember { mutableStateOf(false) }
     var weatherCityDraft by remember { mutableStateOf("") }
     var weatherCityCandidates by remember { mutableStateOf<List<WatchWeatherLocation>>(emptyList()) }
@@ -764,17 +765,19 @@ private fun SettingsRootScreen(
         }
     }
     fun resolveAndUseSystemWeatherLocation() {
+        val selectionGeneration = ++weatherLocationSelectionGeneration
         settingsScope.launch {
             val resolved = withContext(Dispatchers.IO) {
                 runCatching { weatherRepository.resolveSystemLocation() }.getOrNull()
             }
+            if (selectionGeneration != weatherLocationSelectionGeneration) return@launch
             if (resolved != null) {
-                weatherRepository.useSystemLocation(resolved)
-                weatherLocationLabel = resolved.label.orEmpty()
+                if (!weatherRepository.useSystemLocation(resolved)) return@launch
+                weatherLocationLabel = resolved.city.label.orEmpty()
                 weatherUsingSystemLocation = true
                 Toast.makeText(
                     context,
-                    resolved.label?.takeIf(String::isNotBlank)?.let { label ->
+                    resolved.city.label?.takeIf(String::isNotBlank)?.let { label ->
                         context.getString(R.string.toast_weather_system_location_resolved_fmt, label)
                     } ?: context.getString(R.string.toast_weather_system_location),
                     Toast.LENGTH_SHORT,
@@ -4956,6 +4959,7 @@ private fun SettingsRootScreen(
                             TextButton(
                                 modifier = Modifier.fillMaxWidth(),
                                 onClick = {
+                                    weatherLocationSelectionGeneration++
                                     weatherRepository.setManualLocation(candidate)
                                     weatherLocationLabel = candidate.label.orEmpty()
                                     weatherUsingSystemLocation = false

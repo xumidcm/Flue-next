@@ -502,10 +502,6 @@
     <string name="heart_rate_permission_rationale_close">返回</string>
     <string name="settings_watch_weather">表盘天气</string>
     <string name="settings_watch_weather_sub">设置标准与 JB 表盘共用的天气位置和温度单位</string>
-    <string name="settings_watch_weather_provider">中国天气源</string>
-    <string name="settings_watch_weather_provider_china_sub">默认；北京天气、彩云天气与环境监测公开数据，无需填写 API key</string>
-    <string name="settings_watch_weather_provider_open_meteo">Open-Meteo</string>
-    <string name="settings_watch_weather_provider_open_meteo_sub">全球免 API key 天气源；中国源失败时自动兜底</string>
     <string name="settings_watch_weather_city">手动城市</string>
     <string name="settings_watch_weather_city_selected_fmt">当前使用：%s</string>
     <string name="settings_watch_weather_city_system">当前使用系统粗略定位</string>
@@ -1653,13 +1649,13 @@
         <item>哎呀，崩溃了 Σ(ﾟДﾟ)</item>
         <item>糟糕，出错了 (ﾟДﾟ;)</item>
         <item>桌面罢工了 (⊙_⊙)</item>
-        <item>发生意外了 (°ロ°)☝</item>
+        <item>发生意外了</item>
     </string-array>
     <string-array name="crash_subtitles">
         <item>请复制详细错误并提供复现步骤给开发者。Σ(ﾟДﾟ)</item>
         <item>别慌，展开日志后把错误信息交给开发者。(ﾟДﾟ;)</item>
         <item>这次真的崩溃了，请把现场日志带回来。(⊙_⊙)</item>
-        <item>可以先打开桌面设置，也可以复制日志求助。(°ロ°)☝</item>
+        <item>可以先打开桌面设置，也可以复制日志求助。</item>
     </string-array>
     <string name="crash_open_desktop_settings">桌面设置</string>
     <!-- ═══ 圆角矩形图层 ═══ -->

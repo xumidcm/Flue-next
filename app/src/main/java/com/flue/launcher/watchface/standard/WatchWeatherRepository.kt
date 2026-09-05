@@ -18,11 +18,15 @@ import java.net.HttpURLConnection
 import java.net.URL
 import java.net.URLEncoder
 import java.util.Locale
+import java.time.Instant
+import java.time.OffsetDateTime
+import java.time.LocalDateTime
+import java.time.ZoneId
+import java.time.temporal.ChronoUnit
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executor
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
-import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.math.abs
 
@@ -31,20 +35,31 @@ data class WatchWeatherLocation(
     val latitude: Double,
     val longitude: Double,
     val label: String? = null,
-    /**
-     * {aalt} 的海拔（米）。
-     *
-     * 不是传感器读数，也不是 `Location.getAltitude()`（手表大多没有气压计，那个值常年是
-     * 0）—— 而是 Open-Meteo 响应顶层就带的 `elevation`，即该坐标处地形的海拔。天气请求
-     * 本来就在打那个接口，顺手取回来即可，不额外发一次网络。
-     *
-     * null 表示还没刷过天气；渲染侧会按上游口径当 0 处理。
-     */
+    /** Optional elevation supplied with this location; absent values remain unavailable. */
     val elevation: Double? = null,
+    val chinaLocationKey: String? = null,
 ) {
     init {
         require(latitude.isFinite() && latitude in -90.0..90.0) { "latitude out of range" }
         require(longitude.isFinite() && longitude in -180.0..180.0) { "longitude out of range" }
+    }
+}
+
+/** Complete facts carried from system-location lookup to the user's selection action. */
+data class ResolvedSystemWeatherLocation internal constructor(
+    val city: WatchWeatherLocation,
+    val rawLocation: WatchWeatherLocation,
+    val resolvedAnchor: WatchWeatherLocation,
+    internal val selectionRevision: Long,
+)
+
+enum class WatchWeatherProvider {
+    CHINA;
+
+    companion object {
+        @Suppress("UNUSED_PARAMETER")
+        fun fromRaw(raw: String?): WatchWeatherProvider =
+            CHINA
     }
 }
 
@@ -104,7 +119,7 @@ fun interface WatchWeatherHttpTransport {
  * non-blocking on the renderer thread: [snapshot] returns the last good value
  * immediately and schedules a refresh when the soft TTL expires.
  *
- * The default order is met.no compact forecast, then Open-Meteo (no API key).
+ * China is the only forecast and city-search source.
  * A coarse last-known location is used only when the app already has location
  * permission. Otherwise [setManualLocation] is the explicit fallback.
  */
@@ -120,7 +135,9 @@ class WatchWeatherRepository(
     private val refreshExecutor = Executors.newSingleThreadExecutor { runnable ->
         Thread(runnable, "flue-weather-refresh").apply { isDaemon = true }
     }
-    private val refreshInFlight = AtomicBoolean(false)
+    private var refreshInFlight = false
+    private var pendingRefreshAtMs: Long? = null
+    private var refreshingRevision = -1L
     private val locationCacheLock = Any()
     private var locationRevision = 0L
 
@@ -137,33 +154,32 @@ class WatchWeatherRepository(
     private var systemLocationValue: WatchWeatherLocation? = readSystemLocation()
 
     @Volatile
-    private var systemLocationLabelValue: String? = systemLocationValue?.label
+    private var systemRawLocationValue: WatchWeatherLocation? = readSystemRawLocation()
+
+    @Volatile
+    private var systemResolvedAnchorValue: WatchWeatherLocation? = readSystemResolvedAnchor()
 
     @Volatile
     private var temperatureUnitValue: WatchTemperatureUnit = readTemperatureUnit()
 
     init {
+        migrateChinaProvider()
         loadPersistedSnapshot()?.let { (snapshot, receivedAtEpochMs) ->
             cache.update(snapshot, receivedAtEpochMs)
         }
     }
 
-    override fun snapshot(nowEpochMs: Long): WatchWeatherSnapshot? {
+    override fun snapshot(nowEpochMs: Long): WatchWeatherSnapshot? = synchronized(locationCacheLock) {
         val cached = cache.snapshot(nowEpochMs)
-        val shouldRefresh = cached == null ||
-            lastRefreshAttemptMs == Long.MIN_VALUE ||
-            (nowEpochMs >= lastRefreshAttemptMs &&
-                nowEpochMs - lastRefreshAttemptMs >= softTtlMs)
-        if (shouldRefresh && nowEpochMs >= lastRefreshAttemptMs) {
-            scheduleRefresh(nowEpochMs)
-        }
-        // Temperature values stay canonical Celsius in the cache; only the
-        // presentation unit follows the user's app-wide preference.
-        return cached?.copy(displayUnit = temperatureUnitValue)
+        val shouldRefresh = lastRefreshAttemptMs == Long.MIN_VALUE ||
+            (nowEpochMs >= lastRefreshAttemptMs && nowEpochMs - lastRefreshAttemptMs >= softTtlMs)
+        if (shouldRefresh) scheduleRefresh(nowEpochMs)
+        cached?.copy(displayUnit = temperatureUnitValue)
     }
 
-    /** Returns the persisted unit used by standard/JB/editor weather tags. */
     fun temperatureUnit(): WatchTemperatureUnit = temperatureUnitValue
+
+    fun weatherProvider(): WatchWeatherProvider = WatchWeatherProvider.CHINA
 
     /** Persists a display preference without refetching or rewriting weather data. */
     fun setTemperatureUnit(unit: WatchTemperatureUnit) {
@@ -176,118 +192,55 @@ class WatchWeatherRepository(
         setTemperatureUnit(WatchTemperatureUnit.fromRaw(raw))
     }
 
-    /** Persists a user-selected city/coordinate fallback without requesting location permission. */
+    /** Persists a selected city or a legacy coordinate while preserving manual mode. */
     fun setManualLocation(location: WatchWeatherLocation?) {
-        manualLocation = location
-        manualCityValue = null
-        systemLocationValue = null
-        systemLocationLabelValue = null
-        val editor = preferences.edit()
-        if (location == null) {
-            editor.remove(KEY_LABEL).remove(KEY_LATITUDE).remove(KEY_LONGITUDE).remove(KEY_CITY)
-        } else {
-            editor.putString(KEY_LABEL, location.label)
-                .putString(KEY_LATITUDE, location.latitude.toString())
-                .putString(KEY_LONGITUDE, location.longitude.toString())
-                .remove(KEY_CITY)
+        synchronized(locationCacheLock) {
+            manualLocation = location
+            manualCityValue = null
+            systemLocationValue = null
+            systemRawLocationValue = null
+            systemResolvedAnchorValue = null
+            val editor = preferences.edit().remove(KEY_CITY)
+            writeManualLocation(editor, location)
+            removeSystemLocation(editor)
+            editor.apply()
+            invalidateWeatherForLocationChange()
         }
-        editor.remove(KEY_SYSTEM_LOCATION_LABEL)
-            .remove(KEY_SYSTEM_LATITUDE)
-            .remove(KEY_SYSTEM_LONGITUDE)
-        editor.apply()
-        invalidateWeatherForLocationChange()
         requestRefresh()
     }
 
-    /**
-     * Sets a manual city name. It is resolved through Open-Meteo's no-key
-     * geocoding endpoint on the weather worker, then the coordinates and
-     * resolved label are cached in preferences.
-     */
+    /** Resolves a legacy manual city using the China city-search endpoint. */
     fun setManualCity(city: String?) {
         val normalized = city?.trim()?.takeIf(String::isNotEmpty)?.take(120)
-        manualCityValue = normalized
-        manualLocation = null
-        systemLocationValue = null
-        systemLocationLabelValue = null
-        preferences.edit()
-            .remove(KEY_LABEL)
-            .remove(KEY_LATITUDE)
-            .remove(KEY_LONGITUDE)
-            .apply {
-                if (normalized == null) remove(KEY_CITY) else putString(KEY_CITY, normalized)
-            }
-            .remove(KEY_SYSTEM_LOCATION_LABEL)
-            .remove(KEY_SYSTEM_LATITUDE)
-            .remove(KEY_SYSTEM_LONGITUDE)
-            .apply()
-        invalidateWeatherForLocationChange()
+        synchronized(locationCacheLock) {
+            manualCityValue = normalized
+            manualLocation = null
+            systemLocationValue = null
+            systemRawLocationValue = null
+            systemResolvedAnchorValue = null
+            val editor = preferences.edit()
+            writeManualLocation(editor, null)
+            if (normalized == null) editor.remove(KEY_CITY) else editor.putString(KEY_CITY, normalized)
+            removeSystemLocation(editor)
+            editor.apply()
+            invalidateWeatherForLocationChange()
+        }
         requestRefresh()
     }
 
     fun manualCity(): String? = manualCityValue
 
-    /** Label shown in settings for either a selected candidate or system location. */
-    fun activeLocationLabel(): String? =
-        manualLocation?.label ?: manualCityValue ?: systemLocationLabelValue
-
-    fun isUsingSystemLocation(): Boolean = manualLocation == null && manualCityValue == null
-
-    /**
-     * 当前生效的坐标（手动选点优先，否则用已缓存的系统定位）。
-     *
-     * 给 `{alat}` / `{alon}` / `{aalt}` 一族用：那几个变量与天气**共用同一份已授权的
-     * 定位**，绝不为它们再单独申请一次位置权限，也不在这里发起新的定位请求 —— 只读
-     * 已经落盘的那份。授权引导由 UI 层走 [WatchLocationPermissionPolicy]。
-     *
-     * 返回 null 时渲染侧按上游口径给 0（clox 的 `WF.location.latitude or 0`），
-     * 不再显示 `--`。
-     */
-    internal fun activeLocation(): WatchWeatherLocation? {
-        val base = manualLocation ?: readSystemLocation() ?: return null
-        if (base.elevation != null) return base
-        return base.copy(elevation = persistedElevationFor(base))
+    fun activeLocationLabel(): String? = synchronized(locationCacheLock) {
+        manualLocation?.label ?: manualCityValue ?: systemLocationValue?.label
     }
 
-    /**
-     * 落盘的海拔，且**只在坐标对得上时才认**。
-     *
-     * 海拔是「某一个坐标处的地形高度」，换了城市就是另一个数。所以连它所属的坐标一起
-     * 存、读的时候比一遍 —— 与 [loadPersistedSnapshot] 校验 `sourceLatitude` 同一个
-     * 道理：宁可让 {aalt} 显示 0，也不能把上海的海拔挂在拉萨的坐标上。
-     *
-     * 坐标变了不必主动清理：这里比对一次就自然失配，而下一次天气刷新（软 TTL 15 分钟，
-     * 且换地点会立刻 requestRefresh）就会写入新坐标的海拔。
-     */
-    private fun persistedElevationFor(location: WatchWeatherLocation): Double? {
-        val elevation = preferences.getString(KEY_ELEVATION, null)
-            ?.toDoubleOrNull()
-            ?.takeIf(Double::isFinite)
-            ?: return null
-        val latitude = preferences.getString(KEY_ELEVATION_LATITUDE, null)?.toDoubleOrNull()
-            ?: return null
-        val longitude = preferences.getString(KEY_ELEVATION_LONGITUDE, null)?.toDoubleOrNull()
-            ?: return null
-        if (
-            abs(latitude - location.latitude) > ELEVATION_LOCATION_TOLERANCE_DEGREES ||
-            abs(longitude - location.longitude) > ELEVATION_LOCATION_TOLERANCE_DEGREES
-        ) return null
-        return elevation
+    fun isUsingSystemLocation(): Boolean = synchronized(locationCacheLock) {
+        manualLocation == null && manualCityValue == null
     }
 
-    /** 把 Open-Meteo 那个 `elevation` 连同它所属的坐标一起写下来。 */
-    private fun persistElevation(location: WatchWeatherLocation, elevation: Double?) {
-        val editor = preferences.edit()
-        if (elevation == null || !elevation.isFinite()) {
-            editor.remove(KEY_ELEVATION)
-                .remove(KEY_ELEVATION_LATITUDE)
-                .remove(KEY_ELEVATION_LONGITUDE)
-        } else {
-            editor.putString(KEY_ELEVATION, elevation.toString())
-                .putString(KEY_ELEVATION_LATITUDE, location.latitude.toString())
-                .putString(KEY_ELEVATION_LONGITUDE, location.longitude.toString())
-        }
-        editor.apply()
+    /** Location tags read the fix separately from the China forecast city's coordinates. */
+    internal fun activeLocation(): WatchWeatherLocation? = synchronized(locationCacheLock) {
+        manualLocation ?: systemRawLocationValue ?: systemLocationValue
     }
 
     /**
@@ -295,131 +248,219 @@ class WatchWeatherRepository(
      * callers must invoke it off the main thread and persist only a chosen item.
      */
     fun searchLocations(query: String, limit: Int = 8): List<WatchWeatherLocation> {
-        val normalized = query.trim().take(120)
+        val normalized = normalizeWatchWeatherCityQuery(query)
         if (normalized.isBlank()) return emptyList()
         val safeLimit = limit.coerceIn(1, 10)
         val encoded = URLEncoder.encode(normalized, Charsets.UTF_8.name())
-        val language = Locale.getDefault().language.takeIf(String::isNotBlank) ?: "en"
-        val url = "https://geocoding-api.open-meteo.com/v1/search" +
-            "?name=$encoded&count=$safeLimit&language=$language&format=json"
-        val response = transport.get(url, USER_AGENT) ?: return emptyList()
-        return parseWatchWeatherLocationSearch(response, normalized, safeLimit)
+        return transport.get(
+            "https://weatherapi.market.xiaomi.com/wtr-v3/location/city/search" +
+                "?name=$encoded&locale=zh_CN",
+            USER_AGENT,
+        )?.let { parseChinaWatchWeatherLocationSearch(it, normalized, safeLimit) }.orEmpty()
     }
 
-    /** Requests a fresh coarse location, then falls back to the newest cached fix. */
-    fun resolveSystemLocation(): WatchWeatherLocation? {
-        val raw = locationSource?.current()
-            ?: readCurrentLocation()
-            ?: readLastKnownLocation()
-            ?: systemLocationValue
-            ?: return null
-        if (!raw.label.isNullOrBlank()) return raw
-        val label = matchingPersistedSystemLabel(raw) ?: reverseGeocodeLabel(raw)
-        return raw.copy(label = label)
+    /** Reads a fix and resolves its China identity without changing the current selection. */
+    fun resolveSystemLocation(): ResolvedSystemWeatherLocation? {
+        val request = synchronized(locationCacheLock) { refreshRequest(System.currentTimeMillis()) }
+        val raw = currentSystemFix(request.systemRawLocation ?: request.systemResolvedAnchor ?: request.systemLocation) ?: return null
+        val resolved = resolveChinaLocation(raw, request.systemLocation, request.systemResolvedAnchor) ?: return null
+        return synchronized(locationCacheLock) {
+            if (request.revision != locationRevision) null else ResolvedSystemWeatherLocation(
+                city = resolved.city,
+                rawLocation = raw,
+                resolvedAnchor = resolved.anchor,
+                selectionRevision = request.revision,
+            )
+        }
     }
 
-    /** Switches the repository to system location after UI-side resolution succeeds. */
-    fun useSystemLocation(location: WatchWeatherLocation) {
-        manualLocation = null
-        manualCityValue = null
-        val normalized = location.copy(
-            label = location.label?.trim()?.takeIf(String::isNotEmpty),
-        )
-        systemLocationValue = normalized
-        systemLocationLabelValue = normalized.label
-        preferences.edit()
-            .remove(KEY_LABEL)
-            .remove(KEY_LATITUDE)
-            .remove(KEY_LONGITUDE)
-            .remove(KEY_CITY)
-            .apply {
-                val label = systemLocationLabelValue
-                if (label == null) remove(KEY_SYSTEM_LOCATION_LABEL)
-                else putString(KEY_SYSTEM_LOCATION_LABEL, label)
+    /** Applies the original fix and its China identity together, without requiring a second fix. */
+    fun useSystemLocation(resolved: ResolvedSystemWeatherLocation): Boolean {
+        val applied = synchronized(locationCacheLock) {
+            if (resolved.selectionRevision != locationRevision) false else {
+                applySystemLocation(resolved.city, resolved.rawLocation, resolved.resolvedAnchor)
+                true
             }
-            .putString(KEY_SYSTEM_LATITUDE, normalized.latitude.toString())
-            .putString(KEY_SYSTEM_LONGITUDE, normalized.longitude.toString())
-            .apply()
-        invalidateWeatherForLocationChange()
+        }
+        if (applied) requestRefresh()
+        return applied
+    }
+
+    /** Compatibility boundary for hosts that explicitly inject only a resolved city. */
+    fun useSystemLocation(location: WatchWeatherLocation) {
+        synchronized(locationCacheLock) { applySystemLocation(location, null, null) }
         requestRefresh()
     }
 
-    fun clearCache() {
+    /** Caller holds locationCacheLock so selection, coordinates and revision change atomically. */
+    private fun applySystemLocation(
+        city: WatchWeatherLocation,
+        raw: WatchWeatherLocation?,
+        anchor: WatchWeatherLocation?,
+    ) {
+        manualLocation = null
+        manualCityValue = null
+        systemLocationValue = city.copy(label = city.label?.trim()?.takeIf(String::isNotEmpty))
+        systemRawLocationValue = raw?.copy(chinaLocationKey = null)
+        systemResolvedAnchorValue = anchor?.copy(chinaLocationKey = null)
+        val editor = preferences.edit().remove(KEY_CITY)
+        writeManualLocation(editor, null)
+        writeSystemLocation(editor, systemLocationValue!!, systemRawLocationValue, systemResolvedAnchorValue)
+        editor.apply()
+        invalidateWeatherForLocationChange()
+    }
+
+    fun clearCache() = synchronized(locationCacheLock) {
         cache.clear()
         preferences.edit().remove(KEY_CACHE_JSON).remove(KEY_CACHE_RECEIVED_AT).apply()
     }
 
     private fun invalidateWeatherForLocationChange() {
-        synchronized(locationCacheLock) {
-            locationRevision++
-            clearCache()
-        }
+        locationRevision++
+        clearCache()
     }
 
-    /** Forces the next cache read to schedule a foreground/background refresh. */
     fun requestRefresh(nowEpochMs: Long = System.currentTimeMillis()) {
-        lastRefreshAttemptMs = Long.MIN_VALUE
-        scheduleRefresh(nowEpochMs)
+        scheduleRefresh(nowEpochMs, force = true)
     }
 
-    private fun scheduleRefresh(nowEpochMs: Long) {
-        if (!refreshInFlight.compareAndSet(false, true)) return
-        val scheduledRevision = synchronized(locationCacheLock) { locationRevision }
-        lastRefreshAttemptMs = nowEpochMs
+    private data class RefreshRequest(
+        val revision: Long,
+        val nowEpochMs: Long,
+        val manualLocation: WatchWeatherLocation?,
+        val manualCity: String?,
+        val systemLocation: WatchWeatherLocation?,
+        val systemRawLocation: WatchWeatherLocation?,
+        val systemResolvedAnchor: WatchWeatherLocation?,
+    )
+
+    /** Caller holds locationCacheLock, so selection and revision are one atomic snapshot. */
+    private fun refreshRequest(nowEpochMs: Long) = RefreshRequest(
+        locationRevision, nowEpochMs, manualLocation, manualCityValue, systemLocationValue, systemRawLocationValue, systemResolvedAnchorValue,
+    )
+
+    private fun scheduleRefresh(nowEpochMs: Long, force: Boolean = false) {
+        val initial = synchronized(locationCacheLock) {
+            if (refreshInFlight) {
+                if (force || refreshingRevision != locationRevision) pendingRefreshAtMs = nowEpochMs
+                return
+            }
+            refreshInFlight = true
+            refreshingRevision = locationRevision
+            lastRefreshAttemptMs = nowEpochMs
+            refreshRequest(nowEpochMs)
+        }
         refreshExecutor.execute {
-            try {
-                val city = manualCityValue
-                val location = manualLocation
-                    ?: if (city != null) geocodeManualCity(city) else {
-                        val raw = locationSource?.current()
-                            ?: readCurrentLocation()
-                            ?: readLastKnownLocation()
-                            ?: systemLocationValue
-                        raw?.let(::refreshSystemLocationIdentity)
+            var request = initial
+            while (true) {
+                runCatching { refresh(request) }
+                request = synchronized(locationCacheLock) {
+                    val pending = pendingRefreshAtMs
+                    pendingRefreshAtMs = null
+                    if (pending == null) {
+                        refreshInFlight = false
+                        return@execute
                     }
-                if (location == null) return@execute
-                val met = runCatching { fetchMetNo(location, nowEpochMs) }.getOrNull()
-                // met.no is authoritative for the current observation. Its
-                // compact endpoint has no daily extrema, so enrich it with
-                // Open-Meteo daily data when available; Open-Meteo remains a
-                // complete fallback when met.no is unavailable.
-                val open = runCatching { fetchOpenMeteo(location, nowEpochMs) }.getOrNull()
-                val refreshed = when {
-                    met == null -> open
-                    open == null -> met
-                    else -> met.copy(
-                        temperatureCelsius = met.temperatureCelsius ?: open.temperatureCelsius,
-                        highCelsius = met.highCelsius ?: open.highCelsius,
-                        lowCelsius = met.lowCelsius ?: open.lowCelsius,
-                        forecast = if (met.forecast.isEmpty()) open.forecast else met.forecast,
-                        hourlyForecast = if (met.hourlyForecast.isEmpty()) {
-                            open.hourlyForecast
-                        } else {
-                            met.hourlyForecast
-                        },
-                        condition = met.condition ?: open.condition,
-                        icon = met.icon ?: open.icon,
-                        humidity = met.humidity ?: open.humidity,
-                        cloudCoverFraction = met.cloudCoverFraction ?: open.cloudCoverFraction,
-                        location = met.location ?: open.location,
-                        isDaytime = met.isDaytime ?: open.isDaytime,
-                    )
+                    refreshingRevision = locationRevision
+                    lastRefreshAttemptMs = pending
+                    refreshRequest(pending)
                 }
-                refreshed?.let { snapshot ->
-                    synchronized(locationCacheLock) {
-                        if (scheduledRevision != locationRevision) return@synchronized
-                        val canonical = canonicalWatchWeatherSnapshot(snapshot).copy(
-                            displayUnit = temperatureUnitValue,
-                        )
-                        cache.update(canonical, nowEpochMs)
-                        persistSnapshot(canonical, nowEpochMs, location)
-                    }
-                }
-            } finally {
-                refreshInFlight.set(false)
             }
         }
     }
+
+    private fun refresh(request: RefreshRequest) {
+        val systemMode = request.manualLocation == null && request.manualCity == null
+        var rawFix: WatchWeatherLocation? = null
+        val resolution = when {
+            request.manualLocation != null -> resolveChinaLocation(request.manualLocation)
+            request.manualCity != null -> searchLocations(request.manualCity, limit = 1).firstOrNull()
+                ?.let { ResolvedChinaLocation(it, it.copy(chinaLocationKey = null)) }
+            else -> {
+                rawFix = currentSystemFix(request.systemRawLocation ?: request.systemResolvedAnchor ?: request.systemLocation)
+                rawFix?.let { resolveChinaLocation(it, request.systemLocation, request.systemResolvedAnchor) }
+            }
+        }
+        val resolved = resolution?.city
+        synchronized(locationCacheLock) {
+            if (request.revision != locationRevision) return
+            if (resolved == null) {
+                rawFix?.let { fix ->
+                    // Location tags remain current even when the China city service fails.
+                    // This raw fix is not evidence that the previous city is still correct.
+                    systemRawLocationValue = fix.copy(chinaLocationKey = null)
+                    val editor = preferences.edit()
+                    writeSystemRawLocation(editor, systemRawLocationValue)
+                    editor.apply()
+                    if (!nearby(fix, request.systemResolvedAnchor)) clearCache()
+                }
+                return
+            }
+            val previous = if (systemMode) systemLocationValue else manualLocation
+            if (previous?.chinaLocationKey != resolved.chinaLocationKey) clearCache()
+            val editor = preferences.edit()
+            if (systemMode) {
+                systemLocationValue = resolved
+                systemRawLocationValue = rawFix?.copy(chinaLocationKey = null)
+                systemResolvedAnchorValue = resolution?.anchor
+                writeSystemLocation(editor, resolved, systemRawLocationValue, systemResolvedAnchorValue)
+            } else {
+                manualLocation = resolved
+                writeManualLocation(editor, resolved)
+            }
+            editor.apply()
+        }
+        val location = resolved ?: return
+        val refreshed = fetchChina(location, request.nowEpochMs) ?: return
+        synchronized(locationCacheLock) {
+            if (request.revision != locationRevision) return
+            val canonical = canonicalWatchWeatherSnapshot(refreshed).copy(displayUnit = temperatureUnitValue)
+            cache.update(canonical, request.nowEpochMs)
+            persistSnapshot(canonical, request.nowEpochMs, location)
+        }
+    }
+
+    private fun currentSystemFix(fallback: WatchWeatherLocation?): WatchWeatherLocation? =
+        locationSource?.current() ?: readCurrentLocation() ?: readLastKnownLocation() ?: fallback
+
+    private data class ResolvedChinaLocation(val city: WatchWeatherLocation, val anchor: WatchWeatherLocation)
+
+    /** The anchor moves only after a successful lookup, so small moves cannot accumulate unnoticed. */
+    private fun resolveChinaLocation(
+        raw: WatchWeatherLocation,
+        previousCity: WatchWeatherLocation? = null,
+        previousAnchor: WatchWeatherLocation? = null,
+    ): ResolvedChinaLocation? {
+        if (validChinaKey(raw.chinaLocationKey)) return ResolvedChinaLocation(raw, raw.copy(chinaLocationKey = null))
+        if (previousCity != null && previousAnchor != null && validChinaKey(previousCity.chinaLocationKey) && nearby(raw, previousAnchor)) {
+            return ResolvedChinaLocation(previousCity, previousAnchor)
+        }
+        val fromCoordinates = runCatching {
+            transport.get(
+                "https://weatherapi.market.xiaomi.com/wtr-v3/location/city/geo" +
+                    "?latitude=${raw.latitude}&longitude=${raw.longitude}&locale=zh_CN",
+                USER_AGENT,
+            )?.let { parseChinaWatchWeatherLocationSearch(it, "", 10) }.orEmpty()
+        }.getOrDefault(emptyList())
+        if (fromCoordinates.isNotEmpty()) return nearestLocation(raw, fromCoordinates)
+            ?.let { ResolvedChinaLocation(it, raw.copy(chinaLocationKey = null)) }
+        val label = raw.label ?: reverseGeocodeLabel(raw)
+        val queries = (chinaReverseGeocodeTerms(raw) + label.orEmpty().split(','))
+            .map(String::trim).filter(String::isNotEmpty).distinct()
+        val candidates = queries.flatMap { runCatching { searchLocations(it, 10) }.getOrDefault(emptyList()) }
+        return nearestLocation(raw, candidates)?.let { ResolvedChinaLocation(it, raw.copy(chinaLocationKey = null)) }
+    }
+
+    private fun nearestLocation(raw: WatchWeatherLocation, locations: List<WatchWeatherLocation>): WatchWeatherLocation? =
+        locations.minByOrNull { candidate ->
+            val dLat = candidate.latitude - raw.latitude
+            val dLon = candidate.longitude - raw.longitude
+            dLat * dLat + dLon * dLon
+        }
+
+    private fun nearby(first: WatchWeatherLocation, second: WatchWeatherLocation?): Boolean =
+        second != null && abs(first.latitude - second.latitude) <= SYSTEM_LOCATION_LABEL_TOLERANCE_DEGREES &&
+            abs(first.longitude - second.longitude) <= SYSTEM_LOCATION_LABEL_TOLERANCE_DEGREES
 
     @SuppressLint("MissingPermission")
     private fun readLastKnownLocation(): WatchWeatherLocation? {
@@ -585,11 +626,35 @@ class WatchWeatherRepository(
         ).filterNotNull().distinct().joinToString(", ").takeIf(String::isNotBlank)
     }
 
+    /** Returns the most specific Chinese reverse-geocoder names for system-location mapping. */
+    private fun chinaReverseGeocodeTerms(location: WatchWeatherLocation): List<String> = runCatching {
+        val latitude = String.format(Locale.US, "%.6f", location.latitude)
+        val longitude = String.format(Locale.US, "%.6f", location.longitude)
+        val root = transport.get(
+            "https://nominatim.openstreetmap.org/reverse" +
+                "?format=jsonv2&lat=$latitude&lon=$longitude&zoom=18&addressdetails=1" +
+                "&accept-language=zh-CN",
+            USER_AGENT,
+        )?.let(::JSONObject) ?: return@runCatching emptyList()
+        val address = root.optJSONObject("address") ?: return@runCatching emptyList()
+        listOf(
+            "town", "village", "municipality", "county", "city_district",
+            "city", "state_district", "state",
+        ).mapNotNull { key ->
+            address.optString(key).trim().takeIf(String::isNotEmpty)
+        }.distinct()
+    }.getOrDefault(emptyList())
+
     private fun readManualLocation(): WatchWeatherLocation? {
         val latitude = preferences.getString(KEY_LATITUDE, null)?.toDoubleOrNull() ?: return null
         val longitude = preferences.getString(KEY_LONGITUDE, null)?.toDoubleOrNull() ?: return null
         return runCatching {
-            WatchWeatherLocation(latitude, longitude, preferences.getString(KEY_LABEL, null))
+            WatchWeatherLocation(
+                latitude,
+                longitude,
+                preferences.getString(KEY_LABEL, null),
+                chinaLocationKey = preferences.getString(KEY_CHINA_LOCATION_KEY, null),
+            )
         }.getOrNull()
     }
 
@@ -601,37 +666,91 @@ class WatchWeatherRepository(
         val label = preferences.getString(KEY_SYSTEM_LOCATION_LABEL, null)
             ?.trim()
             ?.takeIf(String::isNotEmpty)
-        return runCatching { WatchWeatherLocation(latitude, longitude, label) }.getOrNull()
+        return runCatching {
+            WatchWeatherLocation(
+                latitude,
+                longitude,
+                label,
+                chinaLocationKey = preferences.getString(KEY_SYSTEM_CHINA_LOCATION_KEY, null),
+            )
+        }.getOrNull()
     }
 
-    private fun matchingPersistedSystemLabel(location: WatchWeatherLocation): String? {
-        val persisted = systemLocationValue ?: return null
-        if (
-            abs(persisted.latitude - location.latitude) > SYSTEM_LOCATION_LABEL_TOLERANCE_DEGREES ||
-            abs(persisted.longitude - location.longitude) > SYSTEM_LOCATION_LABEL_TOLERANCE_DEGREES
-        ) return null
-        return persisted.label?.trim()?.takeIf(String::isNotEmpty)
+    private fun readSystemRawLocation(): WatchWeatherLocation? =
+        readLocationCoordinates(KEY_SYSTEM_RAW_LATITUDE, KEY_SYSTEM_RAW_LONGITUDE)
+
+    private fun readSystemResolvedAnchor(): WatchWeatherLocation? =
+        readLocationCoordinates(KEY_SYSTEM_RESOLVED_ANCHOR_LATITUDE, KEY_SYSTEM_RESOLVED_ANCHOR_LONGITUDE)
+
+    private fun readLocationCoordinates(latitudeKey: String, longitudeKey: String): WatchWeatherLocation? {
+        val latitude = preferences.getString(latitudeKey, null)?.toDoubleOrNull() ?: return null
+        val longitude = preferences.getString(longitudeKey, null)?.toDoubleOrNull() ?: return null
+        return runCatching { WatchWeatherLocation(latitude, longitude) }.getOrNull()
     }
 
-    /** Keeps a city label tied to the coordinates it was actually resolved for. */
-    private fun refreshSystemLocationIdentity(raw: WatchWeatherLocation): WatchWeatherLocation {
-        val normalized = if (!raw.label.isNullOrBlank()) {
-            raw.copy(label = raw.label.trim())
+    private fun writeManualLocation(editor: android.content.SharedPreferences.Editor, location: WatchWeatherLocation?) {
+        if (location == null) {
+            editor.remove(KEY_LABEL).remove(KEY_LATITUDE).remove(KEY_LONGITUDE).remove(KEY_CHINA_LOCATION_KEY)
         } else {
-            raw.copy(label = matchingPersistedSystemLabel(raw) ?: reverseGeocodeLabel(raw))
+            editor.putString(KEY_LABEL, location.label)
+                .putString(KEY_LATITUDE, location.latitude.toString())
+                .putString(KEY_LONGITUDE, location.longitude.toString())
+                .putString(KEY_CHINA_LOCATION_KEY, location.chinaLocationKey)
         }
-        systemLocationValue = normalized
-        systemLocationLabelValue = normalized.label
-        preferences.edit()
-            .putString(KEY_SYSTEM_LATITUDE, normalized.latitude.toString())
-            .putString(KEY_SYSTEM_LONGITUDE, normalized.longitude.toString())
-            .apply {
-                val label = normalized.label
-                if (label.isNullOrBlank()) remove(KEY_SYSTEM_LOCATION_LABEL)
-                else putString(KEY_SYSTEM_LOCATION_LABEL, label)
-            }
-            .apply()
-        return normalized
+    }
+
+    private fun removeSystemLocation(editor: android.content.SharedPreferences.Editor) {
+        editor.remove(KEY_SYSTEM_LOCATION_LABEL).remove(KEY_SYSTEM_LATITUDE).remove(KEY_SYSTEM_LONGITUDE)
+            .remove(KEY_SYSTEM_CHINA_LOCATION_KEY).remove(KEY_SYSTEM_RAW_LATITUDE).remove(KEY_SYSTEM_RAW_LONGITUDE)
+            .remove(KEY_SYSTEM_RESOLVED_ANCHOR_LATITUDE).remove(KEY_SYSTEM_RESOLVED_ANCHOR_LONGITUDE)
+            .remove(KEY_SYSTEM_LOCATION_IDENTITY_VERSION)
+    }
+
+    private fun writeSystemRawLocation(editor: android.content.SharedPreferences.Editor, raw: WatchWeatherLocation?) {
+        editor.putString(KEY_SYSTEM_RAW_LATITUDE, raw?.latitude?.toString())
+            .putString(KEY_SYSTEM_RAW_LONGITUDE, raw?.longitude?.toString())
+    }
+
+    private fun writeSystemLocation(
+        editor: android.content.SharedPreferences.Editor,
+        city: WatchWeatherLocation,
+        raw: WatchWeatherLocation?,
+        anchor: WatchWeatherLocation?,
+    ) {
+        editor.putInt(KEY_SYSTEM_LOCATION_IDENTITY_VERSION, SYSTEM_LOCATION_IDENTITY_VERSION)
+            .putString(KEY_SYSTEM_LOCATION_LABEL, city.label)
+            .putString(KEY_SYSTEM_LATITUDE, city.latitude.toString())
+            .putString(KEY_SYSTEM_LONGITUDE, city.longitude.toString())
+            .putString(KEY_SYSTEM_CHINA_LOCATION_KEY, city.chinaLocationKey)
+            .putString(KEY_SYSTEM_RESOLVED_ANCHOR_LATITUDE, anchor?.latitude?.toString())
+            .putString(KEY_SYSTEM_RESOLVED_ANCHOR_LONGITUDE, anchor?.longitude?.toString())
+        writeSystemRawLocation(editor, raw)
+    }
+
+    private fun migrateChinaProvider() {
+        val oldProvider = preferences.getString(KEY_PROVIDER, null)
+        val persisted = preferences.getString(KEY_CACHE_JSON, null)
+            ?.let { runCatching { JSONObject(it) }.getOrNull() }
+        val sourceKnown = oldProvider == WatchWeatherProvider.CHINA.name &&
+            persisted?.optString("sourceProvider") == WatchWeatherProvider.CHINA.name &&
+            validChinaKey(persisted.optNullableString("sourceChinaLocationKey"))
+        val editor = preferences.edit().putString(KEY_PROVIDER, WatchWeatherProvider.CHINA.name)
+        val legacySystemIdentity = systemLocationValue != null &&
+            preferences.getInt(KEY_SYSTEM_LOCATION_IDENTITY_VERSION, 0) != SYSTEM_LOCATION_IDENTITY_VERSION
+        if (legacySystemIdentity) {
+            // Older builds mixed raw coordinates with a previously resolved city's name/key.
+            // Keep their coordinates available, but require a new China lookup before weather.
+            val raw = (systemRawLocationValue ?: systemLocationValue)?.copy(label = null, chinaLocationKey = null)
+            removeSystemLocation(editor)
+            systemLocationValue = null
+            systemResolvedAnchorValue = null
+            systemRawLocationValue = raw
+            writeSystemRawLocation(editor, raw)
+            editor.putInt(KEY_SYSTEM_LOCATION_IDENTITY_VERSION, SYSTEM_LOCATION_IDENTITY_VERSION)
+        }
+        if (!sourceKnown || legacySystemIdentity) editor.remove(KEY_CACHE_JSON).remove(KEY_CACHE_RECEIVED_AT)
+        // These legacy terrain values came from the removed weather source.
+        editor.remove(KEY_ELEVATION).remove(KEY_ELEVATION_LATITUDE).remove(KEY_ELEVATION_LONGITUDE).apply()
     }
 
     private fun readManualCity(): String? =
@@ -648,6 +767,8 @@ class WatchWeatherRepository(
         sourceLocation: WatchWeatherLocation,
     ) {
         val root = JSONObject().apply {
+            put("sourceProvider", WatchWeatherProvider.CHINA.name)
+            put("sourceChinaLocationKey", sourceLocation.chinaLocationKey)
             put("sourceLatitude", sourceLocation.latitude)
             put("sourceLongitude", sourceLocation.longitude)
             putNullable("temperatureCelsius", snapshot.temperatureCelsius)
@@ -657,11 +778,15 @@ class WatchWeatherRepository(
             putNullable("observedAtEpochMs", snapshot.observedAtEpochMs)
             putNullable("lastUpdatedText", snapshot.lastUpdatedText)
             putNullable("isDaytime", snapshot.isDaytime)
+            putNullable("sunriseText", snapshot.sunriseText)
+            putNullable("sunsetText", snapshot.sunsetText)
             putNullable("condition", snapshot.condition)
             putNullable("icon", snapshot.icon)
             putNullable("humidity", snapshot.humidity)
             putNullable("cloudCoverFraction", snapshot.cloudCoverFraction)
             putNullable("location", snapshot.location)
+            putNullable("windSpeedMetersPerSecond", snapshot.windSpeedMetersPerSecond)
+            putNullable("windDirectionDegrees", snapshot.windDirectionDegrees)
             put("forecast", JSONArray().apply {
                 snapshot.forecast.take(6).forEach { item ->
                     put(JSONObject().apply {
@@ -701,6 +826,10 @@ class WatchWeatherRepository(
             ?.let { raw -> runCatching { JSONObject(raw) }.getOrNull() }
             ?: return null
         val configuredLocation = manualLocation ?: systemLocationValue ?: return null
+        if (root.optString("sourceProvider") != WatchWeatherProvider.CHINA.name ||
+            !validChinaKey(configuredLocation.chinaLocationKey) ||
+            root.optNullableString("sourceChinaLocationKey") != configuredLocation.chinaLocationKey
+        ) return null
         val sourceLatitude = root.optDoubleOrNull("sourceLatitude") ?: return null
         val sourceLongitude = root.optDoubleOrNull("sourceLongitude") ?: return null
         if (
@@ -755,202 +884,143 @@ class WatchWeatherRepository(
             observedAtEpochMs = root.optLongOrNull("observedAtEpochMs"),
             lastUpdatedText = root.optNullableString("lastUpdatedText"),
             isDaytime = root.optBooleanOrNull("isDaytime"),
+            sunriseText = root.optNullableString("sunriseText"),
+            sunsetText = root.optNullableString("sunsetText"),
             condition = root.optNullableString("condition"),
             icon = root.optNullableString("icon"),
             humidity = root.optIntOrNull("humidity"),
             cloudCoverFraction = root.optDoubleOrNull("cloudCoverFraction"),
-            location = root.optNullableString("location"),
+            location = configuredLocation.label,
+            windSpeedMetersPerSecond = root.optDoubleOrNull("windSpeedMetersPerSecond"),
+            windDirectionDegrees = root.optDoubleOrNull("windDirectionDegrees"),
             forecast = forecast,
             hourlyForecast = hourlyForecast,
         )
         return canonicalWatchWeatherSnapshot(snapshot) to receivedAt
     }
 
-    private fun geocodeManualCity(city: String): WatchWeatherLocation? {
-        val resolved = searchLocations(city, limit = 1).firstOrNull() ?: return null
-        manualLocation = resolved
-        appContext.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE).edit()
-            .putString(KEY_LABEL, resolved.label)
-            .putString(KEY_LATITUDE, resolved.latitude.toString())
-            .putString(KEY_LONGITUDE, resolved.longitude.toString())
-            .apply()
-        return resolved
-    }
-
-    private fun fetchMetNo(location: WatchWeatherLocation, nowEpochMs: Long): WatchWeatherSnapshot? {
-        val url = "https://api.met.no/weatherapi/locationforecast/2.0/compact" +
-            "?lat=${"%.5f".format(Locale.US, location.latitude)}" +
-            "&lon=${"%.5f".format(Locale.US, location.longitude)}"
+    private fun fetchChina(location: WatchWeatherLocation, nowEpochMs: Long): WatchWeatherSnapshot? {
+        val key = location.chinaLocationKey ?: return null
+        val url = "https://weatherapi.market.xiaomi.com/wtr-v3/weather/all" +
+            "?latitude=${location.latitude}&longitude=${location.longitude}" +
+            "&isLocated=false&locationKey=${URLEncoder.encode(key, Charsets.UTF_8.name())}" +
+            "&days=15&appKey=weather20151024&sign=zUFJoAR2ZVrDy1vF3D07" +
+            "&isGlobal=false&locale=zh_CN"
         val root = JSONObject(transport.get(url, USER_AGENT) ?: return null)
-        val series = root.optJSONObject("properties")?.optJSONArray("timeseries") ?: return null
-        val first = series.optJSONObject(0) ?: return null
-        val details = first.optJSONObject("data")
-            ?.optJSONObject("instant")
-            ?.optJSONObject("details") ?: return null
-        val symbol = first.optJSONObject("data")
-            ?.optJSONObject("next_1_hours")
-            ?.optJSONObject("summary")
-            ?.optString("symbol_code")
-            ?.takeIf(String::isNotBlank)
-        val meaning = weatherMeaningFromMetSymbol(symbol)
-        return WatchWeatherSnapshot(
-            temperatureCelsius = details.optDoubleOrNull("air_temperature"),
-            condition = meaning.condition,
-            icon = meaning.icon,
-            humidity = details.optDoubleOrNull("relative_humidity")?.roundToIntOrNull(),
-            cloudCoverFraction = details.optDoubleOrNull("cloud_area_fraction")
-                ?.div(100.0)
-                ?.coerceIn(0.0, 1.0),
-            location = location.label,
-            observedAtEpochMs = nowEpochMs,
-            isDaytime = meaning.isDaytime,
-        )
-    }
-
-    private fun fetchOpenMeteo(location: WatchWeatherLocation, nowEpochMs: Long): WatchWeatherSnapshot? {
-        val url = "https://api.open-meteo.com/v1/forecast" +
-            "?latitude=${"%.5f".format(Locale.US, location.latitude)}" +
-            "&longitude=${"%.5f".format(Locale.US, location.longitude)}" +
-            "&current=temperature_2m,relative_humidity_2m,cloud_cover,weather_code,is_day" +
-            ",wind_speed_10m,wind_direction_10m" +
-            // 直接要 m/s，免得在渲染侧再猜一遍单位（Open-Meteo 默认是 km/h）。
-            "&wind_speed_unit=ms" +
-            "&daily=temperature_2m_mean,temperature_2m_max,temperature_2m_min,weather_code,sunrise,sunset" +
-            "&hourly=temperature_2m,weather_code,is_day&forecast_hours=13" +
-            "&forecast_days=6&timezone=auto"
-        val root = JSONObject(transport.get(url, USER_AGENT) ?: return null)
-        // {aalt} 的数据源。Open-Meteo 在响应**顶层**给该坐标处地形的海拔（米）——
-        // 之前没解析，于是 `altitudeMeters` 全代码库没有任何赋值点，{aalt} 永远读不出来。
-        // 不用 `Location.getAltitude()`：手表大多没有气压计，那个值常年是 0。
-        persistElevation(location, root.optDoubleOrNull("elevation"))
-        val current = root.optJSONObject("current") ?: root.optJSONObject("current_weather") ?: return null
-        val currentCode = current.optIntOrNull("weather_code")
-            ?: current.optIntOrNull("weathercode")
-        val isDaytime = current.optIntOrNull("is_day")?.let { it != 0 }
-        val currentMeaning = weatherMeaningFromOpenMeteoCode(currentCode, isDaytime)
-        val daily = root.optJSONObject("daily")
-        val means = daily?.optJSONArray("temperature_2m_mean")
-        val highs = daily?.optJSONArray("temperature_2m_max")
-        val lows = daily?.optJSONArray("temperature_2m_min")
-        val codes = daily?.optJSONArray("weather_code")
-        val forecasts = if (means != null || highs != null || lows != null || codes != null) {
-            (0 until listOf(
-                means?.length() ?: 0,
-                highs?.length() ?: 0,
-                lows?.length() ?: 0,
-                codes?.length() ?: 0,
-            ).maxOrNull()!!.coerceAtMost(6))
-                .map { index ->
-                    val meaning = weatherMeaningFromOpenMeteoCode(codes?.optIntOrNull(index), true)
-                    WatchWeatherForecast(
-                        dayOffset = index + 1,
-                        temperatureCelsius = means?.optDoubleOrNull(index),
-                        highCelsius = highs?.optDoubleOrNull(index),
-                        lowCelsius = lows?.optDoubleOrNull(index),
-                        condition = meaning.condition,
-                        icon = meaning.icon,
-                    )
-                }
-        } else {
-            emptyList()
-        }
-        val hourly = root.optJSONObject("hourly")
-        val hourlyTimes = hourly?.optJSONArray("time")
-        val hourlyTemperatures = hourly?.optJSONArray("temperature_2m")
-        val hourlyCodes = hourly?.optJSONArray("weather_code")
-        val hourlyDayFlags = hourly?.optJSONArray("is_day")
-        val hourlyCount = listOf(
-            hourlyTimes?.length() ?: 0,
-            hourlyTemperatures?.length() ?: 0,
-            hourlyCodes?.length() ?: 0,
-            hourlyDayFlags?.length() ?: 0,
-        ).maxOrNull() ?: 0
-        // Open-Meteo returns index 0 for the current hour when forecast_hours
-        // is used. WatchMaker `{wf1h*}` starts at the next hour.
-        val hourlyForecasts = (1 until hourlyCount.coerceAtMost(13)).mapNotNull { index ->
-            val temperature = hourlyTemperatures?.optDoubleOrNull(index)
-            val code = hourlyCodes?.optIntOrNull(index)
-            val day = hourlyDayFlags?.optIntOrNull(index)?.let { it != 0 }
-            val hourOfDay = hourlyTimes?.optString(index)
-                ?.takeIf(String::isNotBlank)
-                ?.let(::hourOfDayFromIsoLocalTime)
-            if (temperature == null && code == null && hourOfDay == null) return@mapNotNull null
-            val meaning = weatherMeaningFromOpenMeteoCode(code, day)
-            WatchWeatherHourlyForecast(
-                hourOffset = index,
-                hourOfDay = hourOfDay,
-                temperatureCelsius = temperature,
-                condition = meaning.condition,
-                icon = meaning.icon,
+        val current = root.optJSONObject("current") ?: return null
+        val daily = root.optJSONObject("forecastDaily")
+        val temps = daily?.optJSONObject("temperature")?.optJSONArray("value")
+        val weather = daily?.optJSONObject("weather")?.optJSONArray("value")
+        val sun = daily?.optJSONObject("sunRiseSet")?.optJSONArray("value")
+        val now = Instant.ofEpochMilli(nowEpochMs)
+        val published = chinaWeatherInstant(current.optNullableString("pubTime"))
+        val firstDay = (published ?: now).atZone(CHINA_TIME_ZONE).toLocalDate()
+        val todayIndex = ChronoUnit.DAYS.between(firstDay, now.atZone(CHINA_TIME_ZONE).toLocalDate()).toInt()
+        val todaySun = sun?.optJSONObject(todayIndex)
+        val todayTemperature = temps?.optJSONObject(todayIndex)
+        val temperature = current.optJSONObject("temperature")?.optDoubleOrNull("value")
+        val isDaytime = chinaDaytime(now, todaySun)
+        val meaning = weatherMeaningFromChinaCode(current.optString("weather").toIntOrNull(), isDaytime)
+        val forecasts = (0 until minOf(15, maxOf(temps?.length() ?: 0, weather?.length() ?: 0))).mapNotNull { index ->
+            val offset = index - todayIndex
+            if (offset !in 1..6) return@mapNotNull null
+            val pair = temps?.optJSONObject(index)
+            val dailyMeaning = weatherMeaningFromChinaCode(weather?.optJSONObject(index)?.optString("from")?.toIntOrNull())
+            val high = pair?.optDoubleOrNull("from")
+            val low = pair?.optDoubleOrNull("to")
+            if (high == null && low == null && dailyMeaning.condition == null) return@mapNotNull null
+            WatchWeatherForecast(
+                dayOffset = offset,
+                highCelsius = high,
+                lowCelsius = low,
+                condition = dailyMeaning.condition,
+                icon = dailyMeaning.icon,
             )
         }
+        val hourly = root.optJSONObject("forecastHourly")
+        val hourlyTemperature = hourly?.optJSONObject("temperature")
+        val hourlyValues = hourlyTemperature?.optJSONArray("value")
+        val hourlyWeather = hourly?.optJSONObject("weather")?.optJSONArray("value")
+        val hourlyStart = (chinaWeatherInstant(hourlyTemperature?.optNullableString("pubTime")) ?: published)
+            ?.truncatedTo(ChronoUnit.HOURS)
+        val nowHour = now.truncatedTo(ChronoUnit.HOURS)
+        val hourlyForecast = if (hourlyStart == null) emptyList() else {
+            (0 until minOf(48, maxOf(hourlyValues?.length() ?: 0, hourlyWeather?.length() ?: 0))).mapNotNull { index ->
+                val time = hourlyStart.plus(index.toLong(), ChronoUnit.HOURS)
+                val offset = ChronoUnit.HOURS.between(nowHour, time).toInt()
+                if (offset !in 1..12) return@mapNotNull null
+                val hourlyTemp = hourlyValues?.optDoubleOrNull(index)
+                val dayIndex = ChronoUnit.DAYS.between(firstDay, time.atZone(CHINA_TIME_ZONE).toLocalDate()).toInt()
+                val hourlyMeaning = weatherMeaningFromChinaCode(
+                    hourlyWeather?.optIntOrNull(index),
+                    chinaDaytime(time, sun?.optJSONObject(dayIndex)),
+                )
+                if (hourlyTemp == null && hourlyMeaning.condition == null) return@mapNotNull null
+                WatchWeatherHourlyForecast(
+                    hourOffset = offset,
+                    hourOfDay = time.atZone(CHINA_TIME_ZONE).hour,
+                    temperatureCelsius = hourlyTemp,
+                    condition = hourlyMeaning.condition,
+                    icon = hourlyMeaning.icon,
+                )
+            }
+        }
+        val high = todayTemperature?.optDoubleOrNull("from")
+        val low = todayTemperature?.optDoubleOrNull("to")
+        val humidity = current.optJSONObject("humidity")?.optDoubleOrNull("value")?.roundToIntOrNull()
+        val wind = current.optJSONObject("wind")
+        val windSpeed = wind?.optJSONObject("speed")?.optDoubleOrNull("value")?.takeIf { it >= 0.0 }?.div(3.6)
+        val windDirection = wind?.optJSONObject("direction")?.optDoubleOrNull("value")?.takeIf { it in 0.0..360.0 }
+        if (temperature == null && meaning.condition == null && high == null && low == null && humidity == null &&
+            windSpeed == null && windDirection == null && forecasts.isEmpty() && hourlyForecast.isEmpty()
+        ) return null
         return WatchWeatherSnapshot(
-            temperatureCelsius = current.optDoubleOrNull("temperature_2m")
-                ?: current.optDoubleOrNull("temperature"),
-            highCelsius = highs?.optDoubleOrNull(0),
-            lowCelsius = lows?.optDoubleOrNull(0),
-            condition = currentMeaning.condition,
-            icon = currentMeaning.icon,
-            humidity = current.optDoubleOrNull("relative_humidity_2m")?.roundToIntOrNull(),
-            cloudCoverFraction = current.optDoubleOrNull("cloud_cover")
-                ?.div(100.0)
-                ?.coerceIn(0.0, 1.0),
+            temperatureCelsius = temperature,
+            highCelsius = high,
+            lowCelsius = low,
+            condition = meaning.condition,
+            icon = meaning.icon,
+            humidity = humidity,
             location = location.label,
-            observedAtEpochMs = nowEpochMs,
+            observedAtEpochMs = published?.toEpochMilli() ?: nowEpochMs,
             isDaytime = isDaytime,
-            // URL 里一直在请求 sunrise/sunset，之前只是没解析，{wsr}/{wss} 因此
-            // 永远渲染成 "--"。索引 0 是今天。
-            sunriseText = clockTimeFromIsoLocalTime(daily?.optJSONArray("sunrise")?.optString(0)),
-            sunsetText = clockTimeFromIsoLocalTime(daily?.optJSONArray("sunset")?.optString(0)),
+            sunriseText = clockTimeFromIsoLocalTime(todaySun?.optNullableString("from")),
+            sunsetText = clockTimeFromIsoLocalTime(todaySun?.optNullableString("to")),
             forecast = forecasts,
-            hourlyForecast = hourlyForecasts,
-            // {wws} / {wwd} / {wwdb} / {wwdbb}。风速已按 wind_speed_unit=ms 拿到 m/s。
-            windSpeedMetersPerSecond = current.optDoubleOrNull("wind_speed_10m"),
-            windDirectionDegrees = current.optDoubleOrNull("wind_direction_10m"),
+            hourlyForecast = hourlyForecast,
+            windSpeedMetersPerSecond = windSpeed,
+            windDirectionDegrees = windDirection,
         )
     }
 
-    private data class WeatherMeaning(
-        val condition: String?,
-        val icon: String?,
-        val isDaytime: Boolean? = null,
-    )
+    private data class WeatherMeaning(val condition: String?, val icon: String?)
 
-    private fun weatherMeaningFromOpenMeteoCode(code: Int?, isDaytime: Boolean?): WeatherMeaning {
-        val day = isDaytime != false
-        val (condition, iconNumber) = when (code) {
-            0 -> "Clear" to 1
-            1, 2 -> "Partly cloudy" to 2
-            3 -> "Overcast" to 4
-            45, 48 -> "Fog" to 50
-            51, 53, 55, 56, 57 -> "Drizzle" to 9
-            61, 63, 65, 66, 67, 80, 81, 82 -> "Rain" to 10
-            71, 73, 75, 77, 85, 86 -> "Snow" to 13
-            95, 96, 99 -> "Thunderstorm" to 11
-            else -> null to null
+    private fun weatherMeaningFromChinaCode(code: Int?, isDaytime: Boolean? = null): WeatherMeaning {
+        val (condition, icon) = when (code) {
+            0 -> "Clear" to "01"
+            1 -> "Partly cloudy" to "02"
+            2 -> "Overcast" to "04"
+            3, in 7..12, 19, in 21..25 -> "Rain" to "10"
+            4, 5 -> "Thunderstorm" to "11"
+            6 -> "Sleet" to "13"
+            in 13..17, in 26..28 -> "Snow" to "13"
+            18 -> "Fog" to "50"
+            20, in 29..31 -> "Dust" to "50"
+            in 53..56 -> "Haze" to "50"
+            else -> return WeatherMeaning(null, null)
         }
-        val icon = iconNumber?.toString()?.padStart(2, '0')?.plus(if (day) "d" else "n")
-        return WeatherMeaning(condition, icon, isDaytime)
+        return WeatherMeaning(condition, icon + if (isDaytime == false) "n" else "d")
     }
 
-    private fun weatherMeaningFromMetSymbol(symbol: String?): WeatherMeaning {
-        val normalized = symbol?.lowercase(Locale.ROOT).orEmpty()
-        val day = !normalized.endsWith("_night") && !normalized.endsWith("_polartwilight")
-        val (condition, iconNumber) = when {
-            normalized.startsWith("clearsky") -> "Clear" to 1
-            normalized.startsWith("fair") || normalized.startsWith("partlycloudy") -> "Partly cloudy" to 2
-            normalized.startsWith("cloudy") -> "Overcast" to 4
-            normalized.startsWith("fog") -> "Fog" to 50
-            normalized.startsWith("lightrain") || normalized.startsWith("rain") || normalized.startsWith("heavyrain") -> "Rain" to 10
-            normalized.startsWith("lightsnow") || normalized.startsWith("snow") || normalized.startsWith("heavysnow") -> "Snow" to 13
-            normalized.startsWith("thunder") -> "Thunderstorm" to 11
-            else -> null to null
-        }
-        val icon = iconNumber?.toString()?.padStart(2, '0')?.plus(if (day) "d" else "n")
-        return WeatherMeaning(condition, icon, day)
+    private fun chinaDaytime(time: Instant, sun: JSONObject?): Boolean? {
+        val sunrise = chinaWeatherInstant(sun?.optNullableString("from")) ?: return null
+        val sunset = chinaWeatherInstant(sun?.optNullableString("to")) ?: return null
+        if (sunset <= sunrise) return null
+        return time >= sunrise && time < sunset
     }
 
     companion object {
+        private val CHINA_TIME_ZONE = ZoneId.of("Asia/Shanghai")
         private const val LEGACY_FUSED_PROVIDER = "fused"
         const val PREFERENCES = "watch_weather_repository"
         const val KEY_LABEL = "manual_label"
@@ -960,6 +1030,13 @@ class WatchWeatherRepository(
         const val KEY_SYSTEM_LOCATION_LABEL = "system_location_label"
         const val KEY_SYSTEM_LATITUDE = "system_latitude"
         const val KEY_SYSTEM_LONGITUDE = "system_longitude"
+        const val KEY_SYSTEM_CHINA_LOCATION_KEY = "system_china_location_key"
+        const val KEY_SYSTEM_RAW_LATITUDE = "system_raw_latitude"
+        const val KEY_SYSTEM_RAW_LONGITUDE = "system_raw_longitude"
+        const val KEY_SYSTEM_RESOLVED_ANCHOR_LATITUDE = "system_resolved_anchor_latitude"
+        const val KEY_SYSTEM_RESOLVED_ANCHOR_LONGITUDE = "system_resolved_anchor_longitude"
+        const val KEY_SYSTEM_LOCATION_IDENTITY_VERSION = "system_location_identity_version"
+        private const val SYSTEM_LOCATION_IDENTITY_VERSION = 1
         /** {aalt} 的海拔，以及它是在哪个坐标上取到的。三个键必须一起读写。 */
         const val KEY_ELEVATION = "elevation_meters"
         const val KEY_ELEVATION_LATITUDE = "elevation_latitude"
@@ -967,21 +1044,14 @@ class WatchWeatherRepository(
         const val KEY_CACHE_RECEIVED_AT = "cache_received_at"
         const val KEY_CACHE_JSON = "cache_json"
         const val KEY_TEMPERATURE_UNIT = "temperature_unit"
+        const val KEY_PROVIDER = "weather_provider"
+        const val KEY_CHINA_LOCATION_KEY = "china_location_key"
         const val DEFAULT_SOFT_TTL_MS = 15L * 60L * 1_000L
         const val MAX_CACHE_AGE_MS = 6L * 60L * 60L * 1_000L
         const val USER_AGENT = "FlueNext/2.0 (weather; https://github.com/xumidcm/Flue)"
         private const val CURRENT_LOCATION_TIMEOUT_MS = 6_000L
         private const val SYSTEM_LOCATION_LABEL_TOLERANCE_DEGREES = 0.005
         private const val CACHE_LOCATION_TOLERANCE_DEGREES = 0.00001
-
-        /**
-         * 海拔与坐标的绑定容差，约 1 km。
-         *
-         * 比缓存天气的容差（[CACHE_LOCATION_TOLERANCE_DEGREES]，几乎逐位相等）宽得多，
-         * 因为地形海拔在一公里内基本不变，而每次微小漂移都丢掉海拔只会让 {aalt} 一直
-         * 闪回 0。真正换了城市远超这个量级，一比就失配。
-         */
-        private const val ELEVATION_LOCATION_TOLERANCE_DEGREES = 0.01
 
         @Volatile
         private var defaultInstance: WatchWeatherRepository? = null
@@ -996,35 +1066,58 @@ private object DirectWeatherExecutor : Executor {
     override fun execute(command: Runnable) = command.run()
 }
 
-internal fun parseWatchWeatherLocationSearch(
+internal fun normalizeWatchWeatherCityQuery(query: String): String = query
+    .trim()
+    .replace(Regex("\\s+"), " ")
+    .removeSuffix("市")
+    .removeSuffix("省")
+    .removeSuffix("自治区")
+    .trim()
+    .take(120)
+
+private fun validChinaKey(key: String?): Boolean = key?.matches(Regex("weathercn:[0-9]+")) == true
+
+private fun containsCjk(value: String): Boolean = value.any { it in '\u4e00'..'\u9fff' }
+
+internal fun parseChinaWatchWeatherLocationSearch(
     payload: String,
     fallbackLabel: String,
     limit: Int,
 ): List<WatchWeatherLocation> {
-    val results = runCatching { JSONObject(payload).optJSONArray("results") }.getOrNull()
-        ?: return emptyList()
-    val parsed = ArrayList<WatchWeatherLocation>(limit.coerceAtLeast(0))
-    val seen = HashSet<Pair<Double, Double>>()
-    for (index in 0 until minOf(results.length(), limit.coerceAtLeast(0))) {
-        val result = results.optJSONObject(index) ?: continue
-        val latitude = result.optDoubleOrNull("latitude") ?: continue
-        val longitude = result.optDoubleOrNull("longitude") ?: continue
-        if (!seen.add(latitude to longitude)) continue
-        val label = listOf(
-            result.optString("name").takeIf(String::isNotBlank),
-            result.optString("admin1").takeIf(String::isNotBlank),
-            result.optString("country").takeIf(String::isNotBlank),
-        ).filterNotNull().distinct().joinToString(", ").ifBlank { fallbackLabel }
-        runCatching { WatchWeatherLocation(latitude, longitude, label) }
-            .getOrNull()
-            // geocoding 的每条结果也带 `elevation`，顺手收下 —— 手动选城市的用户不用等到
-            // 下一次天气刷新才有 {aalt}。缺这个字段（老响应）时仍是 null，按 0 渲染。
-            ?.let { parsedLocation ->
-                parsedLocation.copy(elevation = result.optDoubleOrNull("elevation"))
-            }
-            ?.let(parsed::add)
-    }
-    return parsed
+    val results = runCatching { JSONArray(payload) }.getOrNull() ?: return emptyList()
+    val seen = HashSet<String>()
+    return buildList {
+        // Validate each candidate before deduplicating; malformed results cannot hide a valid city.
+        for (index in 0 until minOf(results.length(), 50)) {
+            val result = results.optJSONObject(index) ?: continue
+            if (result.has("status") && result.optInt("status", -1) != 0) continue
+            val key = result.optNullableString("locationKey")?.takeIf(::validChinaKey) ?: continue
+            val latitude = result.optDoubleOrNull("latitude") ?: continue
+            val longitude = result.optDoubleOrNull("longitude") ?: continue
+            val name = result.optNullableString("name") ?: fallbackLabel
+            val affiliation = result.optNullableString("affiliation")
+            val label = listOfNotNull(name, affiliation).filter(String::isNotBlank).joinToString(", ")
+            if (label.isBlank()) continue
+            val location = runCatching {
+                WatchWeatherLocation(latitude, longitude, label, chinaLocationKey = key)
+            }.getOrNull() ?: continue
+            if (seen.add(key)) add(location)
+        }
+    }.sortedWith(
+        compareByDescending<WatchWeatherLocation> { locationSearchScore(it, fallbackLabel) }
+            .thenByDescending { it.label.orEmpty().count { character -> character == ',' } }
+            .thenBy { it.label.orEmpty() },
+    ).take(limit.coerceAtLeast(0))
+}
+
+private fun locationSearchScore(location: WatchWeatherLocation, query: String): Int {
+    val label = location.label.orEmpty()
+    var score = 0
+    if (label.contains(query, ignoreCase = true)) score += 100
+    // Prefer a fully-qualified administrative result over a bare provider name.
+    score += label.count { it == ',' } * 5
+    if (containsCjk(query) && label.any { it in '\u4e00'..'\u9fff' }) score += 10
+    return score
 }
 
 private object DefaultWatchWeatherHttpTransport : WatchWeatherHttpTransport {
@@ -1078,30 +1171,23 @@ private fun JSONObject.optBooleanOrNull(key: String): Boolean? =
     if (has(key) && !isNull(key)) optBoolean(key) else null
 
 private fun JSONObject.optIntOrNull(key: String): Int? =
-    if (has(key) && !isNull(key)) optInt(key) else null
+    if (has(key) && !isNull(key)) optString(key).toIntOrNull() else null
 
 private fun JSONArray.optDoubleOrNull(index: Int): Double? =
     optDouble(index, Double.NaN).takeIf(Double::isFinite)
 
 private fun JSONArray.optIntOrNull(index: Int): Int? =
-    if (index in 0 until length() && !isNull(index)) optInt(index) else null
+    if (index in 0 until length() && !isNull(index)) optString(index).toIntOrNull() else null
 
 private fun Double.roundToIntOrNull(): Int? =
     takeIf(Double::isFinite)?.let { kotlin.math.round(it).toInt().coerceIn(0, 100) }
 
-private fun hourOfDayFromIsoLocalTime(raw: String): Int? =
-    Regex("T(\\d{2}):").find(raw)
-        ?.groupValues
-        ?.getOrNull(1)
-        ?.toIntOrNull()
-        ?.takeIf { it in 0..23 }
+private fun chinaWeatherInstant(raw: String?): Instant? {
+    if (raw.isNullOrBlank()) return null
+    return runCatching { OffsetDateTime.parse(raw).toInstant() }.getOrNull()
+        ?: runCatching { LocalDateTime.parse(raw).atZone(ZoneId.of("Asia/Shanghai")).toInstant() }.getOrNull()
+}
 
-/**
- * 取 ISO 本地时间串的 `HH:mm` 部分，供 `{wsr}` / `{wss}` 直接当字符串渲染。
- *
- * 与 clox `WeatherProvider.kt:368` 的 `parseIsoTime` 同语义。Open-Meteo 在
- * `timezone=auto` 下返回的已经是当地时间（`2026-08-02T05:41`），不需要再换算时区。
- */
 private fun clockTimeFromIsoLocalTime(raw: String?): String? =
     raw?.let { Regex("T(\\d{2}:\\d{2})").find(it)?.groupValues?.getOrNull(1) }
 

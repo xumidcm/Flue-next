@@ -1611,13 +1611,13 @@
         <item>あらら、クラッシュしました Σ(ﾟДﾟ)</item>
         <item>大変、エラーです (ﾟДﾟ;)</item>
         <item>デスクトップが止まりました (⊙_⊙)</item>
-        <item>予期しないクラッシュ (°ロ°)☝</item>
+        <item>予期しないクラッシュ</item>
     </string-array>
     <string-array name="crash_subtitles">
         <item>詳しいエラーと再現手順をコピーして開発者に送ってください。Σ(ﾟДﾟ)</item>
         <item>ログを展開してエラーの内容を共有してください。(ﾟДﾟ;)</item>
         <item>今回は本当にクラッシュしました。ログを持ってきてください。(⊙_⊙)</item>
-        <item>デスクトップ設定を開くか、ログをコピーして助けを求められます。(°ロ°)☝</item>
+        <item>デスクトップ設定を開くか、ログをコピーして助けを求められます。</item>
     </string-array>
     <string name="crash_open_desktop_settings">デスクトップ設定</string>
     <string name="watch_editor_global_script">グローバルスクリプト</string>

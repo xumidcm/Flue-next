@@ -621,8 +621,8 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     /** 重力景深默认开启（老师要求）：装了就能看到晃动效果，不用先进设置翻开关。 */
     private val _watchfaceGravityParallaxEnabled = MutableStateFlow(true)
     val watchfaceGravityParallaxEnabled: StateFlow<Boolean> = _watchfaceGravityParallaxEnabled.asStateFlow()
-    /** 底部模糊背景层默认开（保持现有观感）；关掉后只剩根 `bg_color`。 */
-    private val _watchfaceGravityBackdropBlurEnabled = MutableStateFlow(true)
+    /** 底部模糊背景层默认关闭；已有设置继续按用户选择读取。 */
+    private val _watchfaceGravityBackdropBlurEnabled = MutableStateFlow(false)
     val watchfaceGravityBackdropBlurEnabled: StateFlow<Boolean> =
         _watchfaceGravityBackdropBlurEnabled.asStateFlow()
     // 表盘日期语言：system/zh/en/ja 四档，默认跟随系统。
@@ -1238,7 +1238,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                     _watchfaceGravityParallaxEnabled.value = loadedGravityParallax
                 }
                 val loadedGravityBackdropBlur =
-                    prefs[KEY_WATCHFACE_GRAVITY_BACKDROP_BLUR] ?: true
+                    prefs[KEY_WATCHFACE_GRAVITY_BACKDROP_BLUR] ?: false
                 if (_watchfaceGravityBackdropBlurEnabled.value != loadedGravityBackdropBlur) {
                     _watchfaceGravityBackdropBlurEnabled.value = loadedGravityBackdropBlur
                 }
@@ -3878,7 +3878,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         // 这一项的写盘半区在下面的 store.edit 里，StateFlow 半区必须同步复位，
         // 否则 reset 后 UI 还显示旧值、下一次落盘又把旧值写回去。
         _watchfaceGravityParallaxEnabled.value = true
-        _watchfaceGravityBackdropBlurEnabled.value = true
+        _watchfaceGravityBackdropBlurEnabled.value = false
         _watchfaceDateLocale.value = WatchDateLocale.PREFERENCE_SYSTEM
         WatchDateLocale.override = null
         _hiddenApps.value = emptySet()
@@ -4012,7 +4012,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                 it.remove(KEY_WATCHFACE_CANVAS_DEFAULT)
                 it.remove(KEY_WATCHFACE_CANVAS_OVERRIDES)
                 it[KEY_WATCHFACE_GRAVITY_PARALLAX] = true
-                it[KEY_WATCHFACE_GRAVITY_BACKDROP_BLUR] = true
+                it[KEY_WATCHFACE_GRAVITY_BACKDROP_BLUR] = false
                 it.remove(KEY_WATCHFACE_DATE_LOCALE)
                 it[KEY_NOTIFICATION_SETTING_MIGRATED] = true
                 it.remove(KEY_SIDE_SCREEN_SHORTCUTS)

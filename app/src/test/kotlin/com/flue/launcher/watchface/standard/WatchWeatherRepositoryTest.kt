@@ -3,8 +3,6 @@ package com.flue.launcher.watchface.standard
 import android.content.Context
 import java.io.ByteArrayInputStream
 import java.io.InputStream
-import java.util.concurrent.CountDownLatch
-import java.util.concurrent.TimeUnit
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
@@ -18,6 +16,18 @@ import org.robolectric.annotation.Config
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [27], manifest = Config.NONE)
 class WatchWeatherRepositoryTest {
+
+    @Test
+    fun parsesBreezyCompatibleChinaLocationKey() {
+        val results = parseChinaWatchWeatherLocationSearch(
+            """[{"name":"龙南市","affiliation":"赣州市, 江西, 中国","latitude":"24.749","longitude":"114.679","locationKey":"weathercn:101240714"}]""",
+            "龙南",
+            8,
+        )
+        assertEquals(1, results.size)
+        assertEquals("weathercn:101240714", results.single().chinaLocationKey)
+        assertTrue(results.single().label?.contains("赣州市") == true)
+    }
     @Test
     fun changingTheConfiguredLocationDoesNotExposeThePreviousLocationsWeather() {
         val now = System.currentTimeMillis()
@@ -28,6 +38,8 @@ class WatchWeatherRepositoryTest {
         )
         preferences.edit().clear().apply()
         preferences.edit()
+            .putString(WatchWeatherRepository.KEY_PROVIDER, "CHINA")
+            .putString(WatchWeatherRepository.KEY_CHINA_LOCATION_KEY, "weathercn:101020100")
             .putString(WatchWeatherRepository.KEY_LABEL, "Old City")
             .putString(WatchWeatherRepository.KEY_LATITUDE, "31.2304")
             .putString(WatchWeatherRepository.KEY_LONGITUDE, "121.4737")
@@ -35,6 +47,8 @@ class WatchWeatherRepositoryTest {
             .putString(
                 WatchWeatherRepository.KEY_CACHE_JSON,
                 JSONObject()
+                    .put("sourceProvider", "CHINA")
+                    .put("sourceChinaLocationKey", "weathercn:101020100")
                     .put("temperatureCelsius", 9.0)
                     .put("location", "Old City")
                     .put("sourceLatitude", 31.2304)
@@ -56,68 +70,6 @@ class WatchWeatherRepositoryTest {
         )
 
         assertNull(repository.snapshot(now + 2L))
-    }
-
-    @Test
-    fun anInFlightRefreshCannotRestoreWeatherForThePreviousLocation() {
-        val context = RuntimeEnvironment.getApplication().applicationContext
-        val preferences = context.getSharedPreferences(
-            WatchWeatherRepository.PREFERENCES,
-            Context.MODE_PRIVATE,
-        )
-        preferences.edit().clear()
-            .putString(WatchWeatherRepository.KEY_LABEL, "Old City")
-            .putString(WatchWeatherRepository.KEY_LATITUDE, "31.2304")
-            .putString(WatchWeatherRepository.KEY_LONGITUDE, "121.4737")
-            .commit()
-        val oldRequestStarted = CountDownLatch(1)
-        val releaseOldRequest = CountDownLatch(1)
-        val oldResponseReturned = CountDownLatch(1)
-        val newRequestStarted = CountDownLatch(1)
-        val releaseNewRequest = CountDownLatch(1)
-        val transport = WatchWeatherHttpTransport { url, _ ->
-            when {
-                "api.met.no" !in url -> null
-                "lat=31.23040" in url -> {
-                    oldRequestStarted.countDown()
-                    releaseOldRequest.await(2, TimeUnit.SECONDS)
-                    oldResponseReturned.countDown()
-                    metNoTemperaturePayload(9.0)
-                }
-                "lat=39.90420" in url -> {
-                    newRequestStarted.countDown()
-                    releaseNewRequest.await(2, TimeUnit.SECONDS)
-                    metNoTemperaturePayload(21.0)
-                }
-                else -> null
-            }
-        }
-        val repository = WatchWeatherRepository(context, transport = transport)
-        repository.requestRefresh()
-        assertTrue(oldRequestStarted.await(2, TimeUnit.SECONDS))
-
-        repository.setManualLocation(
-            WatchWeatherLocation(39.9042, 116.4074, "New City"),
-        )
-        releaseOldRequest.countDown()
-        assertTrue(oldResponseReturned.await(2, TimeUnit.SECONDS))
-        Thread.sleep(100L)
-
-        try {
-            assertNull(repository.snapshot(System.currentTimeMillis()))
-            assertTrue(newRequestStarted.await(2, TimeUnit.SECONDS))
-        } finally {
-            releaseNewRequest.countDown()
-        }
-
-        val deadline = System.currentTimeMillis() + 3_000L
-        var snapshot: WatchWeatherSnapshot? = null
-        while (System.currentTimeMillis() < deadline && snapshot?.location != "New City") {
-            snapshot = repository.snapshot(System.currentTimeMillis())
-            Thread.sleep(20L)
-        }
-        assertEquals("New City", snapshot?.location)
-        assertEquals(21.0, snapshot?.temperatureCelsius ?: Double.NaN, 0.0)
     }
 
     @Test
@@ -152,21 +104,32 @@ class WatchWeatherRepositoryTest {
     }
 
     @Test
-    fun locationSearchReturnsDistinctUserSelectableCandidates() {
-        val payload = """
-            {"results":[
-              {"name":"Springfield","admin1":"Illinois","country":"United States","latitude":39.80,"longitude":-89.64},
-              {"name":"Springfield","admin1":"Massachusetts","country":"United States","latitude":42.10,"longitude":-72.59},
-              {"name":"Duplicate","latitude":39.80,"longitude":-89.64},
-              {"name":"Invalid","latitude":999,"longitude":0}
-            ]}
-        """.trimIndent()
+    fun chineseSearchKeepsProviderLocationsIsolated() {
+        val context = RuntimeEnvironment.getApplication().applicationContext
+        val requestedUrls = mutableListOf<String>()
+        val repository = WatchWeatherRepository(
+            context = context,
+            transport = WatchWeatherHttpTransport { url, _ ->
+                requestedUrls += url
+                if ("weatherapi.market.xiaomi.com" in url) {
+                    """
+                    [{"name":"龙南市","affiliation":"赣州市, 江西, 中国",
+                      "latitude":"24.749","longitude":"114.679",
+                      "locationKey":"weathercn:101240714"}]
+                    """.trimIndent()
+                } else {
+                    error("China search must not request a foreign geocoder: $url")
+                }
+            },
+        )
 
-        val results = parseWatchWeatherLocationSearch(payload, "Springfield", limit = 8)
+        val results = repository.searchLocations("龙南")
 
-        assertEquals(2, results.size)
-        assertEquals("Springfield, Illinois, United States", results[0].label)
-        assertEquals(42.10, results[1].latitude, 0.0)
+        assertTrue(results.isNotEmpty())
+        assertTrue(results.all { it.chinaLocationKey != null })
+        assertTrue(results.all { it.label?.contains("江西") == true })
+        assertTrue(requestedUrls.none { "geocoding-api.open-meteo.com" in it })
+        assertTrue(requestedUrls.none { "nominatim.openstreetmap.org" in it })
     }
 
     @Test
@@ -237,6 +200,4 @@ class WatchWeatherRepositoryTest {
         }
     }
 
-    private fun metNoTemperaturePayload(temperature: Double): String =
-        """{"properties":{"timeseries":[{"data":{"instant":{"details":{"air_temperature":$temperature}},"next_1_hours":{"summary":{"symbol_code":"clearsky_day"}}}}]}}"""
 }

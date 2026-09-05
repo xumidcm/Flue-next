@@ -5,6 +5,8 @@ import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FiniteAnimationSpec
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
@@ -57,17 +59,24 @@ internal class LayerPivotLatch(
  * the backdrop the spring's real frame instead of a second animation clock.
  */
 internal class LayerFrameSnapshot {
+    private val reader = mutableStateOf<(() -> LayerAnimValues)?>(null)
+
+    /** The backdrop samples the animation even when the child display list is frozen. */
+    fun bind(readFrame: () -> LayerAnimValues) {
+        reader.value = readFrame
+    }
+
     private val scaleState = mutableFloatStateOf(1f)
     private val blurState = mutableFloatStateOf(0f)
     private val alphaState = mutableFloatStateOf(1f)
     private val translationXState = mutableFloatStateOf(0f)
     private val translationYState = mutableFloatStateOf(0f)
 
-    val scale: Float get() = scaleState.floatValue
-    val blur: Float get() = blurState.floatValue
-    val alpha: Float get() = alphaState.floatValue
-    val translationX: Float get() = translationXState.floatValue
-    val translationY: Float get() = translationYState.floatValue
+    val scale: Float get() = reader.value?.invoke()?.scale ?: scaleState.floatValue
+    val blur: Float get() = reader.value?.invoke()?.blur ?: blurState.floatValue
+    val alpha: Float get() = reader.value?.invoke()?.alpha ?: alphaState.floatValue
+    val translationX: Float get() = reader.value?.invoke()?.translationX ?: translationXState.floatValue
+    val translationY: Float get() = reader.value?.invoke()?.translationY ?: translationYState.floatValue
 
     fun update(
         scale: Float,
@@ -193,6 +202,24 @@ internal fun Modifier.scaleBlurAlpha(
     // 保存“最后真正画到屏幕上的外部帧”，交接时只能从它播种内部弹簧；
     // 重新调用已经换掉的 provider 会让列表/底部按钮补闪完整态一帧。
     val lastExternalFrame = remember { LayerAnimValueHolder() }
+    val readFrame = remember {
+        {
+            when {
+                latestDriven.value -> latestProvider.value?.invoke()?.also {
+                    lastExternalFrame.value = it
+                }
+                wasExternallyDriven.value -> lastExternalFrame.value
+                else -> null
+            } ?: LayerAnimValues(
+                scale = animScale.value,
+                blur = animBlur.value,
+                alpha = animAlpha.value,
+                translationX = animTransX.value,
+                translationY = animTransY.value,
+            )
+        }
+    }
+    SideEffect { frameSnapshot?.bind(readFrame) }
 
     // Specs are part of the key: swapping the motion phase mid-transition used
     // to be silently ignored because only targetValues restarted the effect.
@@ -243,25 +270,12 @@ internal fun Modifier.scaleBlurAlpha(
 
     return this
         .graphicsLayer {
-            val external = when {
-                latestDriven.value -> latestProvider.value?.invoke()?.also {
-                    lastExternalFrame.value = it
-                }
-                wasExternallyDriven.value -> lastExternalFrame.value
-                else -> null
-            }
-            val frameScale = external?.scale ?: animScale.value
-            val frameAlpha = external?.alpha ?: animAlpha.value
-            val frameBlur = external?.blur ?: animBlur.value
-            val frameTranslationX = external?.translationX ?: animTransX.value
-            val frameTranslationY = external?.translationY ?: animTransY.value
-            frameSnapshot?.update(
-                scale = frameScale,
-                blur = frameBlur,
-                alpha = frameAlpha,
-                translationX = frameTranslationX,
-                translationY = frameTranslationY,
-            )
+            val frame = readFrame()
+            val frameScale = frame.scale
+            val frameAlpha = frame.alpha
+            val frameBlur = frame.blur
+            val frameTranslationX = frame.translationX
+            val frameTranslationY = frame.translationY
             scaleX = frameScale
             scaleY = frameScale
             alpha = frameAlpha

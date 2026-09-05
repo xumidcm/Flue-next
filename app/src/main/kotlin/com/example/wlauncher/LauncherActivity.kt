@@ -50,6 +50,7 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.graphicsLayer
@@ -99,7 +100,8 @@ import com.flue.launcher.ui.home.WatchFaceLayer
 import com.flue.launcher.ui.home.WatchFaceLoadingMode
 import com.flue.launcher.ui.home.WatchFaceLoadingScreen
 import com.flue.launcher.ui.home.WatchFaceBottomFadeOverlay
-import com.flue.launcher.ui.home.WatchFaceStatusIndicatorOverlay
+import com.flue.launcher.ui.home.WatchFaceStatusWindow
+import com.flue.launcher.ui.home.WatchFacePresentationGate
 import com.flue.launcher.ui.home.rememberAppListSeedColor
 import com.flue.launcher.ui.navigation.GestureHost
 import com.flue.launcher.ui.navigation.LayoutMode
@@ -1761,6 +1763,17 @@ fun LauncherScreen(vm: LauncherViewModel) {
             sideSceneOverlayActive = sideSceneOverlayActive,
             appListBackdropActive = appListLayerRaised,
         )
+        var faceTransformSettled by remember { mutableStateOf(false) }
+        LaunchedEffect(faceAnimState, faceExternallyDriven) {
+            faceTransformSettled = false
+        }
+        val facePresentation = remember(faceRenderReadyKey) { WatchFacePresentationGate() }
+        val facePresentationToken = facePresentation.update(
+            canPresent = launcherInteractive && screenState == ScreenState.Face &&
+                !watchFaceOverlayTransitionActive && !faceExternallyDriven &&
+                faceTransformSettled && watchFaceSelectionReady && faceRenderReady &&
+                openFolder == null && !showLaunchBackdrop && !directLaunchBackdropVisible,
+        )
         // API 31+ 的回填层已经把“中心 + 镜像边缘”作为一张完整画面统一模糊。
         // 内层真实表盘仍需绘制来推进动画状态，但必须关闭它自己的 RenderEffect，
         // 否则 GPU 上仍然会做两次模糊（即使下面那层最终被覆盖）。旧系统不改。
@@ -1775,7 +1788,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
             Build.VERSION.SDK_INT >= Build.VERSION_CODES.O &&
                 launcherInteractive &&
                 screenState == ScreenState.Face &&
-                watchFaceSelectionReady &&
+                watchFaceSelectionReady && faceRenderReady && faceTransformSettled &&
                 openFolder == null &&
                 !sideSceneOverlayActive &&
                 !overlayBackdropActive &&
@@ -2084,6 +2097,7 @@ fun LauncherScreen(vm: LauncherViewModel) {
                         enabled = true,
                         fallbackColor = launcherStyle.screenBackground,
                         legacyFrames = legacyWatchFaceBackdropFrames,
+                        visualKey = legacyWatchFaceVisualKey,
                         legacyDarkMode = effectiveDarkMode,
                         // 背衬的中心矩形必须和表盘 graphicsLayer 使用同一帧的
                         // scale/translation；矩形外再由 flueBackdropFill 做四边
@@ -2134,7 +2148,14 @@ fun LauncherScreen(vm: LauncherViewModel) {
                         valuesProvider = faceTransitionProvider,
                         externallyDriven = faceExternallyDriven,
                         frameSnapshot = faceLayerFrame,
+                        onSettled = {
+                            faceTransformSettled = faceAnimState == ScreenState.Face && !faceExternallyDriven
+                        },
                     )
+                    .drawWithContent {
+                        drawContent()
+                        facePresentation.onFrameDrawn(facePresentationToken)
+                    }
             ) {
                 AnimatedContent(
                     // 只认 watchFaceSelectionReady。
@@ -2168,7 +2189,8 @@ fun LauncherScreen(vm: LauncherViewModel) {
                             watchFaceId = selectedWatchFace.id,
                             photoPath = builtInPhotoPath,
                             videoPath = builtInVideoPath,
-                            isFaceVisible = launcherInteractive && screenState == ScreenState.Face,
+                            isFaceVisible = launcherInteractive && screenState == ScreenState.Face &&
+                                !watchFaceOverlayTransitionActive,
                             uiStyle = uiStyle,
                             photoOptions = photoWatchOptions,
                             videoOptions = videoWatchOptions,
@@ -2191,7 +2213,8 @@ fun LauncherScreen(vm: LauncherViewModel) {
                         Box(modifier = Modifier.fillMaxSize()) {
                             WatchmakerWatchFaceHost(
                                 descriptor = selectedWatchFace,
-                                isFaceVisible = launcherInteractive && screenState == ScreenState.Face,
+                                isFaceVisible = launcherInteractive && screenState == ScreenState.Face &&
+                                !watchFaceOverlayTransitionActive,
                                 refreshToken = watchFaceRefreshToken,
                                 onLongPress = if (launcherInteractive && screenState == ScreenState.Face && !sideSceneOverlayActive) openWatchFaceChooser else null,
                                 onDoubleTap = if (
@@ -2226,7 +2249,8 @@ fun LauncherScreen(vm: LauncherViewModel) {
                         Box(modifier = Modifier.fillMaxSize()) {
                             JbWatchFaceHost(
                                 descriptor = selectedWatchFace,
-                                isFaceVisible = launcherInteractive && screenState == ScreenState.Face,
+                                isFaceVisible = launcherInteractive && screenState == ScreenState.Face &&
+                                !watchFaceOverlayTransitionActive,
                                 refreshToken = watchFaceRefreshToken,
                                 onLongPress = if (launcherInteractive && screenState == ScreenState.Face && !sideSceneOverlayActive) openWatchFaceChooser else null,
                                 onDoubleTap = if (
@@ -2257,7 +2281,8 @@ fun LauncherScreen(vm: LauncherViewModel) {
                         // longer exist and can never reach an external runtime.
                         WatchFaceLayer(
                             watchFaceId = BUILT_IN_WATCHFACE_ID,
-                            isFaceVisible = launcherInteractive && screenState == ScreenState.Face,
+                            isFaceVisible = launcherInteractive && screenState == ScreenState.Face &&
+                                !watchFaceOverlayTransitionActive,
                             uiStyle = uiStyle,
                             showChargingPowerText = watchFaceChargingPowerText,
                             showStatusIndicators = false,
@@ -2296,21 +2321,10 @@ fun LauncherScreen(vm: LauncherViewModel) {
                 }
             }
 
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .zIndex(if (screenState == ScreenState.Face && !sideSceneOverlayActive) 3.5f else 0.5f),
-                contentAlignment = Alignment.TopCenter,
-            ) {
-                // This sibling stays above every watch-face implementation,
-                // including the native AndroidView, so face clipping/effects
-                // can never cover charging and notification status.
-                WatchFaceStatusIndicatorOverlay(
-                    showStatusIndicators = watchFaceStatusIndicators,
-                    hasNotifications = showNotification && notificationGroups.isNotEmpty(),
-                    modifier = Modifier.padding(top = 18.dp),
-                )
-            }
+            WatchFaceStatusWindow(
+                visible = watchFaceStatusIndicators && facePresentation.visible,
+                hasNotifications = showNotification && notificationGroups.isNotEmpty(),
+            )
 
             // The app list paints its own background *inside* the layer that
             // scales, so every frame where that layer is smaller than the screen

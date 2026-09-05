@@ -1217,8 +1217,7 @@ data class WatchWeatherSnapshot(
     val humidity: Int? = null,
     val location: String? = null,
     /**
-     * {wws} 风速。规范说的是「mph 或 m/s」—— 我们统一存 **m/s**，因为数据源
-     * （Open-Meteo）本来就能直接要 m/s，不必在渲染侧再猜一遍单位。
+     * {wws} 风速，统一存 **m/s**；天气仓库负责按数据源的实际单位转换。
      */
     val windSpeedMetersPerSecond: Double? = null,
     /** {wwd} / {wwdb} / {wwdbb} 风向，气象学约定：度数是风**来自**的方向，0 = 北。 */
@@ -1274,15 +1273,11 @@ object WatchWeatherSources {
     var applicationSource: WatchWeatherSource? = null
 
     private val defaultSource = WatchWeatherSource { nowEpochMs ->
-        // Ask the application source first: repositories may apply a user
-        // preference (for example C/F) on every read even while the canonical
-        // weather payload itself remains cached. The local cache is only a
-        // last-good fallback when that source is temporarily unavailable.
-        runCatching {
-            applicationSource?.snapshot(nowEpochMs)
-        }.getOrNull()?.also { snapshot ->
-            cache.update(snapshot, nowEpochMs)
-        } ?: cache.snapshot(nowEpochMs)
+        // An installed repository owns cache validity, including a deliberate null after
+        // changing cities. The published cache is only for hosts without a repository.
+        val source = applicationSource
+        if (source == null) cache.snapshot(nowEpochMs)
+        else runCatching { source.snapshot(nowEpochMs) }.getOrNull()
     }
 
     fun default(): WatchWeatherSource = defaultSource
@@ -2615,9 +2610,8 @@ object WatchmakerTagResolver {
             // 在 Flue 上显示 `--`，用户只能报「经纬度变量读不出来」；更糟的是 `--` 与
             // 「不认识这个 tag」是同一个外观，连排查方向都被指错。逐位照上游才叫兼容。
             //
-            // 权限/数据源本身的缺口另有两条：渲染层的授权引导见
-            // [WatchLocationPermissionPolicy]，{aalt} 的数据源见
-            // `WatchWeatherRepository.fetchOpenMeteo` 里的 `elevation`。
+            // 渲染层的授权引导见 [WatchLocationPermissionPolicy]。{aalt} 仅使用
+            // 定位对象实际提供的 elevation；中国天气未提供时沿用缺失值口径。
             "alat" -> renderCoordinate(locationDegreesOrZero(snapshot.latitude))
             "alon" -> renderCoordinate(locationDegreesOrZero(snapshot.longitude))
             // 固定一位小数，**不能走 renderOneDecimal** —— 那条路经 renderCompactNumber

@@ -6,7 +6,7 @@ import androidx.compose.animation.core.FastOutSlowInEasing
 import com.flue.launcher.R
 
 object MusicTextSwitchAnimations {
-    const val DEFAULT_ID = "fade_out_left_fade_in_up"
+    const val DEFAULT_ID = "fade_out_fade_in"
 
     val presets: List<MusicTextSwitchAnimationPreset> = listOf(
         preset("fade_out_fade_in", R.string.music_text_anim_fade_out_fade_in_label, R.string.music_text_anim_fade_out_fade_in_subtitle, fade(300), fade(300)),
