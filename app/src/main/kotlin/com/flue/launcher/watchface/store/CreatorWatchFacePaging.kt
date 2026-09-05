@@ -1,5 +1,15 @@
 package com.flue.launcher.watchface.store
 
+internal const val TOP_CREATORS_PAGE_SIZE: Int = 10
+
+internal fun nextTopCreatorsLimit(loadedCount: Int): Int =
+    ((loadedCount.coerceAtLeast(0) / TOP_CREATORS_PAGE_SIZE) + 1) * TOP_CREATORS_PAGE_SIZE
+
+internal fun appendTopCreatorUsernames(
+    current: List<String>,
+    incoming: List<String>,
+): List<String> = (current + incoming).distinct()
+
 /** H5: returns the next creator-watch-face page, or null after the final page. */
 internal fun nextCreatorWatchFacePage(pagination: WatchStorePagination?): Int? =
     pagination?.takeIf(WatchStorePagination::hasNextPage)?.page?.plus(1)

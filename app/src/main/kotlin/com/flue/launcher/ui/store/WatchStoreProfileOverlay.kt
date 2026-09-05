@@ -1,7 +1,7 @@
 package com.flue.launcher.ui.store
 
 import android.net.Uri
-import androidx.activity.compose.BackHandler
+import com.flue.launcher.ui.store.WatchStoreBackHandler as BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts.OpenDocument
 import androidx.compose.foundation.background

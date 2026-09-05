@@ -6,9 +6,11 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyItemScope
 import androidx.compose.foundation.lazy.LazyListScope
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
@@ -16,7 +18,11 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.LaunchedEffect
+import kotlinx.coroutines.flow.distinctUntilChanged
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInRoot
@@ -34,6 +40,9 @@ import com.flue.launcher.ui.common.fluePlacementSpring
 import com.flue.launcher.ui.common.isFlueScreenRound
 import com.flue.launcher.ui.common.roundScrollablePadding
 import com.flue.launcher.ui.style.flueOverscroll
+import com.flue.launcher.ui.common.fluePullToRefresh
+import com.flue.launcher.ui.common.rememberFluePullToRefreshState
+import com.flue.launcher.ui.style.FlueRefreshIndicator
 
 /**
  * 市场**二级页**的列表容器：圆屏弦宽适配 + 避让动画，一处给全。
@@ -60,7 +69,11 @@ import com.flue.launcher.ui.style.flueOverscroll
 @Composable
 internal fun StoreRoundList(
     modifier: Modifier = Modifier,
+    state: LazyListState? = null,
     verticalArrangement: Arrangement.Vertical = Arrangement.spacedBy(8.dp),
+    onNearEnd: (() -> Unit)? = null,
+    refreshing: Boolean = false,
+    onRefresh: (() -> Unit)? = null,
     content: StoreRoundListScope.() -> Unit,
 ) {
     val roundScreen = isFlueScreenRound()
@@ -76,7 +89,24 @@ internal fun StoreRoundList(
         val viewportWidthPx = with(density) { maxWidth.toPx() }
         val viewportHeightPx = with(density) { maxHeight.toPx() }
         val screenCenterY = viewportHeightPx / 2f
-        val listState = rememberLazyListState()
+        val listState = state ?: rememberLazyListState()
+        val pullRefreshState = onRefresh?.let { refresh ->
+            rememberFluePullToRefreshState(
+                refreshing = refreshing,
+                onRefresh = refresh,
+                atTop = { listState.firstVisibleItemIndex == 0 && listState.firstVisibleItemScrollOffset == 0 },
+            )
+        }
+        LaunchedEffect(listState, onNearEnd) {
+            if (onNearEnd == null) return@LaunchedEffect
+            snapshotFlow {
+                val info = listState.layoutInfo
+                info.totalItemsCount > 0 &&
+                    ((info.visibleItemsInfo.lastOrNull()?.index ?: -1) >= info.totalItemsCount - 3)
+            }.distinctUntilChanged().collect { nearEnd ->
+                if (nearEnd) onNearEnd()
+            }
+        }
         // 圆屏上首尾两项要能滚到圆心。没有这段留白，第一项最多停在视口顶部 ——
         // 那正好是弧线最窄的地方，读起来最费劲，而且「拉不到屏幕中间」（老师报的）。
         // 与设置页同一套算法（`roundScrollablePadding`），不另编一份。
@@ -98,6 +128,7 @@ internal fun StoreRoundList(
             state = listState,
             modifier = Modifier
                 .fillMaxSize()
+                .then(if (pullRefreshState != null) Modifier.fluePullToRefresh(pullRefreshState) else Modifier)
                 // 橡皮筋回弹：列表容器一直缺这一层，二级页拉到底就是硬停
                 //（老师报的「没有橡皮筋回弹」）。
                 .flueOverscroll(listState)
@@ -115,6 +146,17 @@ internal fun StoreRoundList(
                 // 顶边一变就整表重组。这样读取推迟到绘制期，只让图层失效。
                 listTopInViewport = { listTopInWindow - rootTopInWindow },
             ).content()
+        }
+        if (pullRefreshState != null) {
+            Box(
+                modifier = Modifier.fillMaxSize().padding(top = 6.dp),
+                contentAlignment = Alignment.TopCenter,
+            ) {
+                FlueRefreshIndicator(
+                    progress = pullRefreshState.progress,
+                    refreshing = refreshing,
+                )
+            }
         }
     }
 }

@@ -1,6 +1,6 @@
 package com.flue.launcher.ui.store
 
-import androidx.activity.compose.BackHandler
+import com.flue.launcher.ui.store.WatchStoreBackHandler as BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -21,6 +21,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -105,14 +106,17 @@ fun WatchStoreFavoritesOverlay(
     onTokenExpired: () -> Unit,
     onDismiss: () -> Unit,
 ) {
+    val pageActive = LocalWatchStorePageActive.current
+    val listState = rememberLazyListState()
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var items by remember { mutableStateOf<List<WatchStoreWatchFace>>(emptyList()) }
     var loading by remember { mutableStateOf(true) }
     var loadError by remember { mutableStateOf<String?>(null) }
 
-    LaunchedEffect(token) {
-        loading = true
+    LaunchedEffect(token, pageActive) {
+        if (!pageActive) return@LaunchedEffect
+        loading = items.isEmpty()
         loadError = null
         runCatching { withContext(Dispatchers.IO) { api.listMyFavorites(token) } }
             .onSuccess { items = it }
@@ -149,12 +153,17 @@ fun WatchStoreFavoritesOverlay(
         onBack = onDismiss,
         action = null,
         loading = loading,
-        loadError = loadError,
+        loadError = loadError?.takeIf { items.isEmpty() },
         empty = items.isEmpty(),
         emptyText = stringResource(R.string.watch_store_no_favorites),
     ) {
         // StoreRoundList 而不是 LazyColumn：圆屏弦宽适配与避让动画都在它里面（见该文件注释）。
-        StoreRoundList {
+        StoreRoundList(state = listState) {
+            if (loadError != null && items.isNotEmpty()) {
+                item("refresh_error") {
+                    Text(loadError!!, color = LauncherTheme.style.secondaryTextColor, fontSize = 11.sp)
+                }
+            }
             items(items = items, key = { it.id }, contentType = { "library_face_row" }) { face ->
                 StoreLibraryFaceRow(
                     repository = repository,
@@ -194,6 +203,8 @@ fun WatchStoreCollectionsOverlay(
     onTokenExpired: () -> Unit,
     onDismiss: () -> Unit,
 ) {
+    val pageActive = LocalWatchStorePageActive.current
+    val listState = rememberLazyListState()
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var collections by remember { mutableStateOf<List<WatchStoreCollection>>(emptyList()) }
@@ -208,8 +219,9 @@ fun WatchStoreCollectionsOverlay(
     var namingTarget by remember { mutableStateOf<CollectionNaming?>(null) }
     var deleteTarget by remember { mutableStateOf<WatchStoreCollection?>(null) }
 
-    LaunchedEffect(token, reloadToken) {
-        loading = true
+    LaunchedEffect(token, reloadToken, pageActive) {
+        if (!pageActive) return@LaunchedEffect
+        loading = collections.isEmpty()
         loadError = null
         runCatching { withContext(Dispatchers.IO) { api.listMyCollections(token) } }
             .onSuccess { collections = it }
@@ -249,12 +261,17 @@ fun WatchStoreCollectionsOverlay(
             }
         },
         loading = loading,
-        loadError = loadError,
+        loadError = loadError?.takeIf { collections.isEmpty() },
         empty = collections.isEmpty(),
         emptyText = stringResource(R.string.watch_store_no_collections),
     ) {
         // StoreRoundList 而不是 LazyColumn：圆屏弦宽适配与避让动画都在它里面（见该文件注释）。
-        StoreRoundList {
+        StoreRoundList(state = listState) {
+            if (loadError != null && collections.isNotEmpty()) {
+                item("refresh_error") {
+                    Text(loadError!!, color = LauncherTheme.style.secondaryTextColor, fontSize = 11.sp)
+                }
+            }
             items(
                 items = collections,
                 key = { it.id },
@@ -297,7 +314,7 @@ fun WatchStoreCollectionsOverlay(
 
     // 长按操作单：重命名 / 删除。
     val target = actionTarget
-    if (target != null) {
+    if (target != null && pageActive) {
         FlueAlertDialog(
             onDismissRequest = { actionTarget = null },
             title = { Text(target.name, color = LauncherTheme.style.titleColor) },
@@ -334,7 +351,7 @@ fun WatchStoreCollectionsOverlay(
 
     // 新建 / 重命名共用一个命名弹窗：两条路的输入校验与长度上限完全相同。
     val naming = namingTarget
-    if (naming != null) {
+    if (naming != null && pageActive) {
         StoreCollectionNameDialog(
             initialName = naming.name,
             isRename = naming.id != null,
@@ -368,7 +385,7 @@ fun WatchStoreCollectionsOverlay(
     }
 
     val pendingDelete = deleteTarget
-    if (pendingDelete != null) {
+    if (pendingDelete != null && pageActive) {
         FlueAlertDialog(
             onDismissRequest = { deleteTarget = null },
             title = {
@@ -438,6 +455,8 @@ private fun StoreCollectionItemsPage(
     onItemCountChange: (Int) -> Unit,
     onBack: () -> Unit,
 ) {
+    val pageActive = LocalWatchStorePageActive.current
+    val listState = rememberLazyListState()
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var items by remember(collection.id) {
@@ -446,8 +465,9 @@ private fun StoreCollectionItemsPage(
     var loading by remember(collection.id) { mutableStateOf(true) }
     var loadError by remember(collection.id) { mutableStateOf<String?>(null) }
 
-    LaunchedEffect(token, collection.id) {
-        loading = true
+    LaunchedEffect(token, collection.id, pageActive) {
+        if (!pageActive) return@LaunchedEffect
+        loading = items.isEmpty()
         loadError = null
         runCatching {
             withContext(Dispatchers.IO) { api.listCollectionItems(token, collection.id) }
@@ -471,12 +491,17 @@ private fun StoreCollectionItemsPage(
         onBack = onBack,
         action = null,
         loading = loading,
-        loadError = loadError,
+        loadError = loadError?.takeIf { items.isEmpty() },
         empty = items.isEmpty(),
         emptyText = stringResource(R.string.watch_store_collection_empty),
     ) {
         // StoreRoundList 而不是 LazyColumn：圆屏弦宽适配与避让动画都在它里面（见该文件注释）。
-        StoreRoundList {
+        StoreRoundList(state = listState) {
+            if (loadError != null && items.isNotEmpty()) {
+                item("refresh_error") {
+                    Text(loadError!!, color = LauncherTheme.style.secondaryTextColor, fontSize = 11.sp)
+                }
+            }
             items(items = items, key = { it.id }, contentType = { "library_face_row" }) { entry ->
                 StoreLibraryFaceRow(
                     repository = repository,
@@ -624,6 +649,7 @@ private fun StoreLibraryFaceRow(
             .fillMaxWidth()
             .fluePressScale(pressScale)
             .clickable(interactionSource = interactionSource, indication = null, onClick = onClick),
+        border = null,
     ) {
         Row(
             modifier = Modifier.padding(9.dp),
@@ -684,7 +710,6 @@ private fun StoreCollectionRow(
             .fluePressScale(pressScale)
             .clip(style.cardShape)
             .background(style.cardColor)
-            .border(1.dp, style.outlineColor, style.cardShape)
             .combinedClickable(
                 interactionSource = interactionSource,
                 indication = null,

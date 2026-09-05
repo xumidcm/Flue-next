@@ -11,20 +11,19 @@ import org.junit.Test
 class WatchStoreInteractionPolicyTest {
     @Test
     fun `detail opened from creator returns to that creator`() {
-        val origin = WatchStoreDetailOrigin.Creator("alice")
-
-        assertEquals(
-            WatchStoreDetailBackTarget.Creator("alice"),
-            watchStoreDetailBackTarget(origin),
-        )
+        val navigation = WatchStoreNavigator()
+        navigation.push(WatchStoreRoute.Creator("alice"))
+        navigation.push(WatchStoreRoute.Detail("work"))
+        navigation.pop()
+        assertEquals(WatchStoreRoute.Creator("alice"), navigation.current.route)
     }
 
     @Test
     fun `detail opened from browse returns to browse`() {
-        assertEquals(
-            WatchStoreDetailBackTarget.Browse,
-            watchStoreDetailBackTarget(WatchStoreDetailOrigin.Browse),
-        )
+        val navigation = WatchStoreNavigator()
+        navigation.push(WatchStoreRoute.Detail("work"))
+        navigation.pop()
+        assertEquals(WatchStoreRoute.Browse, navigation.current.route)
     }
 
     @Test

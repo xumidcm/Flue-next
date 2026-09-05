@@ -13,7 +13,7 @@ import android.provider.OpenableColumns
 import android.widget.Toast
 import androidx.annotation.StringRes
 import androidx.activity.ComponentActivity
-import androidx.activity.compose.BackHandler
+import com.flue.launcher.ui.store.WatchStoreBackHandler as BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
@@ -93,6 +93,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateMapOf
@@ -128,7 +129,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.window.Dialog
+import com.flue.launcher.ui.store.WatchStoreDialog as Dialog
 import androidx.compose.ui.window.DialogProperties
 import top.yukonga.miuix.kmp.basic.BasicComponent
 import top.yukonga.miuix.kmp.basic.ListPopupDefaults
@@ -176,13 +177,15 @@ import com.flue.launcher.ui.store.storeChordBlock
 import com.flue.launcher.ui.store.StoreWebLinkRow
 import com.flue.launcher.ui.store.StoreWebLinks
 import com.flue.launcher.ui.store.WatchStoreCreatorsOverlay
-import com.flue.launcher.ui.store.WatchStoreDetailBackTarget
-import com.flue.launcher.ui.store.WatchStoreDetailOrigin
+import com.flue.launcher.ui.store.WatchStoreNavigator
+import com.flue.launcher.ui.store.WatchStoreRoute
+import com.flue.launcher.ui.store.WatchStorePageStack
+import com.flue.launcher.ui.store.WatchStorePageEffect
+import com.flue.launcher.ui.store.LocalWatchStorePageActive
 import com.flue.launcher.ui.store.WatchStoreProfileOverlay
 import com.flue.launcher.ui.store.WatchStoreBaseUrlDialog
 import com.flue.launcher.ui.store.WatchStoreWebActivity
 import com.flue.launcher.ui.store.storeWebPageIntent
-import com.flue.launcher.ui.store.watchStoreDetailBackTarget
 import com.flue.launcher.ui.store.storeWebWatchFaceIntent
 import com.flue.launcher.ui.store.storeWebCreatorIntent
 import com.flue.launcher.ui.store.WatchStoreCollectionsOverlay
@@ -552,12 +555,16 @@ private fun WatchStoreScreen(
     var listError by remember { mutableStateOf<String?>(null) }
     var marketLoadSucceeded by remember { mutableStateOf(false) }
     var reloadToken by remember { mutableIntStateOf(0) }
-    var selectedId by remember { mutableStateOf<String?>(null) }
-    var lastDetailId by remember { mutableStateOf<String?>(null) }
-    var selectedDetail by remember { mutableStateOf<WatchStoreWatchFaceDetail?>(null) }
+    val navigation = remember { WatchStoreNavigator() }
+    val detailCache = remember { mutableStateMapOf<String, WatchStoreWatchFaceDetail>() }
     val notificationApi = api
     val notificationAuthStore = remember { WatchStoreAuthStore(context) }
     var notificationSession by remember { mutableStateOf(notificationAuthStore.read()) }
+    fun updateNotificationSession(session: WatchStoreAuthSession?) {
+        notificationSession = session
+        if (session == null) navigation.removeAuthenticatedPages()
+    }
+
     // ── C5/G5：网页版入口 + C3 的下载回流 ─────────────────────────────────────
     //
     // 宿主用 `StartActivityForResult` 起：网页里点「下载」时，宿主认出表盘 id 就把它
@@ -571,7 +578,7 @@ private fun WatchStoreScreen(
             ?.takeIf { it.isNotBlank() }
             ?.let { id ->
                 // 先把详情页打开：既让用户看到下载进度，也顺便把 screenType 取回来。
-                selectedId = id
+                navigation.push(WatchStoreRoute.Detail(id))
                 pendingWebInstallId = id
             }
         result.data?.let { data ->
@@ -580,7 +587,7 @@ private fun WatchStoreScreen(
             if (!token.isNullOrBlank() && !username.isNullOrBlank()) {
                 // Result 回调就是登录完成的边界：同步写入共享会话并立即更新 Compose，
                 // 不再把状态交给下一轮 LaunchedEffect 才落地。
-                notificationSession = notificationAuthStore.write(token, username)
+                updateNotificationSession(notificationAuthStore.write(token, username))
             }
         }
     }
@@ -610,9 +617,6 @@ private fun WatchStoreScreen(
             ?.getStringExtra(WatchStoreWebActivity.EXTRA_URL)
             ?.let(openExternalUri)
     }
-    var detailLoading by remember { mutableStateOf(false) }
-    var detailError by remember { mutableStateOf<String?>(null) }
-    var detailReloadToken by remember { mutableIntStateOf(0) }
     var catalog by remember { mutableStateOf(WatchFaceCatalogSnapshot()) }
     var catalogInitialized by remember { mutableStateOf(false) }
     var catalogError by remember { mutableStateOf<String?>(null) }
@@ -637,19 +641,6 @@ private fun WatchStoreScreen(
     val downloadJobs = remember { mutableMapOf<String, Job>() }
     val pendingCatalogInstalls = remember { mutableStateMapOf<String, PendingMarketCatalogInstall>() }
     var installedActionError by remember { mutableStateOf<String?>(null) }
-    var uploadVisible by remember { mutableStateOf(false) }
-    var myUploadsVisible by remember { mutableStateOf(false) }
-    var notificationsVisible by remember { mutableStateOf(false) }
-    /** H2：个人资料页。 */
-    var profileVisible by remember { mutableStateOf(false) }
-    /** H5：热门创作者与单作者页。 */
-    var creatorsVisible by remember { mutableStateOf(false) }
-    // B3b：我的收藏 / 我的合集。与通知同理只在登录后露入口。
-    var favoritesVisible by remember { mutableStateOf(false) }
-    var collectionsVisible by remember { mutableStateOf(false) }
-    var creatorUsernameToOpen by remember { mutableStateOf<String?>(null) }
-    var creatorInitialBackToList by remember { mutableStateOf(false) }
-    var detailOrigin by remember { mutableStateOf<WatchStoreDetailOrigin>(WatchStoreDetailOrigin.Browse) }
     // 铃铛红点：未读数只在本页可见期间拉，且由 WatchStoreUnreadCounter 做 30 秒节流。
     // 手表电量敏感 —— 常驻轮询是不能接受的，红点晚半分钟亮没有代价。
     val unreadCounter = remember(notificationApi) { WatchStoreUnreadCounter.of(notificationApi) }
@@ -669,10 +660,8 @@ private fun WatchStoreScreen(
      * 复用「我的上传」覆层里那套表单（记住用户名/密码、注册切换、去网页版几条路都在里面），
      * 只是让它直接落在表单上、跳过中间那页「登录后查看我的上传」。
      */
-    var loginFormRequested by remember { mutableStateOf(false) }
     val requestLogin: () -> Unit = {
-        loginFormRequested = true
-        myUploadsVisible = true
+        navigation.push(WatchStoreRoute.MyUploads(startInLoginForm = true))
     }
     var unreadNotificationCount by remember { mutableIntStateOf(0) }
     var featureFlags by remember { mutableStateOf(WatchStoreFeatureFlags()) }
@@ -680,19 +669,13 @@ private fun WatchStoreScreen(
 
     // 功能开关属于市场会话而不是详情页。即使当前没有选中表盘，上传/登录入口
     // 也必须先读 `/config`，否则 registration_enabled=false 会被默认 true 绕过。
-    LaunchedEffect(selectedId, featureFlagCache) {
+    LaunchedEffect(featureFlagCache) {
         featureFlags = featureFlagCache.flags()
     }
 
-    // 从「我的上传」返回时可能刚登录 / 刚登出，重新读一次会话。
-    //
-    // 新增的登录入口复用的就是这一层覆层（`loginFormRequested` 只改它的落地页），所以
-    // `myUploadsVisible` 已经把它盖住了，不需要再往 key 里加一个可见性状态。
-    LaunchedEffect(myUploadsVisible, uploadVisible, profileVisible) {
-        if (!myUploadsVisible && !uploadVisible && !profileVisible) {
-            loginFormRequested = false
-            notificationSession = withContext(Dispatchers.IO) { notificationAuthStore.read() }
-        }
+    // Returning to a parent or entering upload can follow a native login/logout.
+    LaunchedEffect(navigation.current.id) {
+        updateNotificationSession(withContext(Dispatchers.IO) { notificationAuthStore.read() })
     }
 
     // 自己的 user.id 跟着 token 走：登出立刻清掉，免得下一个账号沿用上一个人的归属判断。
@@ -745,35 +728,12 @@ private fun WatchStoreScreen(
     val pullRefreshing = pullRefreshHolding ||
         pullRefreshRequestedToken?.let { it > listLoadCompletedToken } == true
 
-    /**
-     * Opening a detail must reset the load state *synchronously*: the first
-     * overlay frame otherwise renders with the previous request's error or
-     * with loading=false and flashes "无法加载表盘" before the effect runs.
-     */
-    fun openDetail(
-        id: String,
-        origin: WatchStoreDetailOrigin = WatchStoreDetailOrigin.Browse,
-    ) {
-        selectedDetail = null
-        detailError = null
-        detailLoading = true
-        lastDetailId = id
-        selectedId = id
-        detailOrigin = origin
+    fun openRoute(route: WatchStoreRoute) {
         installedActionError = null
+        navigation.push(route)
     }
 
-    fun closeDetail() {
-        val target = watchStoreDetailBackTarget(detailOrigin)
-        selectedId = null
-        installedActionError = null
-        detailOrigin = WatchStoreDetailOrigin.Browse
-        if (target is WatchStoreDetailBackTarget.Creator) {
-            creatorUsernameToOpen = target.username
-            creatorInitialBackToList = true
-            creatorsVisible = true
-        }
-    }
+    fun openDetail(id: String) = openRoute(WatchStoreRoute.Detail(id))
 
     suspend fun cleanObsoleteMarketRevisions(
         snapshot: WatchFaceCatalogSnapshot,
@@ -972,25 +932,10 @@ private fun WatchStoreScreen(
     }
 
     BackHandler {
-        if (selectedId != null) {
-            closeDetail()
-        } else {
-            onBack()
-        }
+        installedActionError = null
+        if (!navigation.pop()) onBack()
     }
 
-    LaunchedEffect(selectedId, detailReloadToken) {
-        val id = selectedId ?: return@LaunchedEffect
-        detailLoading = true
-        detailError = null
-        runCatching { repository.getWatchFace(id) }
-            .onSuccess { selectedDetail = it }
-            .onFailure {
-                it.throwIfCancellation()
-            detailError = it.userFacingMessage(context)
-            }
-        detailLoading = false
-    }
 
     fun download(id: String, screenType: WatchStoreScreenType) {
         val current = downloadStates[id]?.value
@@ -1141,9 +1086,9 @@ private fun WatchStoreScreen(
     // C3：从网页版回来的那个 id，等详情（screenType 在里面）到齐再下载。
     // screenType 决定装成圆屏还是方屏，抢在详情之前下载会按 UNKNOWN 装错。
     // 已经在下/已装好的直接放行，`download` 自己会去重。
-    LaunchedEffect(pendingWebInstallId, selectedDetail?.id, entries) {
+    LaunchedEffect(pendingWebInstallId, detailCache[pendingWebInstallId], entries) {
         val id = pendingWebInstallId ?: return@LaunchedEffect
-        val type = selectedDetail?.takeIf { it.id == id }?.screenType
+        val type = detailCache[id]?.screenType
             ?: entries.firstOrNull { it.id == id }?.screenType
             ?: return@LaunchedEffect
         pendingWebInstallId = null
@@ -1212,7 +1157,7 @@ private fun WatchStoreScreen(
     // Match the settings hierarchy transition: when a child page is pushed,
     // the preserved browse page moves left by 1/6. Placement-phase movement
     // avoids a persistent full-screen graphics layer while retaining both lazy states.
-    val browseCovered = selectedId != null || uploadVisible || myUploadsVisible
+    val browseCovered = navigation.entries.size > 1
     val browseHierarchyOffset = animateFloatAsState(
         targetValue = if (browseCovered) 1f else 0f,
         animationSpec = tween(
@@ -1440,37 +1385,34 @@ private fun WatchStoreScreen(
                                     viewMode = next
                                     uiPreferences.writeViewMode(next)
                                 },
-                                onMyUploads = { myUploadsVisible = true },
+                                onMyUploads = { openRoute(WatchStoreRoute.MyUploads()) },
                                 onOpenCustomMarketUrl = { marketUrlDialogVisible = true },
                                 onBack = onBack,
                                 // 没登录不摆铃铛：通知是账号的东西，未登录时点开只能显示
                                 // 一句「请先登录」，那不如不出现。
                                 onOpenNotifications = if (notificationSession != null) {
-                                    { notificationsVisible = true }
+                                    { openRoute(WatchStoreRoute.Notifications) }
                                 } else {
                                     null
                                 },
                                 hasUnreadNotifications = unreadNotificationCount > 0,
                                 onMyFavorites = if (notificationSession != null) {
-                                    { favoritesVisible = true }
+                                    { openRoute(WatchStoreRoute.Favorites) }
                                 } else {
                                     null
                                 },
                                 onMyCollections = if (notificationSession != null) {
-                                    { collectionsVisible = true }
+                                    { openRoute(WatchStoreRoute.Collections) }
                                 } else {
                                     null
                                 },
                                 onOpenProfile = if (notificationSession != null) {
-                                    { profileVisible = true }
+                                    { openRoute(WatchStoreRoute.Profile) }
                                 } else {
                                     null
                                 },
                                 onOpenCreators = {
-                                    // 从溢出菜单进来的是**列表**：必须清掉上一次
-                                    // 从详情页带进来的用户名，否则会直接落到那个人的主页。
-                                    creatorUsernameToOpen = null
-                                    creatorsVisible = true
+                                    openRoute(WatchStoreRoute.TopCreators)
                                 },
                                 onOpenWebStore = { openWebPage(WatchStoreWebPage.HOME) },
                                 onOpenWebStoreExternal = { openExternalPage(WatchStoreWebPage.HOME) },
@@ -1577,37 +1519,34 @@ private fun WatchStoreScreen(
                                     viewMode = next
                                     uiPreferences.writeViewMode(next)
                                 },
-                                onMyUploads = { myUploadsVisible = true },
+                                onMyUploads = { openRoute(WatchStoreRoute.MyUploads()) },
                                 onOpenCustomMarketUrl = { marketUrlDialogVisible = true },
                                 onBack = onBack,
                                 // 没登录不摆铃铛：通知是账号的东西，未登录时点开只能显示
                                 // 一句「请先登录」，那不如不出现。
                                 onOpenNotifications = if (notificationSession != null) {
-                                    { notificationsVisible = true }
+                                    { openRoute(WatchStoreRoute.Notifications) }
                                 } else {
                                     null
                                 },
                                 hasUnreadNotifications = unreadNotificationCount > 0,
                                 onMyFavorites = if (notificationSession != null) {
-                                    { favoritesVisible = true }
+                                    { openRoute(WatchStoreRoute.Favorites) }
                                 } else {
                                     null
                                 },
                                 onMyCollections = if (notificationSession != null) {
-                                    { collectionsVisible = true }
+                                    { openRoute(WatchStoreRoute.Collections) }
                                 } else {
                                     null
                                 },
                                 onOpenProfile = if (notificationSession != null) {
-                                    { profileVisible = true }
+                                    { openRoute(WatchStoreRoute.Profile) }
                                 } else {
                                     null
                                 },
                                 onOpenCreators = {
-                                    // 从溢出菜单进来的是**列表**：必须清掉上一次
-                                    // 从详情页带进来的用户名，否则会直接落到那个人的主页。
-                                    creatorUsernameToOpen = null
-                                    creatorsVisible = true
+                                    openRoute(WatchStoreRoute.TopCreators)
                                 },
                                 onOpenWebStore = { openWebPage(WatchStoreWebPage.HOME) },
                                 onOpenWebStoreExternal = { openExternalPage(WatchStoreWebPage.HOME) },
@@ -1663,35 +1602,34 @@ private fun WatchStoreScreen(
                             viewMode = next
                             uiPreferences.writeViewMode(next)
                         },
-                        onMyUploads = { myUploadsVisible = true },
+                        onMyUploads = { openRoute(WatchStoreRoute.MyUploads()) },
                         onOpenCustomMarketUrl = { marketUrlDialogVisible = true },
                         showManagement = marketLoadSucceeded,
                         isLoggedIn = notificationSession != null,
                         onLogin = requestLogin,
                         onOpenNotifications = if (notificationSession != null) {
-                            { notificationsVisible = true }
+                            { openRoute(WatchStoreRoute.Notifications) }
                         } else {
                             null
                         },
                         hasUnreadNotifications = unreadNotificationCount > 0,
                         onMyFavorites = if (notificationSession != null) {
-                            { favoritesVisible = true }
+                            { openRoute(WatchStoreRoute.Favorites) }
                         } else {
                             null
                         },
                         onMyCollections = if (notificationSession != null) {
-                            { collectionsVisible = true }
+                            { openRoute(WatchStoreRoute.Collections) }
                         } else {
                             null
                         },
                         onOpenProfile = if (notificationSession != null) {
-                            { profileVisible = true }
+                            { openRoute(WatchStoreRoute.Profile) }
                         } else {
                             null
                         },
                         onOpenCreators = {
-                            creatorUsernameToOpen = null
-                            creatorsVisible = true
+                            openRoute(WatchStoreRoute.TopCreators)
                         },
                         onOpenWebStore = { openWebPage(WatchStoreWebPage.HOME) },
                         onOpenWebStoreExternal = { openExternalPage(WatchStoreWebPage.HOME) },
@@ -1700,289 +1638,181 @@ private fun WatchStoreScreen(
             }
         }
 
-        // 表盘市场的层级切换统一使用设置页的 MIUIX / HyperOS 推拉动效；
-        // 列表仍留在组合树中，因此返回时不会丢失滚动位置。
-        AnimatedVisibility(
-            visible = selectedId != null,
-            modifier = Modifier
-                .fillMaxSize()
-                .blockPointerPassThrough()
-                .zIndex(1f),
-            enter = STORE_LAYER_ENTER,
-            exit = STORE_LAYER_EXIT,
-        ) {
-            val overlayId = selectedId ?: lastDetailId
-            if (overlayId != null) {
-                val transientState = downloadStates[overlayId]
-                    ?.collectAsStateWithLifecycle()
-                    ?.value
-                WatchFaceDetailPage(
+        // Every pushed page is retained until popped; draw order follows the actual stack.
+        WatchStorePageStack(navigation) { page ->
+            val dismissPage: () -> Unit = {
+                if (navigation.isCurrent(page)) {
+                    installedActionError = null
+                    navigation.pop()
+                }
+            }
+            when (val route = page.route) {
+                is WatchStoreRoute.Detail -> {
+                    val id = route.remoteId
+                    val detail = detailCache[id]
+                    var loading by remember { mutableStateOf(detail == null) }
+                    var error by remember { mutableStateOf<String?>(null) }
+                    var retry by remember { mutableIntStateOf(0) }
+                    WatchStorePageEffect(id, retry) {
+                        loading = detailCache[id] == null
+                        error = null
+                        try {
+                            detailCache[id] = repository.getWatchFace(id)
+                        } catch (failure: Exception) {
+                            failure.throwIfCancellation()
+                            error = failure.userFacingMessage(context)
+                        } finally {
+                            loading = false
+                        }
+                    }
+                    val transientState = downloadStates[id]?.collectAsStateWithLifecycle()?.value
+                    WatchFaceDetailPage(
+                        repository = repository,
+                        api = api,
+                        remoteId = id,
+                        detail = detail,
+                        summary = entries.firstOrNull { it.id == id },
+                        localDescriptor = (transientState as? WatchStoreInstallState.Installed)?.record
+                            ?.activeLauncherIdOrNull()?.let(installedFacesById::get)
+                            ?: installedMarketRecords[id]?.activeLauncherIdOrNull()?.let(installedFacesById::get),
+                        loading = loading,
+                        error = error,
+                        downloadState = transientState ?: persistentInstallState(id),
+                        actionError = installedActionError,
+                        onBack = dismissPage,
+                        onRetryDetail = { retry++ },
+                        onDownload = {
+                            download(id, detail?.screenType
+                                ?: entries.firstOrNull { it.id == id }?.screenType
+                                ?: WatchStoreScreenType.UNKNOWN)
+                        },
+                        onCancelDownload = { cancelDownload(id) },
+                        onUse = { record -> record.activeLauncherIdOrNull()?.let(useInstalled) },
+                        onEdit = { record -> record.activeLauncherIdOrNull()?.let(editInstalled) },
+                        onRename = { record, name -> renameInstalled(id, record, name) },
+                        onReinstall = { download(id, detail?.screenType ?: WatchStoreScreenType.UNKNOWN) },
+                        onDelete = { record -> removeInstalled(id, record) },
+                        onExport = { record -> record.activeLauncherIdOrNull()?.let(exportInstalled) },
+                        onOpenWeb = { openWebWatchFace(id) },
+                        onOpenWebExternal = { openExternalWatchFace(id) },
+                        sessionToken = notificationSession?.token,
+                        sessionAuthorId = notificationAccountId,
+                        sessionUsername = notificationSession?.username,
+                        sessionAvatarUrl = notificationSession?.avatarUrl,
+                        sessionAvatarVersion = notificationSession?.avatarVersion ?: 0L,
+                        featureFlags = featureFlags,
+                        onOpenCreator = { openRoute(WatchStoreRoute.Creator(it)) },
+                        onRequestLogin = requestLogin,
+                    )
+                }
+                WatchStoreRoute.Upload -> StoreUploadOverlay(
                     repository = repository,
                     api = api,
-                    remoteId = overlayId,
-                    detail = selectedDetail,
-                    summary = entries.firstOrNull { it.id == overlayId },
-                    localDescriptor = (transientState as? WatchStoreInstallState.Installed)?.record
-                        ?.activeLauncherIdOrNull()
-                        ?.let(installedFacesById::get)
-                        ?: installedMarketRecords[overlayId]
-                            ?.activeLauncherIdOrNull()
-                            ?.let(installedFacesById::get),
-                    loading = detailLoading,
-                    error = detailError,
-                    downloadState = transientState ?: persistentInstallState(overlayId),
-                    actionError = installedActionError,
-                    onBack = ::closeDetail,
-                    onRetryDetail = {
-                        detailError = null
-                        detailLoading = true
-                        detailReloadToken++
-                    },
-                    onDownload = {
-                        download(
-                            overlayId,
-                            selectedDetail?.screenType
-                                ?: entries.firstOrNull { it.id == overlayId }?.screenType
-                                ?: WatchStoreScreenType.UNKNOWN,
-                        )
-                    },
-                    onCancelDownload = { cancelDownload(overlayId) },
-                    onUse = { record -> record.activeLauncherIdOrNull()?.let(useInstalled) },
-                    onEdit = { record -> record.activeLauncherIdOrNull()?.let(editInstalled) },
-                    onRename = { record, name -> renameInstalled(overlayId, record, name) },
-                    onReinstall = { download(overlayId, selectedDetail?.screenType ?: WatchStoreScreenType.UNKNOWN) },
-                    onDelete = { record -> removeInstalled(overlayId, record) },
-                    onExport = { record -> record.activeLauncherIdOrNull()?.let(exportInstalled) },
-                    onOpenWeb = { openWebWatchFace(overlayId) },
-                    onOpenWebExternal = { openExternalWatchFace(overlayId) },
-                    sessionToken = notificationSession?.token,
-                    sessionAuthorId = notificationAccountId,
-                    sessionUsername = notificationSession?.username,
-                    sessionAvatarUrl = notificationSession?.avatarUrl,
-                    sessionAvatarVersion = notificationSession?.avatarVersion ?: 0L,
-                    featureFlags = featureFlags,
-                    onOpenCreator = { username ->
-                        creatorUsernameToOpen = username
-                        creatorInitialBackToList = false
-                        creatorsVisible = true
-                    },
-                    onRequestLogin = requestLogin,
+                    installedFaces = installedFaces,
+                    registrationEnabled = featureFlags.registrationEnabled,
+                    onUploaded = { reloadToken++ },
+                    onDismiss = dismissPage,
+                    onOpenWeb = { openWebPage(WatchStoreWebPage.DASHBOARD) },
+                    onOpenWebExternal = { openExternalPage(WatchStoreWebPage.DASHBOARD) },
+                    externalAuthSession = notificationSession,
                 )
-            }
-        }
-
-        // 商店内上传入口：覆层挂在详情之上（zIndex 2），来源支持已安装表盘
-        // 与系统文件选择器两路；登录/注册表单与编辑器上传覆层共用同一实现。
-        AnimatedVisibility(
-            visible = uploadVisible,
-            modifier = Modifier
-                .fillMaxSize()
-                .blockPointerPassThrough()
-                .zIndex(2f),
-            enter = STORE_LAYER_ENTER,
-            exit = STORE_LAYER_EXIT,
-        ) {
-            StoreUploadOverlay(
-                repository = repository,
-                api = api,
-                installedFaces = installedFaces,
-                registrationEnabled = featureFlags.registrationEnabled,
-                onUploaded = { reloadToken++ },
-                onDismiss = { uploadVisible = false },
-                // G5/H1：手表上打字费劲，登录与上传都给一条「去网页版做」的路。
-                onOpenWeb = { openWebPage(WatchStoreWebPage.DASHBOARD) },
-                onOpenWebExternal = { openExternalPage(WatchStoreWebPage.DASHBOARD) },
-                externalAuthSession = notificationSession,
-            )
-        }
-
-        // 已上传表盘管理：列出当前账号上传的全部表盘，支持删除。
-        AnimatedVisibility(
-            visible = myUploadsVisible,
-            modifier = Modifier
-                .fillMaxSize()
-                .blockPointerPassThrough()
-                .zIndex(3f),
-            enter = STORE_LAYER_ENTER,
-            exit = STORE_LAYER_EXIT,
-        ) {
-            MyUploadsOverlay(
-                repository = repository,
-                api = api,
-                installedFaces = installedFaces,
-                registrationEnabled = featureFlags.registrationEnabled,
-                // 从菜单的「登录 / 注册」或详情页的「去登录」进来时直接落在表单上，
-                // 不经过中间那页「登录后查看我的上传」（老师原话：点击直接跳转登录）。
-                startInLoginForm = loginFormRequested,
-                onOpenUpload = {
-                    myUploadsVisible = false
-                    uploadVisible = true
-                },
-                onDismiss = { myUploadsVisible = false },
-                onOpenWeb = { openWebPage(WatchStoreWebPage.DASHBOARD) },
-                onOpenWebExternal = { openExternalPage(WatchStoreWebPage.DASHBOARD) },
-                onOpenWebLogin = { openWebPage(WatchStoreWebPage.LOGIN) },
-                externalAuthSession = notificationSession,
-            )
-        }
-
-        AnimatedVisibility(
-            visible = notificationsVisible,
-            modifier = Modifier
-                .fillMaxSize()
-                .blockPointerPassThrough()
-                .zIndex(3f),
-            enter = STORE_LAYER_ENTER,
-            exit = STORE_LAYER_EXIT,
-        ) {
-            val token = notificationSession?.token
-            if (token != null) {
-                NotificationCenterOverlay(
-                    api = notificationApi,
-                    token = token,
-                    onUnreadCountChange = { count ->
-                        unreadNotificationCount = count
-                        if (count == 0) scope.launch { unreadCounter.markAllRead() }
-                    },
-                    onTokenExpired = {
-                        notificationAuthStore.clear()
-                        notificationSession = null
-                        unreadNotificationCount = 0
-                        notificationsVisible = false
-                    },
-                    onDismiss = { notificationsVisible = false },
+                is WatchStoreRoute.MyUploads -> MyUploadsOverlay(
+                    repository = repository,
+                    api = api,
+                    installedFaces = installedFaces,
+                    registrationEnabled = featureFlags.registrationEnabled,
+                    startInLoginForm = route.startInLoginForm,
+                    refreshToken = reloadToken,
+                    onOpenUpload = { openRoute(WatchStoreRoute.Upload) },
+                    onDismiss = dismissPage,
+                    onOpenWeb = { openWebPage(WatchStoreWebPage.DASHBOARD) },
+                    onOpenWebExternal = { openExternalPage(WatchStoreWebPage.DASHBOARD) },
+                    onOpenWebLogin = { openWebPage(WatchStoreWebPage.LOGIN) },
+                    externalAuthSession = notificationSession,
                 )
-            }
-        }
-
-        // 我的收藏 / 我的合集（B3b）。点一条表盘 → 关掉覆层并打开详情：下载与安装
-        // 那套机器只有详情页有，不在这两页里再养一份。
-        AnimatedVisibility(
-            visible = favoritesVisible,
-            modifier = Modifier
-                .fillMaxSize()
-                .blockPointerPassThrough()
-                .zIndex(3f),
-            enter = STORE_LAYER_ENTER,
-            exit = STORE_LAYER_EXIT,
-        ) {
-            val token = notificationSession?.token
-            if (token != null) {
-                WatchStoreFavoritesOverlay(
+                WatchStoreRoute.Notifications -> notificationSession?.token?.let { token ->
+                    NotificationCenterOverlay(
+                        api = notificationApi,
+                        token = token,
+                        onUnreadCountChange = { count ->
+                            unreadNotificationCount = count
+                            if (count == 0) scope.launch { unreadCounter.markAllRead() }
+                        },
+                        onTokenExpired = {
+                            notificationAuthStore.clear()
+                            updateNotificationSession(null)
+                            unreadNotificationCount = 0
+                            navigation.dismissFrom(page)
+                        },
+                        onDismiss = dismissPage,
+                    )
+                }
+                WatchStoreRoute.Favorites -> notificationSession?.token?.let { token ->
+                    WatchStoreFavoritesOverlay(
+                        repository = repository,
+                        api = notificationApi,
+                        token = token,
+                        onOpenWatchFace = ::openDetail,
+                        onTokenExpired = {
+                            notificationAuthStore.clear()
+                            updateNotificationSession(null)
+                            navigation.dismissFrom(page)
+                        },
+                        onDismiss = dismissPage,
+                    )
+                }
+                WatchStoreRoute.Collections -> notificationSession?.token?.let { token ->
+                    WatchStoreCollectionsOverlay(
+                        repository = repository,
+                        api = notificationApi,
+                        token = token,
+                        onOpenWatchFace = ::openDetail,
+                        onTokenExpired = {
+                            notificationAuthStore.clear()
+                            updateNotificationSession(null)
+                            navigation.dismissFrom(page)
+                        },
+                        onDismiss = dismissPage,
+                    )
+                }
+                WatchStoreRoute.Profile -> notificationSession?.token?.let { token ->
+                    WatchStoreProfileOverlay(
+                        repository = repository,
+                        api = notificationApi,
+                        token = token,
+                        onOpenWeb = { openWebPage(WatchStoreWebPage.PROFILE) },
+                        onOpenWebExternal = { openExternalPage(WatchStoreWebPage.PROFILE) },
+                        onLogout = {
+                            notificationAuthStore.clear()
+                            updateNotificationSession(null)
+                            navigation.dismissFrom(page)
+                        },
+                        onTokenExpired = {
+                            notificationAuthStore.clear()
+                            updateNotificationSession(null)
+                            navigation.dismissFrom(page)
+                        },
+                        onDismiss = dismissPage,
+                    )
+                }
+                WatchStoreRoute.TopCreators, is WatchStoreRoute.Creator -> WatchStoreCreatorsOverlay(
                     repository = repository,
                     api = notificationApi,
-                    token = token,
-                    onOpenWatchFace = { id ->
-                        favoritesVisible = false
-                        openDetail(id)
+                    initialUsername = (route as? WatchStoreRoute.Creator)?.username,
+                    onOpenCreator = { openRoute(WatchStoreRoute.Creator(it)) },
+                    onOpenWatchFace = { id, _ -> openDetail(id) },
+                    onOpenWebList = { openWebPage(WatchStoreWebPage.CREATORS) },
+                    onOpenWebListExternal = { openExternalPage(WatchStoreWebPage.CREATORS) },
+                    onOpenWebCreator = { username ->
+                        storeWebCreatorIntent(context, uiPreferences.readBaseUrl(), username)?.let(webHost::launch)
                     },
-                    onTokenExpired = {
-                        notificationAuthStore.clear()
-                        notificationSession = null
-                        favoritesVisible = false
+                    onOpenWebCreatorExternal = { username ->
+                        storeWebCreatorIntent(context, uiPreferences.readBaseUrl(), username)
+                            ?.getStringExtra(WatchStoreWebActivity.EXTRA_URL)?.let(openExternalUri)
                     },
-                    onDismiss = { favoritesVisible = false },
+                    onDismiss = dismissPage,
                 )
-            }
-        }
-
-        AnimatedVisibility(
-            visible = profileVisible,
-            modifier = Modifier
-                .fillMaxSize()
-                .blockPointerPassThrough()
-                .zIndex(3f),
-            enter = STORE_LAYER_ENTER,
-            exit = STORE_LAYER_EXIT,
-        ) {
-            val token = notificationSession?.token
-            if (token != null) {
-                WatchStoreProfileOverlay(
-                    repository = repository,
-                    api = notificationApi,
-                    token = token,
-                    onOpenWeb = { openWebPage(WatchStoreWebPage.PROFILE) },
-                    onOpenWebExternal = { openExternalPage(WatchStoreWebPage.PROFILE) },
-                    onLogout = {
-                        notificationAuthStore.clear()
-                        notificationSession = null
-                        profileVisible = false
-                    },
-                    onTokenExpired = {
-                        notificationAuthStore.clear()
-                        notificationSession = null
-                        profileVisible = false
-                    },
-                    onDismiss = { profileVisible = false },
-                )
-            }
-        }
-
-        AnimatedVisibility(
-            visible = creatorsVisible,
-            modifier = Modifier
-                .fillMaxSize()
-                .blockPointerPassThrough()
-                .zIndex(3f),
-            enter = STORE_LAYER_ENTER,
-            exit = STORE_LAYER_EXIT,
-        ) {
-            WatchStoreCreatorsOverlay(
-                repository = repository,
-                api = notificationApi,
-                initialUsername = creatorUsernameToOpen,
-                initialUsernameBackToList = creatorInitialBackToList,
-                onOpenWatchFace = { id, username ->
-                    creatorUsernameToOpen = null
-                    creatorInitialBackToList = false
-                    creatorsVisible = false
-                    openDetail(id, WatchStoreDetailOrigin.Creator(username))
-                },
-                onOpenWebList = { openWebPage(WatchStoreWebPage.CREATORS) },
-                onOpenWebListExternal = { openExternalPage(WatchStoreWebPage.CREATORS) },
-                onOpenWebCreator = { username ->
-                    storeWebCreatorIntent(context, uiPreferences.readBaseUrl(), username)
-                        ?.let(webHost::launch)
-                },
-                onOpenWebCreatorExternal = { username ->
-                    storeWebCreatorIntent(context, uiPreferences.readBaseUrl(), username)
-                        ?.getStringExtra(WatchStoreWebActivity.EXTRA_URL)
-                        ?.let(openExternalUri)
-                },
-                onDismiss = {
-                    creatorUsernameToOpen = null
-                    creatorInitialBackToList = false
-                    creatorsVisible = false
-                },
-            )
-        }
-
-        AnimatedVisibility(
-            visible = collectionsVisible,
-            modifier = Modifier
-                .fillMaxSize()
-                .blockPointerPassThrough()
-                .zIndex(3f),
-            enter = STORE_LAYER_ENTER,
-            exit = STORE_LAYER_EXIT,
-        ) {
-            val token = notificationSession?.token
-            if (token != null) {
-                WatchStoreCollectionsOverlay(
-                    repository = repository,
-                    api = notificationApi,
-                    token = token,
-                    onOpenWatchFace = { id ->
-                        collectionsVisible = false
-                        openDetail(id)
-                    },
-                    onTokenExpired = {
-                        notificationAuthStore.clear()
-                        notificationSession = null
-                        collectionsVisible = false
-                    },
-                    onDismiss = { collectionsVisible = false },
-                )
+                WatchStoreRoute.Browse -> Unit
             }
         }
 
@@ -3804,6 +3634,8 @@ private fun WatchStoreSocialDetailSection(
     onOpenCreator: (String) -> Unit,
     onRequestLogin: () -> Unit,
 ) {
+    val pageActive = LocalWatchStorePageActive.current
+    val allCommentsListState = rememberLazyListState()
     val context = LocalContext.current
     val style = LauncherTheme.style
     val scope = rememberCoroutineScope()
@@ -3824,6 +3656,7 @@ private fun WatchStoreSocialDetailSection(
         mutableStateOf(detail?.favoriteCount ?: summary?.favoriteCount ?: 0L)
     }
     var loading by remember(remoteId) { mutableStateOf(false) }
+    var socialLoaded by remember(remoteId) { mutableStateOf(false) }
     var error by remember(remoteId) { mutableStateOf<String?>(null) }
     var draft by remember(remoteId) { mutableStateOf("") }
     var replyTo by remember(remoteId) { mutableStateOf<String?>(null) }
@@ -3859,54 +3692,69 @@ private fun WatchStoreSocialDetailSection(
         draft = ""
     }
 
-    LaunchedEffect(remoteId, api, sessionToken, featureFlags) {
-        loading = featureFlags.socialEnabled
+    WatchStorePageEffect(remoteId, api, sessionToken, featureFlags) {
+        loading = featureFlags.socialEnabled && !socialLoaded
         error = null
+        if (sessionToken == null) favorite = false
         if (!featureFlags.socialEnabled) {
             loading = false
-            return@LaunchedEffect
+            return@WatchStorePageEffect
         }
-        val failures = mutableListOf<Throwable>()
-        withContext(Dispatchers.IO) {
-            if (featureFlags.commentsEnabled) {
-                runCatching { api.getComments(remoteId) }
-                    .onSuccess { loaded ->
-                        comments = loaded
-                        // 头像另取一次：上游的评论接口只回 username，不回 avatar_url
-                        // （见 StoreAuthorAvatars）。按人去重，一个人只打一次。
-                        loaded.map { it.authorUsername }
-                            .filter { it.isNotBlank() }
-                            .distinct()
-                            .forEach { author ->
-                                if (!StoreAuthorAvatars.isResolved(author)) {
-                                    val resolved = StoreAuthorAvatars.resolveSnapshot(api, author)
-                                    // 同 URL 覆盖上传时，作者缓存版本会变化；同时清掉仓库里的
-                                    // 旧 Bitmap，避免 Compose 重组后仍从 URL 缓存拿回旧图。
-                                    resolved?.url?.let { repository.invalidateSiteImage(it) }
+        try {
+            val failures = mutableListOf<Throwable>()
+            withContext(Dispatchers.IO) {
+                if (featureFlags.commentsEnabled) {
+                    runCatching { api.getComments(remoteId) }
+                        .onSuccess { loaded ->
+                            comments = loaded
+                            // 头像另取一次：上游的评论接口只回 username，不回 avatar_url
+                            // （见 StoreAuthorAvatars）。按人去重，一个人只打一次。
+                            loaded.map { it.authorUsername }
+                                .filter { it.isNotBlank() }
+                                .distinct()
+                                .forEach { author ->
+                                    if (!StoreAuthorAvatars.isResolved(author)) {
+                                        val resolved = StoreAuthorAvatars.resolveSnapshot(api, author)
+                                        // 同 URL 覆盖上传时，作者缓存版本会变化；同时清掉仓库里的
+                                        // 旧 Bitmap，避免 Compose 重组后仍从 URL 缓存拿回旧图。
+                                        resolved?.url?.let { repository.invalidateSiteImage(it) }
+                                    }
                                 }
-                            }
-                        authorAvatarRevision++
+                            authorAvatarRevision++
+                        }
+                        .onFailure { failure ->
+                        failure.throwIfCancellation()
+                        failures += failure
                     }
-                    .onFailure(failures::add)
-            }
-            runCatching { api.getRating(remoteId) }
-                .onSuccess { loaded ->
-                    var withMine = loaded
-                    if (sessionToken != null && featureFlags.reviewsEnabled) {
-                        runCatching { api.getMyRating(sessionToken, remoteId) }
-                            .onSuccess { mine -> withMine = loaded.copy(mine = mine) }
-                    }
-                    rating = withMine
                 }
-                .onFailure(failures::add)
-            if (sessionToken != null) {
-                runCatching { api.isFavorited(sessionToken, remoteId) }
-                    .onSuccess { favorite = it }
-                    .onFailure(failures::add)
+                runCatching { api.getRating(remoteId) }
+                    .onSuccess { loaded ->
+                        var withMine = loaded
+                        if (sessionToken != null && featureFlags.reviewsEnabled) {
+                            runCatching { api.getMyRating(sessionToken, remoteId) }
+                                .onSuccess { mine -> withMine = loaded.copy(mine = mine) }
+                                .onFailure { it.throwIfCancellation() }
+                        }
+                        rating = withMine
+                    }
+                    .onFailure { failure ->
+                        failure.throwIfCancellation()
+                        failures += failure
+                    }
+                if (sessionToken != null) {
+                    runCatching { api.isFavorited(sessionToken, remoteId) }
+                        .onSuccess { favorite = it }
+                        .onFailure { failure ->
+                        failure.throwIfCancellation()
+                        failures += failure
+                    }
+                }
             }
+            if (failures.isNotEmpty()) error = failures.first().userFacingMessage(context)
+            socialLoaded = true
+        } finally {
+            loading = false
         }
-        if (failures.isNotEmpty()) error = failures.first().userFacingMessage(context)
-        loading = false
     }
 
     fun submitComment() {
@@ -4328,7 +4176,7 @@ private fun WatchStoreSocialDetailSection(
                             size = 20.dp,
                             usage = FlueLoadingIndicatorUsage.WATCH_STORE,
                         )
-                        error != null -> Text(error!!, color = style.secondaryTextColor, fontSize = 11.sp)
+                        error != null && comments.isEmpty() -> Text(error!!, color = style.secondaryTextColor, fontSize = 11.sp)
                         comments.isEmpty() -> Text(stringResource(R.string.watch_store_no_comments), color = style.secondaryTextColor, fontSize = 11.sp)
                         else -> {
                             // 详情页只留第一条：一条长评论在 230dp 圆屏上就占掉半屏，
@@ -4346,6 +4194,9 @@ private fun WatchStoreSocialDetailSection(
                                 )
                             }
                         }
+                    }
+                    if (error != null && comments.isNotEmpty()) {
+                        Text(error!!, color = style.secondaryTextColor, fontSize = 11.sp)
                     }
                     AnimatedVisibility(
                         visible = visibility.allowCommentInput && replyTo == null && composerOpen,
@@ -4438,7 +4289,7 @@ private fun WatchStoreSocialDetailSection(
                                 )
                             }
                             // StoreRoundList：圆屏弦宽 + 回弹 + 首尾能拉到圆心，一处给全。
-                                StoreRoundList(modifier = Modifier.weight(1f)) {
+                                StoreRoundList(state = allCommentsListState, modifier = Modifier.weight(1f)) {
                                     items(threads, key = { it.root.id }, contentType = { "comment_thread" }) { thread ->
                                     renderThread(
                                         thread,
@@ -4455,7 +4306,7 @@ private fun WatchStoreSocialDetailSection(
         // 举报入口已并进上面数据卡里那一行图标，这里不再单独摆一行文字。
     }
 
-    if (reportVisible) {
+    if (reportVisible && pageActive) {
         FlueDialog(onDismissRequest = { reportVisible = false }) {
             Text(
                 stringResource(R.string.watch_store_report),
@@ -4503,7 +4354,7 @@ private fun WatchStoreSocialDetailSection(
         }
     }
 
-    if (collectionPickerVisible) {
+    if (collectionPickerVisible && pageActive) {
         FlueDialog(onDismissRequest = { collectionPickerVisible = false }) {
             Text(
                 stringResource(R.string.watch_store_choose_collection),
@@ -4551,7 +4402,7 @@ private fun WatchStoreSocialDetailSection(
         }
     }
 
-    if (collectionNameVisible) {
+    if (collectionNameVisible && pageActive) {
         FlueAlertDialog(
             onDismissRequest = { collectionNameVisible = false },
             title = { Text(stringResource(R.string.watch_store_create_collection), color = style.titleColor) },
@@ -4578,7 +4429,7 @@ private fun WatchStoreSocialDetailSection(
 
     // 未登录点收藏 / 加入合集 / 举报 / 评分：不静默、也不发必然 401 的请求，
     // 就在这里说清楚，并给一条直达登录表单的路。
-    if (loginPromptVisible) {
+    if (loginPromptVisible && pageActive) {
         FlueAlertDialog(
             onDismissRequest = { loginPromptVisible = false },
             title = stringResource(R.string.watch_store_login_required),
@@ -5209,7 +5060,10 @@ private fun MyUploadsOverlay(
      * 这个参数一变就重读一次共享存储（见下方 LaunchedEffect）。
      */
     externalAuthSession: WatchStoreAuthSession? = null,
+    refreshToken: Int = 0,
 ) {
+    val uploadsListState = rememberLazyListState()
+    val pageActive = LocalWatchStorePageActive.current
     val context = LocalContext.current
     val style = LauncherTheme.style
     val scope = rememberCoroutineScope()
@@ -5226,8 +5080,7 @@ private fun MyUploadsOverlay(
     var deleteTarget by remember { mutableStateOf<MyWatchFaceEntry?>(null) }
     var deleteInProgress by remember { mutableStateOf(false) }
     var deleteError by remember { mutableStateOf<String?>(null) }
-    // 覆层每次显示都是一次新的组合（AnimatedVisibility 关掉时内容离开组合树），
-    // 所以这里的初值就是「本次进来要不要直接看到表单」。
+    // Each stack entry owns its initial login destination and keeps it while covered.
     var loginFormVisible by remember { mutableStateOf(startInLoginForm) }
     var username by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
@@ -5249,12 +5102,10 @@ private fun MyUploadsOverlay(
     LaunchedEffect(externalAuthSession) {
         // 网页登录导入把 token 写进了共享 auth store；覆层还开着时重读一遍，
         // 登录表单立即翻成已登录（contentState 看 session），并触发下面的列表加载。
-        if (externalAuthSession != null) {
-            session = withContext(Dispatchers.IO) { authStore.read() }
-        }
+        session = withContext(Dispatchers.IO) { authStore.read() }
     }
 
-    LaunchedEffect(session?.token) {
+    LaunchedEffect(session?.token, refreshToken) {
         val token = session?.token ?: return@LaunchedEffect
         loading = true
         loadError = null
@@ -5300,6 +5151,7 @@ private fun MyUploadsOverlay(
                     password = ""
                     loginFormVisible = false
                     authPage = WatchStoreAuthPage.LOGIN
+                    if (startInLoginForm) onDismiss()
                 }.onFailure { error ->
                     error.throwIfCancellation()
                     authError = watchStoreAuthErrorMessage(context, error, register)
@@ -5310,19 +5162,21 @@ private fun MyUploadsOverlay(
         }
     }
 
-    BackHandler {
+    fun navigateBack() {
+        if (authBusy) return
         if (editTarget != null) {
             editTarget = null
-        } else if (loginFormVisible && session == null && authPage == WatchStoreAuthPage.REGISTER && !authBusy) {
+        } else if (loginFormVisible && session == null && authPage == WatchStoreAuthPage.REGISTER) {
             authPage = WatchStoreAuthPage.LOGIN
             authError = null
-        } else if (loginFormVisible && session == null && !authBusy) {
+        } else if (loginFormVisible && session == null && !startInLoginForm) {
             loginFormVisible = false
             authError = null
         } else {
             onDismiss()
         }
     }
+    BackHandler { navigateBack() }
 
     val editCovered = editTarget != null
     val contentHierarchyOffset = animateFloatAsState(
@@ -5372,7 +5226,7 @@ private fun MyUploadsOverlay(
                 modifier = Modifier.fillMaxWidth().heightIn(min = 42.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                IconButton(onClick = onDismiss, modifier = Modifier.size(40.dp)) {
+                IconButton(onClick = ::navigateBack, modifier = Modifier.size(40.dp)) {
                     Icon(
                         MiuixIcons.Back,
                         contentDescription = stringResource(R.string.watch_editor_back),
@@ -5384,13 +5238,6 @@ private fun MyUploadsOverlay(
                     StoreOverlayTitle(
                         title = stringResource(R.string.watch_store_my_uploads),
                         subtitle = session?.username,
-                    )
-                }
-                IconButton(onClick = onOpenUpload, modifier = Modifier.size(40.dp)) {
-                    Icon(
-                        MiuixIcons.UploadCloud,
-                        contentDescription = stringResource(R.string.watch_store_upload_face),
-                        tint = style.accentColor,
                     )
                 }
             }
@@ -5405,6 +5252,14 @@ private fun MyUploadsOverlay(
                 )
                 Spacer(Modifier.height(8.dp))
             }
+
+            StorePrimaryButton(
+                label = stringResource(R.string.watch_store_upload_face),
+                onClick = onOpenUpload,
+                icon = MiuixIcons.UploadCloud,
+                modifier = Modifier.fillMaxWidth(),
+            )
+            Spacer(Modifier.height(8.dp))
 
             val contentState = when {
                 session == null && !loginFormVisible -> MyUploadsContentState.LOGIN_PROMPT
@@ -5568,7 +5423,7 @@ private fun MyUploadsOverlay(
                             myUploadStatusGroups(entries)
                         }
                         // StoreRoundList：圆屏弦宽适配与避让动画（见 StoreRoundList.kt）。
-                        StoreRoundList {
+                        StoreRoundList(state = uploadsListState) {
                             // 只有真的有需要处理的才出小标题：全部正常时多两行标题是噪声。
                             if (attention.isNotEmpty()) {
                                 item(key = "group_attention", contentType = "my_upload_group") {
@@ -5663,7 +5518,7 @@ private fun MyUploadsOverlay(
 
     // 删除确认对话框
     val target = deleteTarget
-    if (target != null) {
+    if (target != null && pageActive) {
         FlueAlertDialog(
             onDismissRequest = { if (!deleteInProgress) { deleteTarget = null; deleteError = null } },
             title = {
@@ -7832,13 +7687,13 @@ private fun FullscreenWatchPreview(
  */
 internal val STORE_LAYER_ENTER =
     slideInHorizontally(
-        animationSpec = tween(260, easing = FastOutSlowInEasing),
-    ) { fullWidth -> fullWidth / 4 } + fadeIn(tween(200))
+        animationSpec = tween(220, easing = FastOutSlowInEasing),
+    ) { fullWidth -> fullWidth / 12 } + fadeIn(tween(180))
 
 internal val STORE_LAYER_EXIT =
     slideOutHorizontally(
-        animationSpec = tween(240, easing = FastOutSlowInEasing),
-    ) { fullWidth -> fullWidth / 4 } + fadeOut(tween(140))
+        animationSpec = tween(170, easing = FastOutSlowInEasing),
+    ) { fullWidth -> fullWidth / 12 } + fadeOut(tween(110))
 
 /**
  * 让仍在进/退场的全屏覆层保持命中，避免其滑动后露出的区域点到底层列表。

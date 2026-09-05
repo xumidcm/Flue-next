@@ -1,6 +1,6 @@
 package com.flue.launcher.ui.store
 
-import androidx.activity.compose.BackHandler
+import com.flue.launcher.ui.store.WatchStoreBackHandler as BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -53,6 +54,8 @@ import com.flue.launcher.watchface.store.WatchStoreRepository
 import com.flue.launcher.watchface.store.WatchStoreWatchFace
 import com.flue.launcher.watchface.store.appendCreatorWatchFacePage
 import com.flue.launcher.watchface.store.nextCreatorWatchFacePage
+import com.flue.launcher.watchface.store.TOP_CREATORS_PAGE_SIZE
+import com.flue.launcher.watchface.store.nextTopCreatorsLimit
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -60,13 +63,41 @@ import top.yukonga.miuix.kmp.icon.MiuixIcons
 import top.yukonga.miuix.kmp.icon.extended.Link
 import top.yukonga.miuix.kmp.icon.extended.Share
 
+class WatchStoreCreatorsSession {
+    val topListState = LazyListState()
+    var topCreators by mutableStateOf<List<WatchStoreCreator>>(emptyList())
+    var topLoading by mutableStateOf(false)
+    var topLoaded by mutableStateOf(false)
+    var topLoadingMore by mutableStateOf(false)
+    var topRefreshing by mutableStateOf(false)
+    var topHasMore by mutableStateOf(true)
+    var topError by mutableStateOf<String?>(null)
+    private val creatorPages = mutableMapOf<String, WatchStoreCreatorPageSession>()
+
+    fun creatorPage(username: String): WatchStoreCreatorPageSession =
+        creatorPages.getOrPut(username) { WatchStoreCreatorPageSession() }
+}
+
+class WatchStoreCreatorPageSession {
+    val listState = LazyListState()
+    var creator by mutableStateOf<WatchStoreCreator?>(null)
+    var faces by mutableStateOf<List<WatchStoreWatchFace>>(emptyList())
+    var pagination by mutableStateOf<WatchStorePagination?>(null)
+    var loading by mutableStateOf(false)
+    var loaded by mutableStateOf(false)
+    var loadingMore by mutableStateOf(false)
+    var error by mutableStateOf<String?>(null)
+    var loadMoreError by mutableStateOf<String?>(null)
+}
+
 /** H5：热门创作者列表与单个创作者页共用的覆层。 */
 @Composable
 fun WatchStoreCreatorsOverlay(
     repository: WatchStoreRepository,
     api: HttpWatchStoreApi,
     initialUsername: String? = null,
-    initialUsernameBackToList: Boolean = false,
+    session: WatchStoreCreatorsSession = remember { WatchStoreCreatorsSession() },
+    onOpenCreator: (String) -> Unit,
     onOpenWatchFace: (String, String) -> Unit,
     onOpenWebList: () -> Unit,
     onOpenWebListExternal: () -> Unit,
@@ -74,25 +105,81 @@ fun WatchStoreCreatorsOverlay(
     onOpenWebCreatorExternal: (String) -> Unit,
     onDismiss: () -> Unit,
 ) {
-    var selectedUsername by remember(initialUsername) { mutableStateOf(initialUsername) }
-    // 系统返回键必须与顶栏返回按钮同一判据（见下面 CreatorDetailPage 的 onBack）：
-    // 从表盘详情点进来时（initialUsername != null）创作者页是**子路由**，返回该回到
-    // 详情页；只有从「优秀创作者」列表点进来时，返回才是回那张列表。
-    // 以前这里只看 selectedUsername，于是从详情进来按返回会落到一张本来没打开过的
-    // 「优秀创作者」列表上（老师报的问题）。
-    BackHandler {
-        if (selectedUsername != null && (initialUsername == null || initialUsernameBackToList)) {
-            selectedUsername = null
-        } else {
-            onDismiss()
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+
+    suspend fun requestTopCreators(limit: Int): Result<List<WatchStoreCreator>> =
+        runCatching { withContext(Dispatchers.IO) { api.getTopCreators(limit) } }
+
+    LaunchedEffect(initialUsername) {
+        if (initialUsername != null || session.topLoaded || session.topLoading) return@LaunchedEffect
+        session.topLoading = true
+        requestTopCreators(TOP_CREATORS_PAGE_SIZE)
+            .onSuccess { incoming ->
+                session.topCreators = incoming.distinctBy { it.username }
+                session.topHasMore = incoming.size >= TOP_CREATORS_PAGE_SIZE
+                session.topError = null
+                session.topLoaded = true
+            }
+            .onFailure { failure ->
+                failure.throwIfCancellation()
+                session.topError = watchStoreSocialErrorMessage(context, failure)
+            }
+        session.topLoading = false
+    }
+
+    fun refreshTopCreators() {
+        if (session.topLoading || session.topRefreshing || session.topLoadingMore) return
+        session.topRefreshing = true
+        scope.launch {
+            requestTopCreators(TOP_CREATORS_PAGE_SIZE)
+                .onSuccess { incoming ->
+                    session.topCreators = incoming.distinctBy { it.username }
+                    session.topHasMore = incoming.size >= TOP_CREATORS_PAGE_SIZE
+                    session.topError = null
+                    session.topLoaded = true
+                }
+                .onFailure { failure ->
+                    failure.throwIfCancellation()
+                    if (session.topCreators.isEmpty()) {
+                        session.topError = watchStoreSocialErrorMessage(context, failure)
+                    }
+                }
+            session.topRefreshing = false
         }
     }
 
-    if (selectedUsername == null) {
+    fun loadMoreTopCreators() {
+        if (session.topLoadingMore || !session.topHasMore || session.topCreators.size < TOP_CREATORS_PAGE_SIZE) return
+        session.topLoadingMore = true
+        val requestedLimit = nextTopCreatorsLimit(session.topCreators.size)
+        scope.launch {
+            requestTopCreators(requestedLimit)
+                .onSuccess { incoming ->
+                    val merged = (session.topCreators + incoming).distinctBy { it.username }
+                    session.topHasMore = incoming.size >= requestedLimit && merged.size > session.topCreators.size
+                    session.topCreators = merged
+                }
+                .onFailure(Throwable::throwIfCancellation)
+            session.topLoadingMore = false
+        }
+    }
+    // 系统返回键必须与顶栏返回按钮同一判据（见下面 CreatorDetailPage 的 onBack）：
+    // The host owns both creator routes; back always returns to the actual parent entry.
+    BackHandler { onDismiss() }
+
+    if (initialUsername == null) {
         CreatorListPage(
             repository = repository,
-            api = api,
-            onSelect = { selectedUsername = it.username },
+            creators = session.topCreators,
+            loading = session.topLoading,
+            loadingMore = session.topLoadingMore,
+            refreshing = session.topRefreshing,
+            error = session.topError,
+            listState = session.topListState,
+            onRefresh = ::refreshTopCreators,
+            onLoadMore = ::loadMoreTopCreators,
+            onSelect = { onOpenCreator(it.username) },
             onOpenWeb = onOpenWebList,
             onOpenWebExternal = onOpenWebListExternal,
             onDismiss = onDismiss,
@@ -101,16 +188,12 @@ fun WatchStoreCreatorsOverlay(
         CreatorDetailPage(
             repository = repository,
             api = api,
-            username = selectedUsername!!,
-            onOpenWatchFace = { id -> onOpenWatchFace(id, selectedUsername!!) },
-            onOpenWeb = { onOpenWebCreator(selectedUsername!!) },
-            onOpenWebExternal = { onOpenWebCreatorExternal(selectedUsername!!) },
-            // When opened from a watch-face detail, the creator page is a child
-            // route. Back must reveal that detail instead of the top-creators list.
-            onBack = {
-                if (initialUsername != null && !initialUsernameBackToList) onDismiss()
-                else selectedUsername = null
-            },
+            username = initialUsername,
+            session = session.creatorPage(initialUsername),
+            onOpenWatchFace = { id -> onOpenWatchFace(id, initialUsername) },
+            onOpenWeb = { onOpenWebCreator(initialUsername) },
+            onOpenWebExternal = { onOpenWebCreatorExternal(initialUsername) },
+            onBack = onDismiss,
         )
     }
 }
@@ -118,25 +201,19 @@ fun WatchStoreCreatorsOverlay(
 @Composable
 private fun CreatorListPage(
     repository: WatchStoreRepository,
-    api: HttpWatchStoreApi,
+    creators: List<WatchStoreCreator>,
+    loading: Boolean,
+    loadingMore: Boolean,
+    refreshing: Boolean,
+    error: String?,
+    listState: androidx.compose.foundation.lazy.LazyListState,
+    onRefresh: () -> Unit,
+    onLoadMore: () -> Unit,
     onSelect: (WatchStoreCreator) -> Unit,
     onOpenWeb: () -> Unit,
     onOpenWebExternal: () -> Unit,
     onDismiss: () -> Unit,
 ) {
-    val context = LocalContext.current
-    var creators by remember { mutableStateOf<List<WatchStoreCreator>>(emptyList()) }
-    var loading by remember { mutableStateOf(true) }
-    var error by remember { mutableStateOf<String?>(null) }
-    LaunchedEffect(Unit) {
-        runCatching { withContext(Dispatchers.IO) { api.getTopCreators() } }
-            .onSuccess { creators = it }
-            .onFailure { failure ->
-                failure.throwIfCancellation()
-                error = watchStoreSocialErrorMessage(context, failure)
-            }
-        loading = false
-    }
     StoreLibraryScaffold(
         title = stringResource(R.string.watch_store_top_creators),
         subtitle = null,
@@ -148,13 +225,29 @@ private fun CreatorListPage(
             )
         },
         loading = loading,
-        loadError = error,
+        loadError = null,
     ) {
         // StoreRoundList 而不是 LazyColumn：圆屏弦宽适配与避让动画都在它里面。
-        StoreRoundList {
+        StoreRoundList(
+            state = listState,
+            refreshing = refreshing,
+            onRefresh = onRefresh,
+            onNearEnd = onLoadMore,
+        ) {
             if (creators.isEmpty()) {
                 item("empty") {
-                    CreatorMessage(stringResource(R.string.watch_store_no_creators))
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        CreatorMessage(error ?: stringResource(R.string.watch_store_no_creators))
+                        if (error != null) {
+                            FlueOutlinedButton(
+                                onClick = onRefresh,
+                                enabled = !refreshing,
+                                modifier = Modifier.fillMaxWidth(),
+                            ) {
+                                Text(stringResource(R.string.watch_store_retry))
+                            }
+                        }
+                    }
                 }
             } else {
                 itemsIndexed(creators, key = { _, creator -> creator.username }) { index, creator ->
@@ -175,6 +268,7 @@ private fun CreatorDetailPage(
     repository: WatchStoreRepository,
     api: HttpWatchStoreApi,
     username: String,
+    session: WatchStoreCreatorPageSession,
     onOpenWatchFace: (String) -> Unit,
     onOpenWeb: () -> Unit,
     onOpenWebExternal: () -> Unit,
@@ -182,52 +276,49 @@ private fun CreatorDetailPage(
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    var creator by remember(username) { mutableStateOf<WatchStoreCreator?>(null) }
-    var faces by remember(username) { mutableStateOf<List<WatchStoreWatchFace>>(emptyList()) }
-    var pagination by remember(username) { mutableStateOf<WatchStorePagination?>(null) }
-    var loading by remember(username) { mutableStateOf(true) }
-    var loadingMore by remember(username) { mutableStateOf(false) }
-    var error by remember(username) { mutableStateOf<String?>(null) }
-    var loadMoreError by remember(username) { mutableStateOf<String?>(null) }
-    LaunchedEffect(username) {
+    LaunchedEffect(username, session) {
+        if (session.loaded || session.loading) return@LaunchedEffect
+        session.loading = true
         runCatching {
             withContext(Dispatchers.IO) {
                 api.getCreator(username) to api.listCreatorWatchFaces(username)
             }
         }.onSuccess { (loadedCreator, loadedPage) ->
-            creator = loadedCreator
-            faces = loadedPage.data
-            pagination = loadedPage.pagination
+            session.creator = loadedCreator
+            session.faces = loadedPage.data
+            session.pagination = loadedPage.pagination
+            session.error = null
+            session.loaded = true
         }.onFailure { failure ->
             failure.throwIfCancellation()
-            error = watchStoreSocialErrorMessage(context, failure)
+            session.error = watchStoreSocialErrorMessage(context, failure)
         }
-        loading = false
+        session.loading = false
     }
 
     fun loadMore() {
-        val page = nextCreatorWatchFacePage(pagination) ?: return
-        if (loadingMore) return
-        loadingMore = true
-        loadMoreError = null
+        val page = nextCreatorWatchFacePage(session.pagination) ?: return
+        if (session.loadingMore) return
+        session.loadingMore = true
+        session.loadMoreError = null
         scope.launch {
             runCatching {
                 withContext(Dispatchers.IO) {
                     api.listCreatorWatchFaces(username = username, page = page)
                 }
             }.onSuccess { loadedPage ->
-                faces = appendCreatorWatchFacePage(faces, loadedPage.data)
-                pagination = loadedPage.pagination
+                session.faces = appendCreatorWatchFacePage(session.faces, loadedPage.data)
+                session.pagination = loadedPage.pagination
             }.onFailure { failure ->
                 failure.throwIfCancellation()
-                loadMoreError = watchStoreSocialErrorMessage(context, failure)
+                session.loadMoreError = watchStoreSocialErrorMessage(context, failure)
             }
-            loadingMore = false
+            session.loadingMore = false
         }
     }
 
     StoreLibraryScaffold(
-        title = creator?.username ?: username,
+        title = session.creator?.username ?: username,
         subtitle = null,
         onBack = onBack,
         action = {
@@ -236,13 +327,13 @@ private fun CreatorDetailPage(
                 onOpenWebExternal = onOpenWebExternal,
             )
         },
-        loading = loading,
-        loadError = error,
+        loading = session.loading || (!session.loaded && session.error == null),
+        loadError = session.error,
     ) {
-        val nextPage = nextCreatorWatchFacePage(pagination)
+        val nextPage = nextCreatorWatchFacePage(session.pagination)
         // StoreRoundList 而不是 LazyColumn：圆屏弦宽适配与避让动画都在它里面。
-        StoreRoundList {
-            creator?.let { loadedCreator ->
+        StoreRoundList(state = session.listState) {
+            session.creator?.let { loadedCreator ->
                 item("creator_summary") { CreatorSummary(repository, loadedCreator) }
                 item("creator_faces_title") {
                     Text(
@@ -254,14 +345,14 @@ private fun CreatorDetailPage(
                     )
                 }
             }
-            items(faces, key = { it.id }) { face ->
+            items(session.faces, key = { it.id }) { face ->
                 CreatorFaceRow(
                     repository = repository,
                     face = face,
                     onClick = { onOpenWatchFace(face.id) },
                 )
             }
-            if (faces.isEmpty()) {
+            if (session.faces.isEmpty()) {
                 item("empty") {
                     CreatorMessage(stringResource(R.string.watch_store_no_creator_faces))
                 }
@@ -271,13 +362,13 @@ private fun CreatorDetailPage(
                     // This footer is only composed as it approaches the viewport, so reaching the
                     // end requests the next segment without exposing page-style controls.
                     LaunchedEffect(nextPage) { loadMore() }
-                    if (loadMoreError == null) {
+                    if (session.loadMoreError == null) {
                         CreatorMessage(stringResource(R.string.watch_store_status_loading_more))
                     } else {
-                        CreatorMessage(loadMoreError!!)
+                        CreatorMessage(session.loadMoreError!!)
                         FlueOutlinedButton(
                             onClick = ::loadMore,
-                            enabled = !loadingMore,
+                            enabled = !session.loadingMore,
                             modifier = Modifier.fillMaxWidth(),
                         ) {
                             Text(stringResource(R.string.watch_store_retry))
@@ -308,21 +399,14 @@ private fun CreatorRow(
             modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-        Box(
-            modifier = Modifier
-                .size(34.dp)
-                .clip(CircleShape)
-                .background(style.accentColor),
-            contentAlignment = Alignment.Center,
-        ) {
-            Text(
-                rank.toString(),
-                color = style.screenBackground,
-                fontSize = 12.sp,
-                fontWeight = FontWeight.Bold,
-            )
-        }
-        Spacer(Modifier.width(8.dp))
+        Text(
+            rank.toString(),
+            color = style.secondaryTextColor,
+            fontSize = 16.sp,
+            fontWeight = FontWeight.Bold,
+            modifier = Modifier.width(22.dp),
+        )
+        Spacer(Modifier.width(4.dp))
         // The avatar itself is loaded by the shared store cache and falls back
         // to a stable initial when the server omits or rejects the image.
         StoreAvatar(
