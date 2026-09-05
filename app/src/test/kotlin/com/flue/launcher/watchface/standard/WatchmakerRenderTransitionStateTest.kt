@@ -8,19 +8,17 @@ import java.util.concurrent.atomic.AtomicInteger
 
 class WatchmakerRenderTransitionStateTest {
     @Test
-    fun liveSideTransitionsDoNotResumeTheFaceBehindAnOpenAppList() {
-        assertFalse(
+    fun legacySideScenesFreezeTheFaceLikeTheAppList() {
+        assertTrue(
             shouldFreezeWatchmakerForLauncherBackdrop(
                 sideSceneOverlayActive = true,
                 appListBackdropActive = false,
-                freezeSideScenes = false,
             ),
         )
         assertTrue(
             shouldFreezeWatchmakerForLauncherBackdrop(
                 sideSceneOverlayActive = false,
                 appListBackdropActive = true,
-                freezeSideScenes = false,
             ),
         )
     }

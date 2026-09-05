@@ -109,8 +109,6 @@ import com.flue.launcher.ui.navigation.resolveOverlaySettleOpen
 import com.flue.launcher.ui.navigation.resolveAppListSettleOpen
 import com.flue.launcher.ui.anim.LayerAnimValues
 import com.flue.launcher.ui.anim.LayerFrameSnapshot
-import com.flue.launcher.ui.anim.OverlayBlurBackend
-import com.flue.launcher.ui.anim.overlayBlurBackend
 import com.flue.launcher.ui.anim.lerpLayerAnimValues
 import com.flue.launcher.ui.anim.flueBackdropFill
 import com.flue.launcher.ui.anim.flueLegacyBlur
@@ -1744,10 +1742,6 @@ fun LauncherScreen(vm: LauncherViewModel) {
         val watchFaceOverlayTransitionActive = shouldFreezeWatchmakerForLauncherBackdrop(
             sideSceneOverlayActive = sideSceneOverlayActive,
             appListBackdropActive = appListLayerRaised,
-            freezeSideScenes = overlayBlurBackend(
-                Build.VERSION.SDK_INT,
-                advancedMaterialEnabled = blurEnabled,
-            ) == OverlayBlurBackend.SYSTEM,
         )
         var faceTransformSettled by remember { mutableStateOf(false) }
         LaunchedEffect(faceAnimState, faceExternallyDriven) {
