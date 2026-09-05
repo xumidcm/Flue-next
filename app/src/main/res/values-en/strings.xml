@@ -573,8 +573,8 @@
     <string name="settings_layout_grid_sub">Compact regular grid</string>
     <string name="settings_layout_flow">Flow Layout</string>
     <string name="settings_layout_flow_sub">Equal columns with a crescent offset</string>
-    <string name="settings_layout_ring">Ring layout</string>
-    <string name="settings_layout_ring_sub">Screen-filling grid that curves inward on round displays</string>
+    <string name="settings_layout_ring">Square grid layout</string>
+    <string name="settings_layout_ring_sub">A neat, regular grid</string>
     <string name="settings_layout_profile_header">Layout Profiles</string>
     <string name="settings_layout_profile_preset">Default</string>
     <string name="settings_layout_profile_custom">Custom</string>
@@ -1606,7 +1606,20 @@
     <string name="internal_file_browser_select_current_folder">Export to this folder</string>
     <string name="internal_file_browser_pick_conversion">Choose a watch face to convert</string>
     <string name="watch_face_loading">Loading watch face</string>
-    <string name="watch_face_loading_fallback">Use default watch face and restart</string>
+    <string name="watch_face_loading_fallback">Switch to the default watch face and restart</string>
+    <string-array name="crash_titles">
+        <item>Oops, it crashed Σ(ﾟДﾟ)</item>
+        <item>Something went wrong (ﾟДﾟ;)</item>
+        <item>Flue took a tumble (⊙_⊙)</item>
+        <item>Unexpected crash (°ロ°)☝</item>
+    </string-array>
+    <string-array name="crash_subtitles">
+        <item>Copy the detailed error and send the reproduction steps to the developer. Σ(ﾟДﾟ)</item>
+        <item>Stay calm, expand the log, and share the error details. (ﾟДﾟ;)</item>
+        <item>This one really crashed; please bring the logs back. (⊙_⊙)</item>
+        <item>You can open Desktop settings or copy the log for help. (°ロ°)☝</item>
+    </string-array>
+    <string name="crash_open_desktop_settings">Desktop settings</string>
     <string name="watch_editor_global_script">Global script</string>
     <string name="watch_editor_global_script_description">Edit scripts/script.txt. Saving refreshes the preview and supports undo and redo.</string>
     <string name="watch_editor_edit_script">Edit script</string>

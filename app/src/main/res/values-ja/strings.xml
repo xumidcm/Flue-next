@@ -572,8 +572,8 @@
     <string name="settings_layout_grid_sub">コンパクトな規則グリッド</string>
     <string name="settings_layout_flow">心流レイアウト</string>
     <string name="settings_layout_flow_sub">等列グリッド + 三日月オフセット</string>
-    <string name="settings_layout_ring">星環レイアウト</string>
-    <string name="settings_layout_ring_sub">画面いっぱいのグリッド、円形画面では四辺が中心へ収束</string>
+    <string name="settings_layout_ring">整列グリッド</string>
+    <string name="settings_layout_ring_sub">整然とした規則グリッド</string>
     <string name="settings_layout_profile_header">レイアウトプロファイル</string>
     <string name="settings_layout_profile_preset">既定</string>
     <string name="settings_layout_profile_custom">カスタム</string>
@@ -1607,6 +1607,19 @@
     <string name="internal_file_browser_pick_conversion">変換する文字盤を選択</string>
     <string name="watch_face_loading">文字盤を読み込んでいます</string>
     <string name="watch_face_loading_fallback">既定の文字盤に切り替えて再起動</string>
+    <string-array name="crash_titles">
+        <item>あらら、クラッシュしました Σ(ﾟДﾟ)</item>
+        <item>大変、エラーです (ﾟДﾟ;)</item>
+        <item>デスクトップが止まりました (⊙_⊙)</item>
+        <item>予期しないクラッシュ (°ロ°)☝</item>
+    </string-array>
+    <string-array name="crash_subtitles">
+        <item>詳しいエラーと再現手順をコピーして開発者に送ってください。Σ(ﾟДﾟ)</item>
+        <item>ログを展開してエラーの内容を共有してください。(ﾟДﾟ;)</item>
+        <item>今回は本当にクラッシュしました。ログを持ってきてください。(⊙_⊙)</item>
+        <item>デスクトップ設定を開くか、ログをコピーして助けを求められます。(°ロ°)☝</item>
+    </string-array>
+    <string name="crash_open_desktop_settings">デスクトップ設定</string>
     <string name="watch_editor_global_script">グローバルスクリプト</string>
     <string name="watch_editor_global_script_description">scripts/script.txt を編集します。保存するとプレビューが更新され、元に戻す・やり直しもできます。</string>
     <string name="watch_editor_edit_script">スクリプトを編集</string>

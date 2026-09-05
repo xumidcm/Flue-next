@@ -275,6 +275,7 @@ import com.flue.launcher.watchface.store.WatchStoreUiPreferences
 import com.flue.launcher.watchface.store.WatchStoreViewMode
 import com.flue.launcher.watchface.store.WatchStoreWebPage
 import com.flue.launcher.watchface.store.WatchStoreWatchFace
+import com.flue.launcher.watchface.store.normalizedWatchStoreAuthor
 import com.flue.launcher.watchface.store.WatchStoreWatchFaceDetail
 import com.flue.launcher.watchface.store.WatchStoreRatingSummary
 import com.flue.launcher.watchface.store.WatchStoreReportReason
@@ -2987,6 +2988,7 @@ private fun WatchFaceListCard(
         ?.record
         ?.resolvedDisplayName(item.name)
         ?: item.name
+    val author = normalizedWatchStoreAuthor(item.author)
     // 缩略图一律方形：上游封面本来就是 512×512（见 API_USER.md 的 preview 元数据），
     // 以前按 screenType 给长条屏算 0.72 的竖长方形，同一列表里行高忽高忽低。
     // 宫格卡（WatchFaceGridCard）从来就是 1f，两处保持一致。
@@ -3046,12 +3048,24 @@ private fun WatchFaceListCard(
                 onDownload = onDownload,
                 onCancelDownload = onCancelDownload,
                 downloadCountLine = {
-                    Text(
-                        stringResource(R.string.watch_store_download_count_fmt, item.downloadCount),
-                        color = style.secondaryTextColor,
-                        fontSize = 11.sp,
-                        maxLines = 1,
-                    )
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            stringResource(R.string.watch_store_download_count_fmt, item.downloadCount),
+                            color = style.secondaryTextColor,
+                            fontSize = 11.sp,
+                            maxLines = 1,
+                        )
+                        if (author != null) {
+                            Spacer(Modifier.width(6.dp))
+                            Text(
+                                stringResource(R.string.watch_store_author_fmt, author),
+                                color = style.secondaryTextColor,
+                                fontSize = 11.sp,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
+                    }
                 },
             )
         }
@@ -3075,6 +3089,7 @@ private fun WatchFaceGridCard(
         ?.record
         ?.resolvedDisplayName(item.name)
         ?: item.name
+    val author = normalizedWatchStoreAuthor(item.author)
     val interactionSource = remember(item.id) { MutableInteractionSource() }
     val pressScale = rememberFluePressScale(interactionSource)
     Column(
@@ -3125,13 +3140,25 @@ private fun WatchFaceGridCard(
                 onDownload = onDownload,
                 onCancelDownload = onCancelDownload,
                 downloadCountLine = {
-                    Text(
-                        stringResource(R.string.watch_store_download_count_fmt, item.downloadCount),
-                        color = style.secondaryTextColor,
-                        fontSize = 10.sp,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            stringResource(R.string.watch_store_download_count_fmt, item.downloadCount),
+                            color = style.secondaryTextColor,
+                            fontSize = 10.sp,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        if (author != null) {
+                            Spacer(Modifier.width(4.dp))
+                            Text(
+                                stringResource(R.string.watch_store_author_fmt, author),
+                                color = style.secondaryTextColor,
+                                fontSize = 10.sp,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
+                    }
                 },
             )
         }

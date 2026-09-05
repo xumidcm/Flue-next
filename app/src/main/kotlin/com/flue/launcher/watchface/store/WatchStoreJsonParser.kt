@@ -190,6 +190,9 @@ internal object WatchStoreJsonParser {
             previewUrl = requiredString(root, "preview_url", MAX_URL_LENGTH),
             downloadCount = requiredLong(root, "download_count", minimum = 0),
             createdAt = requiredString(root, "created_at", MAX_URL_LENGTH),
+            author = root.optJSONObject("uploader")
+                ?.let { optionalString(it, "username", MAX_NAME_LENGTH) }
+                .orEmpty(),
             // 以下都走 optional：老服务端不返回时按 0 / 空处理，不要让一条新字段
             // 把整页列表解析成失败。
             favoriteCount = optionalLong(root, "favorite_count"),
@@ -345,6 +348,9 @@ internal object WatchStoreJsonParser {
                         previewUrl = requiredString(obj, "preview_url", MAX_URL_LENGTH),
                         downloadCount = optionalLong(obj, "download_count"),
                         createdAt = optionalString(obj, "created_at", MAX_URL_LENGTH),
+                        author = obj.optJSONObject("uploader")
+                            ?.let { optionalString(it, "username", MAX_NAME_LENGTH) }
+                            .orEmpty(),
                     ),
                 )
             }

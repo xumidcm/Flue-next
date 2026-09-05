@@ -36,6 +36,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.res.stringResource
 import com.flue.launcher.ui.style.flueOverscroll
 import com.flue.launcher.util.RecentsVisibility
 import java.io.File
@@ -48,6 +49,12 @@ class CrashActivity : FlueComponentActivity() {
         val crashInfo = intent.getStringExtra("crash_info") ?: readCache("crash_info.txt", "Unknown error")
         val crashBrief = intent.getStringExtra("crash_brief") ?: readCache("crash_brief.txt", "Unknown")
         val appInfo = intent.getStringExtra("crash_app_info") ?: readCache("crash_app_info.txt", "Unknown")
+        val messageSelection = selectCrashMessageIndices(
+            titleCount = resources.getStringArray(R.array.crash_titles).size,
+            subtitleCount = resources.getStringArray(R.array.crash_subtitles).size,
+        )
+        val crashTitle = resources.getStringArray(R.array.crash_titles)[messageSelection.titleIndex]
+        val crashSubtitle = resources.getStringArray(R.array.crash_subtitles)[messageSelection.subtitleIndex]
         val fullCrashLog = buildString {
             appendLine(appInfo)
             appendLine()
@@ -59,6 +66,8 @@ class CrashActivity : FlueComponentActivity() {
             val isZh = remember { Locale.getDefault().language.startsWith("zh") }
             CrashScreen(
                 isZh = isZh,
+                title = crashTitle,
+                subtitle = crashSubtitle,
                 crashInfo = crashInfo,
                 appInfo = appInfo,
                 onCopyLog = {
@@ -68,7 +77,8 @@ class CrashActivity : FlueComponentActivity() {
                     )
                 },
                 onRestart = { restart() },
-                onOpenSettings = { openSettings() }
+                onOpenSettings = { openSettings() },
+                onOpenLauncherSettings = { openLauncherSettings() },
             )
         }
     }
@@ -97,16 +107,23 @@ class CrashActivity : FlueComponentActivity() {
     private fun openSettings() {
         startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$packageName")))
     }
+
+    private fun openLauncherSettings() {
+        startActivity(Intent(this, SettingsActivity::class.java))
+    }
 }
 
 @Composable
 fun CrashScreen(
     isZh: Boolean,
+    title: String,
+    subtitle: String,
     crashInfo: String,
     appInfo: String,
     onCopyLog: () -> Unit,
     onRestart: () -> Unit,
-    onOpenSettings: () -> Unit
+    onOpenSettings: () -> Unit,
+    onOpenLauncherSettings: () -> Unit,
 ) {
     var showFull by remember { mutableStateOf(false) }
     val previewCrash = remember(crashInfo) { crashInfo.lineSequence().take(5).joinToString("\n") }
@@ -121,18 +138,14 @@ fun CrashScreen(
             .padding(horizontal = 24.dp, vertical = 32.dp)
     ) {
         Text(
-            text = if (isZh) "哎呀，崩溃了" else "App Crashed",
+            text = title,
             fontSize = 28.sp,
             fontWeight = FontWeight.Bold,
             color = Color.White
         )
         Spacer(modifier = Modifier.height(8.dp))
         Text(
-            text = if (isZh) {
-                "请复制详细错误并提供复现步骤给开发者。"
-            } else {
-                "Shows first five error lines by default. Tap to expand full log."
-            },
+            text = subtitle,
             fontSize = 14.sp,
             color = Color(0xFFBFBFBF),
             lineHeight = 20.sp
@@ -190,6 +203,13 @@ fun CrashScreen(
             bg = Color(0xFF1F1F1F),
             fg = Color(0xFF74B8FF),
             onClick = onOpenSettings
+        )
+        Spacer(modifier = Modifier.height(10.dp))
+        CrashButton(
+            text = stringResource(R.string.crash_open_desktop_settings),
+            bg = Color(0xFF1F1F1F),
+            fg = Color(0xFF74B8FF),
+            onClick = onOpenLauncherSettings,
         )
     }
 }

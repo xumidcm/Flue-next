@@ -24,6 +24,29 @@ import org.robolectric.RuntimeEnvironment
 @Config(sdk = [27], manifest = Config.NONE)
 class WatchStoreParsingTest {
     @Test
+    fun `page summaries retain uploader username as author`() {
+        val page = WatchStoreJsonParser.page(
+            """
+            {
+              "data": [{
+                "id": "face-1",
+                "name": "Test face",
+                "screen_type": "round",
+                "category": {"id": "cat-1", "name": "Test", "slug": "test"},
+                "preview_url": "/previews/face-1.png",
+                "download_count": 12,
+                "created_at": "2026-09-05T00:00:00Z",
+                "uploader": {"id": "user-1", "username": "Alice"}
+              }],
+              "pagination": {"page": 1, "limit": 10, "total": 1, "total_pages": 1}
+            }
+            """.trimIndent(),
+        )
+
+        assertEquals("Alice", page.data.single().author)
+    }
+
+    @Test
     fun `upload limit matches current community store contract`() {
         assertEquals(20L * 1024L * 1024L, HttpWatchStoreApi.MAX_UPLOAD_BYTES)
     }

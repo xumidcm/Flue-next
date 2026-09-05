@@ -86,6 +86,7 @@ data class WatchStoreWatchFace(
     val previewUrl: String,
     val downloadCount: Long,
     val createdAt: String,
+    val author: String = "",
     // 以下是上游 `formatWatchface` 一直在返回、而我们一直丢掉的字段。全部给默认值：
     // 老服务端不返回时不至于解析失败，现有构造点也不用逐个改。
     val favoriteCount: Long = 0,
