@@ -1,24 +1,16 @@
 package com.flue.launcher.applist.nativeview
 
-import kotlin.math.abs
-import kotlin.math.min
+import kotlin.math.hypot
 
 internal data class NativeDragPolicy(
     val startThresholdPx: Float,
     val autoScrollEdgePx: Float,
     val maxAutoScrollPxPerFrame: Float,
-    /** 合成所需停留的**上限**：指针还在接近速度门槛地漂移时用这一档。 */
-    val folderHoverMillis: Long = 500L,
-    /**
-     * 合成所需停留的**下限**：指针已经真正停稳时用这一档。
-     *
-     * 老师报「合成的时间可以改得更自然，不需要硬死在 500ms」。硬死一个值的问题是它
-     * 同时要服务两种意图完全不同的动作：手指已经停在图标正中不动了（明摆着要合成，
-     * 却还得干等半秒），和手指正慢慢划过去（这时立刻合成就是误触）。改成按
-     * [NativeFolderHoverGate] 里记的「本次悬停最慢采样」在两档之间插值。
-     */
-    val folderHoverSettledMillis: Long = 240L,
-    val folderHoverMaxSpeedPxPerMs: Float,
+    val folderHoverMillis: Long = 300L,
+    /** Stable dwell and target retention both tolerate six physical dp. */
+    val folderJitterPx: Float = 6f,
+    /** Extra travel required before a reorder can reverse at a slot boundary. */
+    val reorderHysteresisPx: Float = 12f,
     val longPressMillis: Long = 620L,
 )
 
@@ -30,19 +22,18 @@ internal class NativeDragPolicyProfiles(
         startThresholdPx = 20f * safeDensity,
         autoScrollEdgePx = 84f * safeDensity,
         maxAutoScrollPxPerFrame = 30f,
-        folderHoverMillis = 500L,
-        folderHoverSettledMillis = 240L,
-        folderHoverMaxSpeedPxPerMs = 0.55f,
+        folderHoverMillis = 300L,
+        folderJitterPx = 6f * safeDensity,
+        reorderHysteresisPx = 4f * safeDensity,
         longPressMillis = 620L,
     )
     private val spatial = NativeDragPolicy(
         startThresholdPx = 20f * safeDensity,
         autoScrollEdgePx = 96f * safeDensity,
         maxAutoScrollPxPerFrame = 26f,
-        folderHoverMillis = 700L,
-        // 空间布局的图标彼此更近，误触代价更高，下限比线性档留宽一点。
-        folderHoverSettledMillis = 300L,
-        folderHoverMaxSpeedPxPerMs = 0.55f,
+        folderHoverMillis = 300L,
+        folderJitterPx = 6f * safeDensity,
+        reorderHysteresisPx = 4f * safeDensity,
         longPressMillis = 620L,
     )
 
@@ -84,103 +75,44 @@ internal fun nativeAutoScrollDelta(
     }
 }
 
-internal class NativeFolderHoverGate(
-    private val policy: NativeDragPolicy,
-) {
-    private var targetKey: String? = null
+/** Spatial dwell: a fast arrival can settle without another MOVE event. */
+internal class NativeFolderHoverGate(private val policy: NativeDragPolicy) {
+    var targetKey: String? = null
+        private set
+    private var anchorX = 0f
+    private var anchorY = 0f
     private var startedAtMillis = 0L
-
-    /**
-     * 本次悬停里见过的**最慢**采样。
-     *
-     * 用最慢而不是最新的那一下，有两个好处：
-     *
-     *  * **语义对**。「手指在这个图标上停稳过」才是合成意图的证据；用最新采样的话，
-     *    停稳半秒之后一次轻微抖动就能把门槛重新抬高。
-     *  * **不会抖**。这个值只减不增，所以要求的停留时长单调下降 —— 一旦满足就不会
-     *    再被推翻，不需要担心 FolderHoverChanged 在 null 与目标之间来回闪。
-     */
-    private var slowestSpeedPxPerMs = Float.MAX_VALUE
     private var armed = false
 
-    fun update(candidateKey: String?, speedPxPerMs: Float, nowMillis: Long): String? {
-        val validCandidate = candidateKey?.takeIf {
-            speedPxPerMs.isFinite() && abs(speedPxPerMs) <= policy.folderHoverMaxSpeedPxPerMs
-        }
-        if (validCandidate == null) {
-            if (candidateKey == null) {
-                reset()
-                return null
-            }
-            // 候选还在、只是这一采样超速（手抖 / 快速掠过）：只重置停留时钟。
-            // 以前这里整门重置 —— 目标与「停稳过」的最慢速度证据一起被抹掉，
-            // 悬停在 0.55px/ms 门槛附近抖两下就永远凑不满 dwell，老师报的
-            // 「经常组不上文件夹」就是它。目标换了仍走下面的整门重启。
-            startedAtMillis = nowMillis
-            armed = false
+    val deadlineMillis: Long?
+        get() = if (targetKey != null && !armed) startedAtMillis + policy.folderHoverMillis else null
+
+    fun update(candidateKey: String?, x: Float, y: Float, nowMillis: Long): String? {
+        if (candidateKey == null || !x.isFinite() || !y.isFinite()) {
+            reset()
             return null
         }
-        if (targetKey != validCandidate) {
-            targetKey = validCandidate
+        if (targetKey != candidateKey || hypot(x - anchorX, y - anchorY) > policy.folderJitterPx) {
+            targetKey = candidateKey
+            anchorX = x
+            anchorY = y
             startedAtMillis = nowMillis
-            slowestSpeedPxPerMs = abs(speedPxPerMs)
             armed = false
-            return null
         }
-        slowestSpeedPxPerMs = min(slowestSpeedPxPerMs, abs(speedPxPerMs))
-        if (armed) return validCandidate
-        if (nowMillis - startedAtMillis >= requiredDwellMillis()) {
-            armed = true
-            return validCandidate
-        }
-        return null
+        if (nowMillis - startedAtMillis >= policy.folderHoverMillis) armed = true
+        return candidateKey.takeIf { armed }
     }
 
-    private fun requiredDwellMillis(): Long =
-        nativeFolderDwellMillis(policy, slowestSpeedPxPerMs)
+    fun containsStablePointer(x: Float, y: Float): Boolean =
+        targetKey != null && x.isFinite() && y.isFinite() &&
+            hypot(x - anchorX, y - anchorY) <= policy.folderJitterPx
 
     fun reset() {
         targetKey = null
         startedAtMillis = 0L
-        slowestSpeedPxPerMs = Float.MAX_VALUE
         armed = false
     }
 }
-
-/**
- * 合成所需停留时长的**唯一真源**：按「停得多稳」在下限与上限之间插值。
- *
- * 完全停住（最慢采样 = 0）取 [NativeDragPolicy.folderHoverSettledMillis]；
- * 一直贴着速度门槛漂移取 [NativeDragPolicy.folderHoverMillis]。
- *
- * 抽成顶层纯函数、不留在 [NativeFolderHoverGate] 里，是因为
- * [NativeAppListDragController] 也要按同一条法则排「到期回调」——
- * 以前那边直接读 `policy.folderHoverMillis`，与 gate 内部的插值门槛是两个来源，
- * 改插值曲线时只会改到一半。
- */
-internal fun nativeFolderDwellMillis(
-    policy: NativeDragPolicy,
-    slowestSpeedPxPerMs: Float,
-): Long {
-    val ceiling = policy.folderHoverMillis
-    val floor = policy.folderHoverSettledMillis.coerceIn(0L, ceiling)
-    val limit = policy.folderHoverMaxSpeedPxPerMs
-    if (limit <= 0f || !limit.isFinite()) return ceiling
-    val settled = slowestSpeedPxPerMs.takeIf { it.isFinite() } ?: limit
-    val normalized = (settled / limit).coerceIn(0f, 1f)
-    return floor + ((ceiling - floor) * normalized).toLong()
-}
-
-/**
- * 停留时长的**最晚**可能取值，也就是控制器该把「到期回调」排在哪一刻。
- *
- * 为什么排在上限而不是当前插值值：[NativeFolderHoverGate] 的门槛只会随后续采样
- * **下降**（它记的是最慢采样，单调不增），所以上限就是「无论如何都已经该武装了」
- * 的那一刻。回调只是一次轮询 —— 真正的判定权在 gate 手里，它在回调里按自己那一刻
- * 的门槛决定要不要武装。排早了会在门槛还没满足时空跑一次；排在上限则一次到位。
- */
-internal fun nativeFolderDwellPollMillis(policy: NativeDragPolicy): Long =
-    nativeFolderDwellMillis(policy, policy.folderHoverMaxSpeedPxPerMs)
 
 internal fun nativeFolderTargetAllowed(
     source: NativeAppListBoundRow<*>,

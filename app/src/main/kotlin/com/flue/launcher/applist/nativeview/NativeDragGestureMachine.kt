@@ -1,7 +1,6 @@
 package com.flue.launcher.applist.nativeview
 
 import com.flue.launcher.applist.model.AppItemKey
-import kotlin.math.abs
 import kotlin.math.hypot
 
 internal sealed interface NativeDragEffect {
@@ -9,6 +8,7 @@ internal sealed interface NativeDragEffect {
     data object DismissActions : NativeDragEffect
     data class StartDrag(val key: AppItemKey) : NativeDragEffect
     data class Move(val source: AppItemKey, val target: AppItemKey) : NativeDragEffect
+    data class FolderCandidateChanged(val target: AppItemKey?) : NativeDragEffect
     data class FolderHoverChanged(val target: AppItemKey?) : NativeDragEffect
     data class CreateFolder(val source: AppItemKey, val target: AppItemKey) : NativeDragEffect
     /** The pointer was released; commit the local reorder preview once. */
@@ -21,6 +21,8 @@ internal sealed interface NativeDragEffect {
  * Pure gesture state for the native drawer. Android touch dispatch, hit testing,
  * frame scheduling and rendering stay in [NativeAppListDragController].
  */
+internal enum class NativeDragSampleKind { POINTER, START, HOVER, AUTO_SCROLL }
+
 internal class NativeDragGestureMachine(
     private val defaultPolicy: NativeDragPolicy? = null,
 ) {
@@ -39,6 +41,9 @@ internal class NativeDragGestureMachine(
     private var pendingMoveDeltaY = 0f
     private var lastAcceptedMoveDeltaX = 0f
     private var lastAcceptedMoveDeltaY = 0f
+    private var lastTravelDeltaX = 0f
+    private var lastTravelDeltaY = 0f
+    private var reverseTravelPx = 0f
     private var armedFolderTarget: AppItemKey? = null
 
     var isTracking: Boolean = false
@@ -50,13 +55,21 @@ internal class NativeDragGestureMachine(
     val folderHoverTarget: AppItemKey?
         get() = armedFolderTarget
 
+    val folderCandidateTarget: AppItemKey?
+        get() = folderHoverGate?.targetKey?.let(::AppItemKey)
+    val folderDeadlineMillis: Long?
+        get() = folderHoverGate?.deadlineMillis
+
     /** Records a reorder target only after the host accepted its visual preview. */
     fun acceptMovePreview(target: AppItemKey) {
         if (isDragging && target != sourceKey) {
             lastMoveTarget = target
             lastAcceptedMoveTarget = target
-            lastAcceptedMoveDeltaX = pendingMoveDeltaX
-            lastAcceptedMoveDeltaY = pendingMoveDeltaY
+            if (hypot(pendingMoveDeltaX, pendingMoveDeltaY) > 0.0001f) {
+                lastAcceptedMoveDeltaX = pendingMoveDeltaX
+                lastAcceptedMoveDeltaY = pendingMoveDeltaY
+            }
+            reverseTravelPx = 0f
         }
     }
 
@@ -77,10 +90,11 @@ internal class NativeDragGestureMachine(
         pointerY: Float,
         nowMillis: Long,
         policy: NativeDragPolicy = requireNotNull(defaultPolicy),
+        folderCreationEnabled: Boolean = true,
     ) {
         resetState()
         activePolicy = policy
-        folderHoverGate = NativeFolderHoverGate(policy)
+        folderHoverGate = NativeFolderHoverGate(policy).takeIf { folderCreationEnabled }
         this.sourceKey = sourceKey
         downX = pointerX
         downY = pointerY
@@ -112,18 +126,21 @@ internal class NativeDragGestureMachine(
         pointerX: Float,
         pointerY: Float,
         targetKey: AppItemKey?,
-        speedPxPerMs: Float,
         nowMillis: Long,
         folderCandidateKey: AppItemKey? = targetKey,
+        sampleKind: NativeDragSampleKind = NativeDragSampleKind.POINTER,
     ): List<NativeDragEffect> {
         val source = sourceKey ?: return emptyList()
         val policy = activePolicy ?: return emptyList()
         if (!isTracking) return emptyList()
 
-        pendingMoveDeltaX = pointerX - lastPointerX
-        pendingMoveDeltaY = pointerY - lastPointerY
-        lastPointerX = pointerX
-        lastPointerY = pointerY
+        if (sampleKind == NativeDragSampleKind.POINTER) {
+            recordPointerMotion(pointerX, pointerY)
+        } else if (sampleKind != NativeDragSampleKind.START) {
+            // Time/layout observations carry no new pointer direction evidence.
+            pendingMoveDeltaX = 0f
+            pendingMoveDeltaY = 0f
+        }
 
         val distance = hypot(pointerX - downX, pointerY - downY)
         if (!longPressDispatched) {
@@ -136,14 +153,6 @@ internal class NativeDragGestureMachine(
             isDragging = true
             lastMoveTarget = source
             lastAcceptedMoveTarget = null
-            // Seed the dwell clock on the same sample that starts a drag. The
-            // controller may then arm it from a delayed callback even when the
-            // finger remains perfectly still over the target.
-            folderHoverGate?.update(
-                candidateKey = folderCandidateKey?.takeUnless { it == source }?.value,
-                speedPxPerMs = speedPxPerMs,
-                nowMillis = nowMillis,
-            )
             return listOf(
                 NativeDragEffect.DismissActions,
                 NativeDragEffect.StartDrag(source),
@@ -151,15 +160,16 @@ internal class NativeDragGestureMachine(
         }
 
         val effects = mutableListOf<NativeDragEffect>()
-        // 候选不再在这里按速度预过滤：gate 要区分「离开了图标」（整门重置）和
-        // 「还在同一个图标上但这一采样超速」（只重置停留时钟），必须见到原始候选。
-        // 速度合法性由 gate 自己判（它一直就有这道检查）。
-        val folderCandidate = folderCandidateKey?.takeUnless { it == source }
+        val previousCandidate = folderCandidateTarget
         val nextArmedTarget = folderHoverGate?.update(
-            candidateKey = folderCandidate?.value,
-            speedPxPerMs = speedPxPerMs,
+            candidateKey = folderCandidateKey?.takeUnless { it == source }?.value,
+            x = pointerX,
+            y = pointerY,
             nowMillis = nowMillis,
         )?.let(::AppItemKey)
+        if (previousCandidate != folderCandidateTarget) {
+            effects += NativeDragEffect.FolderCandidateChanged(folderCandidateTarget)
+        }
         if (nextArmedTarget != armedFolderTarget) {
             armedFolderTarget = nextArmedTarget
             effects += NativeDragEffect.FolderHoverChanged(nextArmedTarget)
@@ -171,11 +181,8 @@ internal class NativeDragGestureMachine(
                 targetKey != lastMoveTarget ||
                     canRevisitLastMoveTargetAfterDirectionChange()
             ) &&
-            // A folder hover owns only the exact candidate it armed on. If
-            // the pointer/layout has moved to another reorder slot in this
-            // same sample, let that reorder through immediately instead of
-            // waiting for a second MOVE after the hover poll.
-            targetKey != nextArmedTarget
+            // Reserve the candidate before dwell, so reorder cannot move it away.
+            folderCandidateTarget == null
         ) {
             // Record the candidate before returning so direct state-machine
             // callers suppress duplicate effects as well. The controller can
@@ -189,21 +196,27 @@ internal class NativeDragGestureMachine(
     fun onUp(
         currentFolderTargetKey: AppItemKey?,
         currentReorderTargetKey: AppItemKey? = currentFolderTargetKey,
+        pointerX: Float = lastPointerX,
+        pointerY: Float = lastPointerY,
     ): List<NativeDragEffect> {
         if (!isTracking) return emptyList()
         val source = sourceKey
         val wasDragging = isDragging
+        if (pointerX != lastPointerX || pointerY != lastPointerY) recordPointerMotion(pointerX, pointerY)
         val folderTarget = armedFolderTarget?.takeIf {
-            it == currentFolderTargetKey && it != source
+            it == currentFolderTargetKey && it != source &&
+                folderHoverGate?.containsStablePointer(pointerX, pointerY) == true
         }
         val effects = mutableListOf<NativeDragEffect>()
+        if (folderCandidateTarget != null) effects += NativeDragEffect.FolderCandidateChanged(null)
         if (armedFolderTarget != null) effects += NativeDragEffect.FolderHoverChanged(null)
         if (source != null && folderTarget != null) {
             effects += NativeDragEffect.CreateFolder(source, folderTarget)
         }
         if (source != null && wasDragging && folderTarget == null) {
             currentReorderTargetKey
-                ?.takeIf { it != source && it != lastMoveTarget }
+                ?.takeIf { it != source && (it != lastMoveTarget ||
+                    canRevisitLastMoveTargetAfterDirectionChange(useLastPointerMotion = true)) }
                 ?.let { effects += NativeDragEffect.Move(source, it) }
         }
         if (wasDragging) effects += NativeDragEffect.CommitDrag
@@ -213,13 +226,21 @@ internal class NativeDragGestureMachine(
 
     fun reconcileCurrentKeys(keys: List<AppItemKey>): List<NativeDragEffect> {
         val source = sourceKey ?: return emptyList()
-        if (source in keys) return emptyList()
-        return cancel()
+        if (source !in keys) return cancel()
+        if (folderCandidateTarget != null && folderCandidateTarget !in keys) {
+            val effects = mutableListOf<NativeDragEffect>(NativeDragEffect.FolderCandidateChanged(null))
+            if (armedFolderTarget != null) effects += NativeDragEffect.FolderHoverChanged(null)
+            folderHoverGate?.reset()
+            armedFolderTarget = null
+            return effects
+        }
+        return emptyList()
     }
 
     fun cancel(): List<NativeDragEffect> {
         if (!isTracking) return emptyList()
         val effects = mutableListOf<NativeDragEffect>()
+        if (folderCandidateTarget != null) effects += NativeDragEffect.FolderCandidateChanged(null)
         if (armedFolderTarget != null) effects += NativeDragEffect.FolderHoverChanged(null)
         if (isDragging) effects += NativeDragEffect.FinishDrag
         resetState()
@@ -239,16 +260,40 @@ internal class NativeDragGestureMachine(
         pendingMoveDeltaY = 0f
         lastAcceptedMoveDeltaX = 0f
         lastAcceptedMoveDeltaY = 0f
+        reverseTravelPx = 0f
+        lastTravelDeltaX = 0f
+        lastTravelDeltaY = 0f
         armedFolderTarget = null
         folderHoverGate?.reset()
         folderHoverGate = null
         activePolicy = null
     }
 
-    private fun canRevisitLastMoveTargetAfterDirectionChange(): Boolean {
+    private fun recordPointerMotion(pointerX: Float, pointerY: Float) {
+        pendingMoveDeltaX = pointerX - lastPointerX
+        pendingMoveDeltaY = pointerY - lastPointerY
+        lastPointerX = pointerX
+        lastPointerY = pointerY
+        val deltaLength = hypot(pendingMoveDeltaX, pendingMoveDeltaY)
+        val previousLength = hypot(lastAcceptedMoveDeltaX, lastAcceptedMoveDeltaY)
+        val reverseDot = pendingMoveDeltaX * lastAcceptedMoveDeltaX +
+            pendingMoveDeltaY * lastAcceptedMoveDeltaY
+        if (deltaLength > 0.0001f) {
+            lastTravelDeltaX = pendingMoveDeltaX
+            lastTravelDeltaY = pendingMoveDeltaY
+            if (lastAcceptedMoveTarget != null && previousLength > 0.0001f && reverseDot < 0f) {
+                reverseTravelPx += deltaLength
+            } else if (reverseDot > 0f) {
+                reverseTravelPx = 0f
+            }
+        }
+    }
+
+    private fun canRevisitLastMoveTargetAfterDirectionChange(useLastPointerMotion: Boolean = false): Boolean {
         if (lastAcceptedMoveTarget == null) return false
-        val currentLengthSquared =
-            pendingMoveDeltaX * pendingMoveDeltaX + pendingMoveDeltaY * pendingMoveDeltaY
+        val deltaX = if (useLastPointerMotion) lastTravelDeltaX else pendingMoveDeltaX
+        val deltaY = if (useLastPointerMotion) lastTravelDeltaY else pendingMoveDeltaY
+        val currentLengthSquared = deltaX * deltaX + deltaY * deltaY
         if (!currentLengthSquared.isFinite() || currentLengthSquared <= 0.0001f) return false
         val previousLengthSquared =
             lastAcceptedMoveDeltaX * lastAcceptedMoveDeltaX +
@@ -256,8 +301,8 @@ internal class NativeDragGestureMachine(
         if (!previousLengthSquared.isFinite()) return false
         if (previousLengthSquared <= 0.0001f) return true
         val directionDot =
-            pendingMoveDeltaX * lastAcceptedMoveDeltaX +
-                pendingMoveDeltaY * lastAcceptedMoveDeltaY
-        return directionDot < 0f
+            deltaX * lastAcceptedMoveDeltaX + deltaY * lastAcceptedMoveDeltaY
+        return directionDot < 0f &&
+            reverseTravelPx >= (activePolicy?.reorderHysteresisPx ?: 12f)
     }
 }

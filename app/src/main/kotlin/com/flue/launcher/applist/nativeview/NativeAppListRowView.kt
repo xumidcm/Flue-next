@@ -510,6 +510,10 @@ internal class NativeAppListRowView(
         translationY =
             moveTranslationY + previewTranslationY + dragTranslationY +
             flowTranslationY + contentTranslationY
+        // Translation is a RenderNode property, but cached icon effects on
+        // older watch hardware still need an explicit invalidation to commit
+        // the new composite transform in the same frame as MOVE.
+        invalidate()
     }
 
     private fun updateInteractionScale() {
@@ -544,6 +548,7 @@ internal class NativeAppListRowView(
         val scale = visualScale * interactionScale
         scaleX = scale
         scaleY = scale
+        invalidate()
     }
 
     fun normalizedIconOrigin(viewport: RecyclerView): NormalizedPoint {
@@ -650,6 +655,10 @@ internal class NativeAppListRowView(
             (iconBounds.centerY() - pivotY) * scale
     }
 
+    fun iconCenterXInParentForDisplay(): Float = transformedIconCenterX(translationX)
+
+    fun iconCenterYInParentForDisplay(): Float = transformedIconCenterY(translationY)
+
     fun iconWidthForSafeGeometry(): Float {
         ensureGeometry()
         return iconBounds.width()
@@ -665,6 +674,7 @@ internal class NativeAppListRowView(
         parentX: Float,
         parentY: Float,
         centerFraction: Float,
+        extraPaddingPx: Float = 0f,
     ): Boolean {
         if (!parentX.isFinite() || !parentY.isFinite()) return false
         ensureGeometry()
@@ -674,8 +684,8 @@ internal class NativeAppListRowView(
             (iconBounds.centerX() - pivotX) * scaleX
         val transformedCenterY = top + translationY + pivotY +
             (iconBounds.centerY() - pivotY) * scaleY
-        val halfWidth = iconBounds.width() * abs(scaleX) * fraction / 2f
-        val halfHeight = iconBounds.height() * abs(scaleY) * fraction / 2f
+        val halfWidth = iconBounds.width() * abs(scaleX) * fraction / 2f + extraPaddingPx.coerceAtLeast(0f)
+        val halfHeight = iconBounds.height() * abs(scaleY) * fraction / 2f + extraPaddingPx.coerceAtLeast(0f)
         return parentX in (transformedCenterX - halfWidth)..(transformedCenterX + halfWidth) &&
             parentY in (transformedCenterY - halfHeight)..(transformedCenterY + halfHeight)
     }

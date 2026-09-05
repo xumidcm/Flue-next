@@ -617,6 +617,175 @@ class NativeAppListRowViewBehaviorTest {
     }
 
     @Test
+    fun unchangedNeighbourFinishesItsOriginalAnimationAfterAnotherTargetChanges() {
+        org.robolectric.shadows.ShadowChoreographer.setPaused(true)
+        org.robolectric.shadows.ShadowChoreographer.setFrameDelay(Duration.ofMillis(16L))
+        android.animation.ValueAnimator::class.java
+            .getDeclaredMethod("setDurationScale", Float::class.javaPrimitiveType)
+            .invoke(null, 1f)
+        val view = NativeAppListView(RuntimeEnvironment.getApplication()).apply {
+            setConfig(drawingConfig().copy(entryMotionEnabled = false, fisheyeEnabled = false))
+            submit(NativeAppListContent(AppListSnapshot.create(1L,
+                listOf(appEntry("a"), appEntry("b"), appEntry("c"))), emptyMap()))
+        }
+        measureAndLayout(view, width = 320, height = 320)
+        shadowOf(android.os.Looper.getMainLooper()).idleFor(Duration.ofMillis(1000L))
+        val host = dragHostOf(view)
+        val a = view.layoutManager!!.findViewByPosition(0) as NativeAppListRowView
+        val b = view.layoutManager!!.findViewByPosition(1) as NativeAppListRowView
+        val destination = a.iconCenterYInParentForHitTest() - b.iconCenterYInParentForHitTest()
+        assertTrue(host.beginDragPreview(AppItemKey("a")))
+        assertTrue(host.previewMove(AppItemKey("a"), AppItemKey("b")))
+        fun advanceFrames(count: Int) {
+            repeat(count) { shadowOf(android.os.Looper.getMainLooper()).idleFor(Duration.ofMillis(16L)) }
+        }
+        advanceFrames(8) // First vsync starts the clock, then seven frames of travel.
+        assertTrue("first neighbour must still be moving", kotlin.math.abs(destination - b.previewTranslationY()) > 0.01f)
+        assertTrue(host.previewMove(AppItemKey("a"), AppItemKey("c")))
+        advanceFrames(9)
+        assertEquals(destination, b.previewTranslationY(), 0.01f)
+        advanceFrames(10) // The later target must also finish without further MOVE events.
+        val c = view.layoutManager!!.findViewByPosition(2) as NativeAppListRowView
+        assertEquals(destination, c.previewTranslationY(), 0.01f)
+        view.release()
+    }
+
+    @Test
+    fun deferredAttachPlacementDoesNotMoveAPausedFolderCandidate() {
+        val view = NativeAppListView(RuntimeEnvironment.getApplication()).apply {
+            setConfig(drawingConfig().copy(entryMotionEnabled = false, fisheyeEnabled = false))
+            submit(NativeAppListContent(AppListSnapshot.create(1L,
+                listOf(appEntry("a"), appEntry("b"), appEntry("c"))), emptyMap()))
+        }
+        measureAndLayout(view, width = 320, height = 320)
+        val host = dragHostOf(view)
+        val b = view.layoutManager!!.findViewByPosition(1) as NativeAppListRowView
+        host.beginDragPreview(AppItemKey("a"))
+        host.previewMove(AppItemKey("a"), AppItemKey("b"))
+        host.setFolderCandidate(AppItemKey("b"))
+        b.setPreviewTranslation(0f, -5f)
+        NativeAppListView::class.java.getDeclaredMethod("applyDragPreviewTargetForChild", View::class.java)
+            .apply { isAccessible = true }.invoke(view, b)
+        assertEquals(-5f, b.previewTranslationY(), 0f)
+        view.layoutManager!!.removeView(b)
+        assertEquals(0f, b.previewTranslationY(), 0f)
+        view.layoutManager!!.addView(b)
+        NativeAppListView::class.java.getDeclaredMethod("applyDragPreviewTargetForChild", View::class.java)
+            .apply { isAccessible = true }.invoke(view, b)
+        assertEquals(0f, b.previewTranslationY(), 0f)
+        host.setFolderCandidate(null)
+        shadowOf(android.os.Looper.getMainLooper()).idleFor(Duration.ofMillis(300L))
+        assertEquals(-40f, b.previewTranslationY(), 0.01f)
+        view.release()
+    }
+
+    @Test
+    fun shrinkingContentDuringHeldPointerStillClosesTheIndicatorLifecycle() {
+        val entries = (0 until 30).map { appEntry("indicator-resize-$it") }
+        val view = NativeAppListView(RuntimeEnvironment.getApplication()).apply {
+            setConfig(drawingConfig().copy(entryMotionEnabled = false, scrollIndicatorEnabled = true, centerEdgeItems = false))
+            submit(NativeAppListContent(AppListSnapshot.create(1L, entries), emptyMap()))
+        }
+        val activity = Robolectric.buildActivity(Activity::class.java).setup().get()
+        activity.setContentView(view)
+        measureAndLayout(view, width = 320, height = 320)
+        dispatch(view, MotionEvent.ACTION_DOWN, x = 310f, y = 160f, eventTime = 0L)
+        shadowOf(android.os.Looper.getMainLooper()).idleFor(Duration.ofMillis(160L))
+        val alpha = NativeAppListView::class.java.getDeclaredField("scrollIndicatorAlpha").apply { isAccessible = true }
+        assertTrue(alpha.getFloat(view) > 0f)
+        measureAndLayout(view, width = 320, height = 5000)
+        assertTrue(view.computeVerticalScrollRange() <= view.computeVerticalScrollExtent())
+        dispatch(view, MotionEvent.ACTION_UP, x = 310f, y = 160f, eventTime = 200L)
+        assertEquals(0f, alpha.getFloat(view), 0f)
+        view.release()
+        activity.finish()
+    }
+
+    @Test
+    fun displayedFolderIdentityIsStableAcrossAllLayoutsAndDeviceShapes() {
+        for (presentation in NativeAppListPresentation.entries) {
+            for (shape in NativeDeviceShape.entries) {
+                val view = NativeAppListView(RuntimeEnvironment.getApplication()).apply {
+                    setConfig(drawingConfig().copy(presentation = presentation, deviceShape = shape,
+                        entryMotionEnabled = false, fisheyeEnabled = false, centerEdgeItems = false))
+                    setLayoutStrategy(when (presentation) {
+                        NativeAppListPresentation.LINEAR -> LinearNativeAppListLayoutStrategy
+                        NativeAppListPresentation.HONEYCOMB -> HoneycombNativeAppListLayoutStrategy
+                        NativeAppListPresentation.DENSE_GRID -> DenseGridNativeAppListLayoutStrategy
+                        NativeAppListPresentation.FLOW -> FlowNativeAppListLayoutStrategy
+                        NativeAppListPresentation.RING -> RingNativeAppListLayoutStrategy
+                    })
+                    submit(NativeAppListContent(AppListSnapshot.create(1L,
+                        (0 until 30).map { appEntry("matrix-$it") }), emptyMap()))
+                }
+                measureAndLayout(view, width = 320, height = 320)
+                val rows = (0 until view.childCount).map { view.getChildAt(it) as NativeAppListRowView }
+                    .filter { it.iconCenterYInParentForDisplay() in 24f..296f &&
+                        it.iconCenterXInParentForDisplay() in 1f..319f }
+                assertTrue("$presentation/$shape must have two visible icons", rows.size >= 2)
+                val source = rows[0]
+                val target = rows[1]
+                val sourceKey = requireNotNull(source.boundStableKeyOrNull())
+                val targetKey = requireNotNull(target.boundStableKeyOrNull())
+                val host = dragHostOf(view)
+                setDraggedSourceKey(view, sourceKey)
+                assertTrue(host.beginDragPreview(sourceKey))
+                assertEquals("$presentation/$shape", targetKey,
+                    host.folderKeyAt(target.iconCenterXInParentForDisplay(), target.iconCenterYInParentForDisplay()))
+                assertTrue(host.previewMove(sourceKey, targetKey))
+                assertEquals("$presentation/$shape during preview", targetKey,
+                    host.folderKeyAt(target.iconCenterXInParentForDisplay(), target.iconCenterYInParentForDisplay()))
+                view.release()
+            }
+        }
+    }
+
+    @Test
+    fun folderHitFollowsDisplayedKeyWhileReorderIsStillAnimating() {
+        val view = NativeAppListView(RuntimeEnvironment.getApplication()).apply {
+            setConfig(drawingConfig().copy(entryMotionEnabled = false, fisheyeEnabled = false))
+            submit(NativeAppListContent(AppListSnapshot.create(1L,
+                listOf(appEntry("a"), appEntry("b"), appEntry("c"))), emptyMap()))
+        }
+        measureAndLayout(view, width = 320, height = 320)
+        val host = dragHostOf(view)
+        val b = view.layoutManager!!.findViewByPosition(1) as NativeAppListRowView
+        setDraggedSourceKey(view, AppItemKey("a"))
+        assertTrue(host.beginDragPreview(AppItemKey("a")))
+        assertTrue(host.previewMove(AppItemKey("a"), AppItemKey("b")))
+        assertEquals(AppItemKey("b"), host.folderKeyAt(
+            b.iconCenterXInParentWithoutFlow(), b.iconCenterYInParentWithoutFlow()))
+        view.release()
+    }
+
+    @Test
+    fun indicatorClearsDrawingAndCallbacksWhenWindowLosesFocusWithoutUp() {
+        val view = NativeAppListView(RuntimeEnvironment.getApplication()).apply {
+            setConfig(drawingConfig().copy(entryMotionEnabled = false, scrollIndicatorEnabled = true))
+            submit(NativeAppListContent(AppListSnapshot.create(1L,
+                (0 until 30).map { appEntry("indicator-focus-$it") }), emptyMap()))
+        }
+        val activity = Robolectric.buildActivity(Activity::class.java).setup().get()
+        activity.setContentView(view)
+        measureAndLayout(view, width = 320, height = 320)
+        dispatch(view, MotionEvent.ACTION_DOWN, x = 310f, y = 160f, eventTime = 0L)
+        shadowOf(android.os.Looper.getMainLooper()).idleFor(Duration.ofMillis(160L))
+        val alpha = NativeAppListView::class.java.getDeclaredField("scrollIndicatorAlpha").apply { isAccessible = true }
+        val loop = NativeAppListView::class.java.getDeclaredField("scrollIndicatorLoopScheduled").apply { isAccessible = true }
+        assertTrue(alpha.getFloat(view) > 0f)
+        view.onWindowFocusChanged(false)
+        assertEquals(0f, alpha.getFloat(view), 0f)
+        assertFalse(loop.getBoolean(view))
+        view.onScrolled(0, 3) // A late fling notification must not re-open the focus-lost lifecycle.
+        shadowOf(android.os.Looper.getMainLooper()).idleFor(Duration.ofMillis(160L))
+        assertEquals(0f, alpha.getFloat(view), 0f)
+        shadowOf(android.os.Looper.getMainLooper()).idleFor(Duration.ofMillis(1200L))
+        assertEquals(0f, alpha.getFloat(view), 0f)
+        view.release()
+        activity.finish()
+    }
+
+    @Test
     fun scrollIndicatorFrameDriverSettlesWithoutWaitingForAListDraw() {
         val entries = (0 until 30).map { appEntry("component:indicator-frame-$it") }
         val view = NativeAppListView(RuntimeEnvironment.getApplication()).apply {
@@ -643,6 +812,8 @@ class NativeAppListRowViewBehaviorTest {
             Duration.ofMillis(NATIVE_SCROLL_INDICATOR_FADE_IN_MS + 32L),
         )
 
+        val alpha = NativeAppListView::class.java.getDeclaredField("scrollIndicatorAlpha").apply { isAccessible = true }
+        assertTrue("indicator must first be visible", alpha.getFloat(view) > 0f)
         dispatch(view, MotionEvent.ACTION_UP, x = 160f, y = 160f, eventTime = 200L)
         shadowOf(android.os.Looper.getMainLooper()).idleFor(
             Duration.ofMillis(
@@ -652,6 +823,15 @@ class NativeAppListRowViewBehaviorTest {
             ),
         )
 
+        assertEquals(0f, alpha.getFloat(view), 0f)
+        val loop = NativeAppListView::class.java.getDeclaredField("scrollIndicatorLoopScheduled").apply { isAccessible = true }
+        assertFalse(loop.getBoolean(view))
+        val bitmap = Bitmap.createBitmap(320, 320, Bitmap.Config.ARGB_8888)
+        NativeAppListView::class.java.getDeclaredMethod("drawScrollIndicator", Canvas::class.java)
+            .apply { isAccessible = true }.invoke(view, Canvas(bitmap))
+        val pixels = IntArray(320 * 320)
+        bitmap.getPixels(pixels, 0, 320, 0, 0, 320, 320)
+        assertTrue("final indicator frame must draw no residual pixels", pixels.all { Color.alpha(it) == 0 })
         view.release()
         activity.finish()
     }
@@ -772,7 +952,7 @@ class NativeAppListRowViewBehaviorTest {
         assertNull(
             folderKeyAtOf(
                 view,
-                target.left + target.width * 0.10f,
+                target.left - 2f,
                 centerY,
             ),
         )

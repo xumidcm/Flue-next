@@ -3,7 +3,6 @@ package com.flue.launcher.applist.nativeview
 import com.flue.launcher.applist.model.AppItemKey
 import com.flue.launcher.applist.model.AppListCommand
 import kotlin.math.abs
-import kotlin.math.hypot
 
 /**
  * Resolves an exact nearest-slot tie in the direction of the active drag.
@@ -100,9 +99,12 @@ internal interface NativeAppListDragHost {
     ) = beginDrag(key, pointerX, pointerY)
     fun updateDrag(pointerX: Float, pointerY: Float)
     fun endDrag(committed: Boolean)
+    fun setFolderCandidate(key: AppItemKey?) = Unit
     fun setFolderHover(key: AppItemKey?)
-    fun scrollBy(deltaPx: Float)
+    /** Returns actual consumed pixels, including zero at an edge. */
+    fun scrollBy(deltaPx: Float): Float
     fun performDragHaptic()
+    fun performFolderHaptic() = performDragHaptic()
 }
 
 internal data class NativeFolderDispatchResult(
@@ -148,16 +150,6 @@ internal class NativeAppListDragController(
     private var lastPointerAtMillis = 0L
     private var gestureDownX = 0f
     private var gestureDownY = 0f
-    /**
-     * 最近一次**真实指针采样**测出的速度。
-     *
-     * 合成帧（自动滚动帧、folder-hover 到期回调）没有新的指针采样，以前它们往
-     * [NativeFolderHoverGate] 里塞的是 `0f` —— 等于谎报「手指已经完全停稳」，
-     * `requiredDwellMillis()` 直接掉到下限 300ms。于是自动滚动期间任何划过探针
-     * 的图标都会在 300ms 内武装合并，正是老师报的误触。改为复用这一份实测速度：
-     * 合成帧不带来新信息，就不该改变 gate 对「停得多稳」的判断。
-     */
-    private var lastPointerSpeedPxPerMs = 0f
     private var lastAutoScrollFrameAtMillis: Long? = null
     private var frameScheduled = false
     private var folderCommandDispatched = false
@@ -189,10 +181,14 @@ internal class NativeAppListDragController(
         lastPointerX = x
         lastPointerY = y
         lastPointerAtMillis = eventTimeMillis
-        // 新手势：还没有任何位移采样。合成帧只可能在 machine.isDragging 之后跑，
-        // 那时至少已有一次 onMove 写过真实速度，所以这里的初值观察不到。
-        lastPointerSpeedPxPerMs = 0f
-        machine.onDown(source, x, y, eventTimeMillis, policy)
+        machine.onDown(
+            source,
+            x,
+            y,
+            eventTimeMillis,
+            policy,
+            folderCreationEnabled = allowFolderCreation(),
+        )
         suppressedLongClickKey = source
         host.suppressLongClick(source, true)
         scheduler.postLongPress(policy.longPressMillis) {
@@ -203,8 +199,6 @@ internal class NativeAppListDragController(
 
     fun onMove(x: Float, y: Float, eventTimeMillis: Long): Boolean {
         if (released || !machine.isTracking) return false
-        val elapsed = (eventTimeMillis - lastPointerAtMillis).coerceAtLeast(1L)
-        val speed = hypot(x - lastPointerX, y - lastPointerY) / elapsed
         lastPointerX = x
         lastPointerY = y
         lastPointerAtMillis = eventTimeMillis
@@ -215,16 +209,12 @@ internal class NativeAppListDragController(
             // the previous pointer position and a drag can stick between rows.
             host.updateDrag(x, y)
         }
-        lastPointerSpeedPxPerMs = speed
         val reorderTarget = host.reorderKeyAt(x, y)
-        val folderCandidate = host.folderKeyAt(x, y).takeIf {
-            allowFolderCreation()
-        }
+        val folderCandidate = if (allowFolderCreation()) host.folderKeyAt(x, y) else null
         val effects = machine.onMove(
             pointerX = x,
             pointerY = y,
             targetKey = reorderTarget,
-            speedPxPerMs = speed,
             nowMillis = eventTimeMillis,
             folderCandidateKey = folderCandidate,
         )
@@ -235,8 +225,19 @@ internal class NativeAppListDragController(
             return false
         }
         if (machine.isDragging) {
-            if (!wasDragging) host.updateDrag(x, y)
-            updateFolderHoverSchedule(folderCandidate, speed, eventTimeMillis)
+            if (!wasDragging) {
+                host.updateDrag(x, y)
+                // The preview and overlay now exist: resample on this same MOVE.
+                process(machine.onMove(
+                    pointerX = x,
+                    pointerY = y,
+                    targetKey = host.reorderKeyAt(x, y),
+                    nowMillis = eventTimeMillis,
+                    folderCandidateKey = if (allowFolderCreation()) host.folderKeyAt(x, y) else null,
+                    sampleKind = NativeDragSampleKind.START,
+                ))
+            }
+            updateFolderHoverSchedule()
             updateAutoScrollSchedule()
         }
         return machine.isDragging || machine.hasLongPressed
@@ -249,15 +250,15 @@ internal class NativeAppListDragController(
         lastPointerAtMillis = eventTimeMillis
         val consumed = machine.isDragging || machine.hasLongPressed
         if (machine.isDragging) host.updateDrag(x, y)
-        val sampledFolderTarget = host.folderKeyAt(x, y).takeIf {
-            allowFolderCreation()
-        }
+        val sampledFolderTarget = if (allowFolderCreation()) host.folderKeyAt(x, y) else null
         val folderTarget = sampledFolderTarget.takeIf { it == machine.folderHoverTarget }
         val reorderTarget = host.reorderKeyAt(x, y)
         process(
             machine.onUp(
                 currentFolderTargetKey = folderTarget,
                 currentReorderTargetKey = reorderTarget,
+                pointerX = x,
+                pointerY = y,
             ),
         )
         cancelCallbacks()
@@ -309,6 +310,8 @@ internal class NativeAppListDragController(
         if (!machine.isTracking) {
             cancelCallbacks()
             restoreLongClick()
+        } else {
+            updateFolderHoverSchedule()
         }
     }
 
@@ -359,8 +362,13 @@ internal class NativeAppListDragController(
                         machine.rejectMovePreview(effect.target)
                     }
                 }
-                is NativeDragEffect.FolderHoverChanged ->
-                    host.setFolderHover(effect.target.takeIf { allowFolderCreation() })
+                is NativeDragEffect.FolderCandidateChanged ->
+                    host.setFolderCandidate(effect.target.takeIf { allowFolderCreation() })
+                is NativeDragEffect.FolderHoverChanged -> {
+                    val target = effect.target.takeIf { allowFolderCreation() }
+                    host.setFolderHover(target)
+                    if (target != null) host.performFolderHaptic()
+                }
                 is NativeDragEffect.CreateFolder ->
                     if (allowFolderCreation()) {
                         val command = host.planFolder(effect.source, effect.target)
@@ -444,63 +452,30 @@ internal class NativeAppListDragController(
         }
     }
 
-    private fun updateFolderHoverSchedule(
-        candidate: AppItemKey?,
-        speedPxPerMs: Float,
-        eventTimeMillis: Long,
-    ) {
-        val policy = activePolicy ?: return
-        val eligible = candidate?.takeIf {
-            allowFolderCreation() &&
-                speedPxPerMs.isFinite() &&
-                speedPxPerMs <= policy.folderHoverMaxSpeedPxPerMs
-        }
-        if (machine.folderHoverTarget == eligible) {
+    private fun updateFolderHoverSchedule() {
+        val target = machine.folderCandidateTarget.takeIf { allowFolderCreation() }
+        val deadline = machine.folderDeadlineMillis
+        if (target == null || deadline == null) {
             cancelFolderHoverSchedule()
             return
         }
-        if (eligible == scheduledFolderTarget) return
+        if (target == scheduledFolderTarget && deadline == scheduledFolderDeadlineMillis) return
         cancelFolderHoverSchedule()
-        if (eligible == null) return
-
-        scheduledFolderTarget = eligible
-        // 到期时刻与 gate 的门槛同源（见 nativeFolderDwellPollMillis 的注释），
-        // 不再在这里单独读一遍 policy.folderHoverMillis。
-        scheduledFolderDeadlineMillis = maxOf(
-            eventTimeMillis,
-            scheduler.nowMillis,
-        ) + nativeFolderDwellPollMillis(policy)
-        val delay = (scheduledFolderDeadlineMillis - scheduler.nowMillis).coerceAtLeast(0L)
-        scheduler.postFolderHover(delay) {
-            val expectedTarget = scheduledFolderTarget
-            val deadline = scheduledFolderDeadlineMillis
+        scheduledFolderTarget = target
+        scheduledFolderDeadlineMillis = deadline
+        scheduler.postFolderHover((deadline - scheduler.nowMillis).coerceAtLeast(0L)) {
             scheduledFolderTarget = null
             scheduledFolderDeadlineMillis = Long.MIN_VALUE
-            if (
-                released ||
-                !machine.isDragging ||
-                expectedTarget == null ||
-                !allowFolderCreation()
-            ) {
-                return@postFolderHover
-            }
-            val currentTarget = host.folderKeyAt(lastPointerX, lastPointerY)
-            val now = maxOf(scheduler.nowMillis, deadline)
-            process(
-                machine.onMove(
-                    pointerX = lastPointerX,
-                    pointerY = lastPointerY,
-                    // Always sample the current reorder target. The gesture
-                    // machine suppresses only the exact folder candidate it
-                    // has actually armed, so a layout change during this poll
-                    // cannot drop a reorder frame.
-                    targetKey = host.reorderKeyAt(lastPointerX, lastPointerY),
-                    // 合成帧不谎报「已停稳」，复用最近一次真实采样的速度。
-                    speedPxPerMs = lastPointerSpeedPxPerMs,
-                    nowMillis = now,
-                    folderCandidateKey = currentTarget.takeIf { it == expectedTarget },
-                ),
-            )
+            if (released || !machine.isDragging || !allowFolderCreation()) return@postFolderHover
+            process(machine.onMove(
+                pointerX = lastPointerX,
+                pointerY = lastPointerY,
+                targetKey = host.reorderKeyAt(lastPointerX, lastPointerY),
+                nowMillis = scheduler.nowMillis,
+                folderCandidateKey = host.folderKeyAt(lastPointerX, lastPointerY),
+                sampleKind = NativeDragSampleKind.HOVER,
+            ))
+            updateFolderHoverSchedule()
         }
     }
 
@@ -533,32 +508,26 @@ internal class NativeAppListDragController(
         }
         lastAutoScrollFrameAtMillis = nowMillis
         val delta = baseDelta * (elapsedMillis / AUTO_SCROLL_REFERENCE_FRAME_MILLIS)
-        host.scrollBy(delta)
+        val consumedScroll = host.scrollBy(delta)
         host.updateDrag(lastPointerX, lastPointerY)
-        val folderCandidate = host.folderKeyAt(lastPointerX, lastPointerY).takeIf {
-            allowFolderCreation()
+        val folderCandidate = if (consumedScroll == 0f && allowFolderCreation()) {
+            host.folderKeyAt(lastPointerX, lastPointerY)
+        } else {
+            null
         }
         process(
             machine.onMove(
                 pointerX = lastPointerX,
                 pointerY = lastPointerY,
-                // Always use the current reorder sample. The gesture machine
-                // suppresses only an actually armed folder candidate, while a
-                // newly exposed slot from auto-scroll remains immediately
-                // eligible for preview.
+                // Actual content movement cancels dwell; newly exposed slots
+                // remain eligible for reorder even without pointer movement.
                 targetKey = host.reorderKeyAt(lastPointerX, lastPointerY),
-                // 合成帧不谎报「已停稳」（以前是 0f，把 requiredDwellMillis 压到下限
-                // 300ms，自动滚动期间划过的任何图标都会武装合并）。
-                speedPxPerMs = lastPointerSpeedPxPerMs,
                 nowMillis = scheduler.nowMillis,
                 folderCandidateKey = folderCandidate,
+                sampleKind = NativeDragSampleKind.AUTO_SCROLL,
             ),
         )
-        updateFolderHoverSchedule(
-            candidate = folderCandidate,
-            speedPxPerMs = lastPointerSpeedPxPerMs,
-            eventTimeMillis = scheduler.nowMillis,
-        )
+        updateFolderHoverSchedule()
         updateAutoScrollSchedule()
     }
 

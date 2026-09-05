@@ -14,7 +14,7 @@ class NativeAppListDragControllerTest {
         autoScrollEdgePx = 84f,
         maxAutoScrollPxPerFrame = 30f,
         folderHoverMillis = 500L,
-        folderHoverMaxSpeedPxPerMs = 0.55f,
+
         longPressMillis = 620L,
     )
 
@@ -178,10 +178,12 @@ class NativeAppListDragControllerTest {
         host.hitKey = key("b")
         controller.onMove(10f, 150f, 700L)
         controller.onMove(10f, 149f, 701L)
-        controller.onMove(10f, 148f, 702L)
+        // A small reverse jitter stays inside the hysteresis band; only a
+        // deliberate reverse travel can revisit the previous slot.
+        controller.onMove(10f, 137f, 702L)
 
         assertEquals(
-            "a reversed pointer direction may revisit the current target once",
+            "a deliberate reversed pointer travel may revisit the current target",
             2,
             host.previewMoveCount,
         )
@@ -247,19 +249,21 @@ class NativeAppListDragControllerTest {
             keys = listOf(key("a"), key("b"), key("c"), key("d"))
         }
         val scheduler = FakeDragScheduler()
-        // 文件夹功能开启时移动中照常播避让预览；只有悬停武装（静止凑满 dwell、
-        // 高亮亮起）才冻结。落手时仍提交排序。
+        // Passing outside actual icon bounds remains ordinary reorder.
         val controller = NativeAppListDragController(host, scheduler, policy, allowFolderCreation = { true })
         startDrag(controller, scheduler)
 
-        host.hitKey = key("b")
+        host.strictHitKey = null
+        host.reorderHitKey = key("b")
         controller.onMove(10f, 150f, 630L)
-        host.hitKey = key("d")
+        host.strictHitKey = null
+        host.reorderHitKey = key("d")
         controller.onMove(10f, 220f, 640L)
-        host.hitKey = key("c")
+        host.strictHitKey = null
+        host.reorderHitKey = key("c")
         controller.onMove(10f, 180f, 650L)
 
-        // 三次快速掠过都超速，dwell 从未武装 → 每个目标都正常播避让。
+        // All three nearest slots preview without acquiring a folder candidate.
         assertEquals(3, host.previewMoveCount)
         assertFalse(host.commands.any { it is AppListCommand.Move })
 
@@ -346,15 +350,16 @@ class NativeAppListDragControllerTest {
 
         host.hitKey = key("b")
         controller.onMove(10f, 150f, 700L)
-        assertEquals(1, host.previewMoveCount)
+        assertEquals(0, host.previewMoveCount)
 
         // Auto-scroll/layout can move the icon under the stationary pointer
         // before the dwell poll runs. The poll must not discard that new
         // reorder target merely because its original folder candidate expired.
-        host.hitKey = key("c")
+        host.strictHitKey = null
+        host.reorderHitKey = key("c")
         scheduler.advanceTo(1_200L)
 
-        assertEquals(2, host.previewMoveCount)
+        assertEquals(1, host.previewMoveCount)
     }
 
     @Test
@@ -448,8 +453,8 @@ class NativeAppListDragControllerTest {
 
         scheduler.advanceTo(1_200L)
         assertEquals(key("b"), host.folderHoverKey)
-        // 悬停期间（武装前）移动中避让照常播过一次；武装后预览冻结、计数不再涨。
-        assertEquals(1, host.previewMoveCount)
+        // The pending target stays put for the whole dwell.
+        assertEquals(0, host.previewMoveCount)
         controller.onUp(10f, 150f, 1_201L)
 
         assertEquals(
@@ -524,6 +529,8 @@ class NativeAppListDragControllerTest {
             NativeAppListPresentation.LINEAR,
             NativeAppListPresentation.HONEYCOMB,
             NativeAppListPresentation.DENSE_GRID,
+            NativeAppListPresentation.FLOW,
+            NativeAppListPresentation.RING,
         ).forEach { presentation ->
             val presentationPolicy = profiles.forPresentation(presentation)
             val host = FakeDragHost()
@@ -705,6 +712,8 @@ class NativeAppListDragControllerTest {
             listOf(AppListCommand.Move(key("a"), beforeKey = key("c"))),
             structuralCommands(host),
         )
+        assertEquals(0, host.folderKeyAtReadCount)
+        assertFalse(scheduler.hasFolderHover)
     }
 
     @Test
@@ -746,6 +755,54 @@ class NativeAppListDragControllerTest {
         assertFalse(controller.isActive)
     }
 
+    @Test
+    fun `first drag sample previews its current slot without another move`() {
+        val host = FakeDragHost()
+        val scheduler = FakeDragScheduler()
+        val controller = NativeAppListDragController(host, scheduler, policy,
+            allowFolderCreation = { false })
+        controller.onDown(10f, 100f, 0L)
+        scheduler.advanceTo(620L)
+        host.hitKey = key("b")
+        controller.onMove(10f, 150f, 621L)
+        assertEquals(1, host.previewMoveCount)
+    }
+
+    @Test
+    fun `fast arrival then stationary dwell arms without another pointer sample`() {
+        val host = FakeDragHost()
+        val scheduler = FakeDragScheduler()
+        val controller = NativeAppListDragController(host, scheduler,
+            policy.copy(folderHoverMillis = 300L))
+        startDrag(controller, scheduler)
+        scheduler.advanceTo(622L)
+        host.hitKey = key("b")
+        controller.onMove(10f, 150f, 622L)
+        assertEquals(0, host.previewMoveCount)
+        scheduler.advanceTo(921L)
+        assertEquals(null, host.folderHoverKey)
+        scheduler.advanceTo(922L)
+        assertEquals(key("b"), host.folderHoverKey)
+        assertEquals(3, host.hapticCount)
+        controller.onUp(10f, 150f, 923L)
+        assertEquals(1, structuralCommands(host).filterIsInstance<AppListCommand.CreateFolder>().size)
+    }
+
+    @Test
+    fun `release movement beyond jitter cannot commit an already armed folder`() {
+        val host = FakeDragHost()
+        val scheduler = FakeDragScheduler()
+        val controller = NativeAppListDragController(host, scheduler, policy)
+        startDrag(controller, scheduler)
+        host.hitKey = key("b")
+        controller.onMove(10f, 150f, 700L)
+        scheduler.advanceTo(1200L)
+        assertEquals(key("b"), host.folderHoverKey)
+        controller.onUp(18f, 150f, 1201L)
+        assertFalse(structuralCommands(host).any { it is AppListCommand.CreateFolder })
+        assertEquals(1, structuralCommands(host).filterIsInstance<AppListCommand.Move>().size)
+    }
+
     private fun startDrag(
         controller: NativeAppListDragController,
         scheduler: FakeDragScheduler,
@@ -783,6 +840,7 @@ class NativeAppListDragControllerTest {
         var endDragCount = 0
         var hapticCount = 0
         var currentKeysReadCount = 0
+        var folderKeyAtReadCount = 0
         var previewMoveCount = 0
         var previewMoveResults: ArrayDeque<Boolean> = ArrayDeque()
         var reorderKeyByDraggedPointer: ((Float, Float) -> AppItemKey?)? = null
@@ -804,7 +862,10 @@ class NativeAppListDragControllerTest {
         override fun keyAt(x: Float, y: Float): AppItemKey? = strictHitKey
         override fun reorderKeyAt(x: Float, y: Float): AppItemKey? =
             reorderKeyByDraggedPointer?.invoke(dragPointerX, dragPointerY) ?: reorderHitKey
-        override fun folderKeyAt(x: Float, y: Float): AppItemKey? = strictHitKey
+        override fun folderKeyAt(x: Float, y: Float): AppItemKey? {
+            folderKeyAtReadCount++
+            return strictHitKey
+        }
         override fun currentKeys(): List<AppItemKey> {
             currentKeysReadCount++
             return keys
@@ -892,7 +953,7 @@ class NativeAppListDragControllerTest {
         }
         override fun endDrag(committed: Boolean) { draggingKey = null; endDragCount++ }
         override fun setFolderHover(key: AppItemKey?) { folderHoverKey = key }
-        override fun scrollBy(deltaPx: Float) { scrollDeltas += deltaPx }
+        override fun scrollBy(deltaPx: Float): Float { scrollDeltas += deltaPx; return deltaPx }
         override fun performDragHaptic() { hapticCount++ }
     }
 
@@ -906,6 +967,7 @@ class NativeAppListDragControllerTest {
 
         override val nowMillis: Long get() = now
         val hasDelayed: Boolean get() = longPress != null || folderHover != null
+        val hasFolderHover: Boolean get() = folderHover != null
         val hasFrame: Boolean get() = frame != null
 
         override fun postLongPress(delayMillis: Long, action: () -> Unit) {
