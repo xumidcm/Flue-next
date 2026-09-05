@@ -171,7 +171,7 @@ fun NativeListDrawerScreen(
      * 网格布局圆图标底下那块底板要不要画。见 [NativeListDrawerConfigRequest.gridIconPlateEnabled]。
      */
     gridIconPlateEnabled: Boolean = true,
-    allowFolderCreation: Boolean = true,
+    allowFolderCreation: Boolean = false,
     /**
      * 屏幕右侧的滑动进度指示器。四种（以及以后新增的）列表样式共用一条，
      * 因为它读的是 RecyclerView 的滚动量，跟布局怎么排无关。

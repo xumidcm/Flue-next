@@ -480,13 +480,13 @@ class NativeScrollIndicatorGeometryTest {
         }
     }
 
-    /** 指示器与「允许创建文件夹」都是默认开（老师指定），默认值只在配置这一处声明。 */
+    /** 滚动指示器默认开启；允许创建文件夹默认关闭。 */
     @Test
-    fun defaultsBothTheIndicatorAndFolderMergingOn() {
+    fun defaultsIndicatorOnAndFolderMergingOff() {
         val defaults = NativeAppListConfig()
 
         assertTrue(defaults.scrollIndicatorEnabled)
-        assertTrue(defaults.allowFolderCreation)
+        assertFalse(defaults.allowFolderCreation)
     }
 
     /**

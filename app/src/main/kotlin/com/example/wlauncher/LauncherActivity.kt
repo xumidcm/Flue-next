@@ -50,7 +50,6 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.graphicsLayer
@@ -100,8 +99,7 @@ import com.flue.launcher.ui.home.WatchFaceLayer
 import com.flue.launcher.ui.home.WatchFaceLoadingMode
 import com.flue.launcher.ui.home.WatchFaceLoadingScreen
 import com.flue.launcher.ui.home.WatchFaceBottomFadeOverlay
-import com.flue.launcher.ui.home.WatchFaceStatusWindow
-import com.flue.launcher.ui.home.WatchFacePresentationGate
+import com.flue.launcher.ui.home.WatchFaceStatusIndicatorOverlay
 import com.flue.launcher.ui.home.rememberAppListSeedColor
 import com.flue.launcher.ui.navigation.GestureHost
 import com.flue.launcher.ui.navigation.LayoutMode
@@ -111,6 +109,8 @@ import com.flue.launcher.ui.navigation.resolveOverlaySettleOpen
 import com.flue.launcher.ui.navigation.resolveAppListSettleOpen
 import com.flue.launcher.ui.anim.LayerAnimValues
 import com.flue.launcher.ui.anim.LayerFrameSnapshot
+import com.flue.launcher.ui.anim.OverlayBlurBackend
+import com.flue.launcher.ui.anim.overlayBlurBackend
 import com.flue.launcher.ui.anim.lerpLayerAnimValues
 import com.flue.launcher.ui.anim.flueBackdropFill
 import com.flue.launcher.ui.anim.flueLegacyBlur
@@ -1380,33 +1380,15 @@ fun LauncherScreen(vm: LauncherViewModel) {
         // It captures the actual spring/external-clock frame, so Apps/Settings
         // and all side overlays use the same reversible edge-fill geometry.
         val faceLayerFrame = remember { LayerFrameSnapshot() }
-        val faceBackdropFillProgress = remember(
-            screenState,
-            appListGestureDriven,
-            isClosingAppListToFace,
-            appListLayerReleaseHold,
-            appListTouchedLastFrame,
-        ) {
+        val faceBackdropFillProgress = remember(appListGestureDriven) {
             {
-                val overlayProgress = overlayBackdropProgress()
-                // 回到稳定 Face 后，frameSnapshot 仍可能短暂保留 Apps 的上一帧。
-                // 此时强制归零，避免反向回填偶发永久粘在表盘后面。
-                if (
-                    screenState == ScreenState.Face &&
-                    overlayProgress <= 0.001f &&
-                    !appListGestureDriven &&
-                    !isClosingAppListToFace &&
-                    !appListLayerReleaseHold &&
-                    !appListTouchedLastFrame
-                ) {
-                    0f
-                } else {
-                    maxOf(
-                        overlayProgress,
-                        if (appListGestureDriven) appListGestureProgressProvider() else 0f,
-                        faceLayerFrame.backdropProgress(),
-                    ).coerceIn(0f, 1f)
-                }
+                // 直接读取真实动画帧，返回时不能在 screenState 切回 Face 的
+                // 那一刻截断模糊。关闭收缩后也保留原有模糊行程。
+                maxOf(
+                    overlayBackdropProgress(),
+                    if (appListGestureDriven) appListGestureProgressProvider() else 0f,
+                    maxOf(faceLayerFrame.backdropProgress(), faceLayerFrame.blur / 24f),
+                ).coerceIn(0f, 1f)
             }
         }
         val overlayBackdropActive by remember {
@@ -1762,25 +1744,15 @@ fun LauncherScreen(vm: LauncherViewModel) {
         val watchFaceOverlayTransitionActive = shouldFreezeWatchmakerForLauncherBackdrop(
             sideSceneOverlayActive = sideSceneOverlayActive,
             appListBackdropActive = appListLayerRaised,
+            freezeSideScenes = overlayBlurBackend(
+                Build.VERSION.SDK_INT,
+                advancedMaterialEnabled = blurEnabled,
+            ) == OverlayBlurBackend.SYSTEM,
         )
         var faceTransformSettled by remember { mutableStateOf(false) }
         LaunchedEffect(faceAnimState, faceExternallyDriven) {
             faceTransformSettled = false
         }
-        val facePresentation = remember(faceRenderReadyKey) { WatchFacePresentationGate() }
-        val facePresentationToken = facePresentation.update(
-            canPresent = launcherInteractive && screenState == ScreenState.Face &&
-                !watchFaceOverlayTransitionActive && !faceExternallyDriven &&
-                faceTransformSettled && watchFaceSelectionReady && faceRenderReady &&
-                openFolder == null && !showLaunchBackdrop && !directLaunchBackdropVisible,
-        )
-        // API 31+ 的回填层已经把“中心 + 镜像边缘”作为一张完整画面统一模糊。
-        // 内层真实表盘仍需绘制来推进动画状态，但必须关闭它自己的 RenderEffect，
-        // 否则 GPU 上仍然会做两次模糊（即使下面那层最终被覆盖）。旧系统不改。
-        val renderFaceLayerBlur = faceLayerBlurEnabled && !(
-            Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
-                (faceExternallyDriven || appListLayerRaised || screenState != ScreenState.Face)
-            )
         var legacyWatchFaceBounds by remember(legacyWatchFaceVisualKey) {
             mutableStateOf<android.graphics.Rect?>(null)
         }
@@ -2143,7 +2115,9 @@ fun LauncherScreen(vm: LauncherViewModel) {
                             legacyTransition = legacyAppListTransitionEnabled,
                         ),
                         screenHeight = screenHeightPx,
-                        blurEnabled = renderFaceLayerBlur,
+                        // 缓存尚未准备好时，真实表盘仍必须有硬件模糊。
+                        // 完整背衬就绪后不会 drawContent，不会重复执行模糊。
+                        blurEnabled = faceLayerBlurEnabled,
                         origin = LayerPivot.Center,
                         valuesProvider = faceTransitionProvider,
                         externallyDriven = faceExternallyDriven,
@@ -2152,10 +2126,6 @@ fun LauncherScreen(vm: LauncherViewModel) {
                             faceTransformSettled = faceAnimState == ScreenState.Face && !faceExternallyDriven
                         },
                     )
-                    .drawWithContent {
-                        drawContent()
-                        facePresentation.onFrameDrawn(facePresentationToken)
-                    }
             ) {
                 AnimatedContent(
                     // 只认 watchFaceSelectionReady。
@@ -2301,6 +2271,13 @@ fun LauncherScreen(vm: LauncherViewModel) {
                         )
                     }
                 }
+                // 状态图标属于表盘本身：与表盘共用缩放、下沉、透明度和模糊，
+                // 由上层页面自然遮挡，返回时也不再等待额外窗口/就绪帧。
+                WatchFaceStatusIndicatorOverlay(
+                    showStatusIndicators = watchFaceStatusIndicators && watchFaceSelectionReady,
+                    hasNotifications = showNotification && notificationGroups.isNotEmpty(),
+                    modifier = Modifier.align(Alignment.TopCenter).padding(top = 18.dp),
+                )
                 // 渲染等待覆层。刻意是 AnimatedContent 的**兄弟**而不是它的一个分支：
                 // 做成分支的话新表盘根本不会被组合，也就永远不会开始加载素材、
                 // 永远报不了就绪 —— 直接死锁。放在这里，表盘在底下照常加载，
@@ -2320,11 +2297,6 @@ fun LauncherScreen(vm: LauncherViewModel) {
                     )
                 }
             }
-
-            WatchFaceStatusWindow(
-                visible = watchFaceStatusIndicators && facePresentation.visible,
-                hasNotifications = showNotification && notificationGroups.isNotEmpty(),
-            )
 
             // The app list paints its own background *inside* the layer that
             // scales, so every frame where that layer is smaller than the screen

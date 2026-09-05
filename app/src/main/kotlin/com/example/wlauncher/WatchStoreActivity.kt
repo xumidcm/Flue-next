@@ -278,7 +278,6 @@ import com.flue.launcher.watchface.store.WatchStoreUiPreferences
 import com.flue.launcher.watchface.store.WatchStoreViewMode
 import com.flue.launcher.watchface.store.WatchStoreWebPage
 import com.flue.launcher.watchface.store.WatchStoreWatchFace
-import com.flue.launcher.watchface.store.normalizedWatchStoreAuthor
 import com.flue.launcher.watchface.store.WatchStoreWatchFaceDetail
 import com.flue.launcher.watchface.store.WatchStoreRatingSummary
 import com.flue.launcher.watchface.store.WatchStoreReportReason
@@ -2667,7 +2666,6 @@ private fun InstallStateLine(
     onDownload: () -> Unit,
     onCancelDownload: () -> Unit,
     downloadCountLine: (@Composable () -> Unit)? = null,
-    author: String? = null,
 ) {
     // 状态区固定尺寸槽位：下载前/下载中/已安装/失败四态内容高度各不相同
     // （纯文字比带图标的迷你按钮矮几个 dp），任由内容决定高度会让宫格卡片
@@ -2685,7 +2683,6 @@ private fun InstallStateLine(
         InstallStateLineContent(
             downloadState = downloadState,
             compact = compact,
-            author = author,
             onDownload = onDownload,
             onCancelDownload = onCancelDownload,
             downloadCountLine = if (showDownloadCount) downloadCountLine else null,
@@ -2700,7 +2697,6 @@ private fun InstallStateLineContent(
     onDownload: () -> Unit,
     onCancelDownload: () -> Unit,
     downloadCountLine: (@Composable () -> Unit)?,
-    author: String?,
 ) {
     val style = LauncherTheme.style
     when (downloadState) {
@@ -2747,19 +2743,22 @@ private fun InstallStateLineContent(
                 )
             }
         }
-        is WatchStoreInstallState.Installed -> StoreFaceMetadataLine(author, compact) {
-            Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    stringResource(R.string.watch_store_installed),
-                    modifier = Modifier.weight(1f),
-                    color = style.positiveColor,
-                    fontSize = if (compact) 9.sp else 10.sp,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                if (downloadCountLine != null) {
-                    Spacer(Modifier.width(3.dp))
-                    Box(Modifier.weight(1f)) { downloadCountLine() }
+        is WatchStoreInstallState.Installed -> Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                stringResource(R.string.watch_store_installed),
+                color = style.positiveColor,
+                fontSize = 10.sp,
+                maxLines = 1,
+            )
+            if (downloadCountLine != null) {
+                Spacer(Modifier.width(6.dp))
+                // 下载量靠右：与「未安装」那一支（下载量在左、按钮在右）保持同一个重心，
+                // 一列卡片扫下来数字始终贴着同一侧。
+                Box(Modifier.weight(1f), contentAlignment = Alignment.CenterEnd) {
+                    downloadCountLine()
                 }
             }
         }
@@ -2786,9 +2785,7 @@ private fun InstallStateLineContent(
         WatchStoreInstallState.NotInstalled -> {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 if (downloadCountLine != null) {
-                    Box(Modifier.weight(1f)) {
-                        StoreFaceMetadataLine(author, compact) { downloadCountLine() }
-                    }
+                    Box(Modifier.weight(1f)) { downloadCountLine() }
                 } else {
                     Spacer(Modifier.weight(1f))
                 }
@@ -2801,31 +2798,6 @@ private fun InstallStateLineContent(
                     iconSize = if (compact) 12.dp else 14.dp,
                 )
             }
-        }
-    }
-}
-
-@Composable
-private fun StoreFaceMetadataLine(
-    author: String?,
-    compact: Boolean,
-    metadata: @Composable () -> Unit,
-) {
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(if (author == null) 0.dp else 4.dp),
-    ) {
-        Box(Modifier.weight(if (author == null) 1f else 0.6f)) { metadata() }
-        if (author != null) {
-            Text(
-                author,
-                modifier = Modifier.weight(0.4f),
-                color = LauncherTheme.style.secondaryTextColor,
-                fontSize = if (compact) 10.sp else 11.sp,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
         }
     }
 }
@@ -2845,7 +2817,6 @@ private fun WatchFaceListCard(
         ?.record
         ?.resolvedDisplayName(item.name)
         ?: item.name
-    val author = normalizedWatchStoreAuthor(item.author)
     // 缩略图一律方形：上游封面本来就是 512×512（见 API_USER.md 的 preview 元数据），
     // 以前按 screenType 给长条屏算 0.72 的竖长方形，同一列表里行高忽高忽低。
     // 宫格卡（WatchFaceGridCard）从来就是 1f，两处保持一致。
@@ -2904,7 +2875,6 @@ private fun WatchFaceListCard(
                 compact = false,
                 onDownload = onDownload,
                 onCancelDownload = onCancelDownload,
-                author = author,
                 downloadCountLine = {
                     Text(
                         stringResource(R.string.watch_store_download_count_fmt, item.downloadCount),
@@ -2936,7 +2906,6 @@ private fun WatchFaceGridCard(
         ?.record
         ?.resolvedDisplayName(item.name)
         ?: item.name
-    val author = normalizedWatchStoreAuthor(item.author)
     val interactionSource = remember(item.id) { MutableInteractionSource() }
     val pressScale = rememberFluePressScale(interactionSource)
     Column(
@@ -2986,7 +2955,6 @@ private fun WatchFaceGridCard(
                 compact = true,
                 onDownload = onDownload,
                 onCancelDownload = onCancelDownload,
-                author = author,
                 downloadCountLine = {
                     Text(
                         stringResource(R.string.watch_store_download_count_fmt, item.downloadCount),

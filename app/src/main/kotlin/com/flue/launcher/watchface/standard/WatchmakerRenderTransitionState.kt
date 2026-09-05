@@ -86,7 +86,8 @@ internal class WatchmakerOverlayRenderGate {
 internal fun shouldFreezeWatchmakerForLauncherBackdrop(
     sideSceneOverlayActive: Boolean,
     appListBackdropActive: Boolean,
-): Boolean = sideSceneOverlayActive || appListBackdropActive
+    freezeSideScenes: Boolean = true,
+): Boolean = (freezeSideScenes && sideSceneOverlayActive) || appListBackdropActive
 
 /** The independent consumers that can still reference a captured frame. */
 internal enum class WatchmakerBitmapConsumer {

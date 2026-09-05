@@ -129,7 +129,7 @@ data class NativeAppListConfig(
     val denseGridMinimumVerticalPaddingPx: Float = 8f,
     val denseGridIconInnerPaddingPx: Float = 3f,
     val centerEdgeItems: Boolean = true,
-    val allowFolderCreation: Boolean = true,
+    val allowFolderCreation: Boolean = false,
     /**
      * 覆层（长按菜单 / 文件夹展开）在场时关掉列表拖拽。覆层是 Compose 层，
      * 底下的 RecyclerView 仍然收得到长按并起拖，会出现「文件夹开着，背景

@@ -524,7 +524,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     // 这个开关是新增的「能关掉」，不是新的默认外观，所以老用户升级后画面不变。
     private val _appListGridIconPlateEnabled = MutableStateFlow(true)
     val appListGridIconPlateEnabled: StateFlow<Boolean> = _appListGridIconPlateEnabled.asStateFlow()
-    private val _appListFoldersEnabled = MutableStateFlow(true)
+    private val _appListFoldersEnabled = MutableStateFlow(false)
     val appListFoldersEnabled: StateFlow<Boolean> = _appListFoldersEnabled.asStateFlow()
     /** 屏幕右侧滑动进度指示器。老师指定默认开。 */
     private val _appListScrollIndicatorEnabled = MutableStateFlow(true)
@@ -1097,9 +1097,9 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                     _appListGridIconPlateEnabled.value = loadedAppListGridIconPlate
                 }
 
-                // 合成文件夹默认**开**（老师指定）。老用户库里已经写过这个键的照旧读自己的值，
+                // 合成文件夹默认关闭。老用户库里已经写过这个键的照旧读自己的值，
                 // 只有从没碰过这项的（含全新安装）才吃到新默认。
-                val loadedAppListFoldersEnabled = prefs[KEY_APP_LIST_FOLDERS_ENABLED] ?: true
+                val loadedAppListFoldersEnabled = prefs[KEY_APP_LIST_FOLDERS_ENABLED] ?: false
                 if (_appListFoldersEnabled.value != loadedAppListFoldersEnabled) {
                     _appListFoldersEnabled.value = loadedAppListFoldersEnabled
                 }
@@ -3843,7 +3843,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         _appListWatchFaceColors.value = false
         _appListRowBorderEnabled.value = false
         _appListGridIconPlateEnabled.value = true
-        _appListFoldersEnabled.value = true
+        _appListFoldersEnabled.value = false
         _appListScrollIndicatorEnabled.value = true
         _musicTextSwitchAnimation.value = MusicTextSwitchAnimations.DEFAULT_ID
         _iconShadowEnabled.value = true
@@ -3974,7 +3974,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                 it[KEY_APP_LIST_WATCHFACE_COLORS] = false
                 it[KEY_APP_LIST_ROW_BORDER] = false
                 it[KEY_APP_LIST_GRID_ICON_PLATE] = true
-                it[KEY_APP_LIST_FOLDERS_ENABLED] = true
+                it[KEY_APP_LIST_FOLDERS_ENABLED] = false
                 it[KEY_APP_LIST_SCROLL_INDICATOR] = true
                 it.remove(KEY_REMOVED_FAST_FLOW_ANIMATION)
                 it[KEY_MUSIC_TEXT_SWITCH_ANIMATION] = MusicTextSwitchAnimations.DEFAULT_ID

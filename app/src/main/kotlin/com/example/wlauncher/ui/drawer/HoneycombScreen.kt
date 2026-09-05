@@ -131,7 +131,7 @@ fun HoneycombScreen(
     entryProgress: Float = 1f,
     folderOpen: Boolean = false,
     useWatchFaceColors: Boolean = true,
-    allowFolderCreation: Boolean = true,
+    allowFolderCreation: Boolean = false,
     onAppClick: (AppInfo, Offset) -> Unit,
     onReorder: (AppListCommand.Move) -> Unit = {},
     onCreateFolder: (AppListCommand.CreateFolder) -> Unit = {},

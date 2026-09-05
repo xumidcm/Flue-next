@@ -2,6 +2,7 @@ package com.flue.launcher.ui.anim
 
 import android.os.Build
 import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.AnimationVector1D
 import androidx.compose.animation.core.FiniteAnimationSpec
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -150,6 +151,16 @@ internal fun overlayBlurBackend(
     OverlayBlurBackend.LEGACY
 }
 
+internal suspend fun animateLayerBlur(
+    animation: Animatable<Float, AnimationVector1D>,
+    target: Float,
+    spec: FiniteAnimationSpec<Float>,
+) {
+    // Legacy overlays use this same logical clock to blend a prepared blur.
+    // Only installing RenderEffect is platform-specific, never the animation.
+    animation.animateTo(target, spec)
+}
+
 @Composable
 internal fun Modifier.scaleBlurAlpha(
     targetValues: LayerAnimValues,
@@ -255,11 +266,7 @@ internal fun Modifier.scaleBlurAlpha(
                 // temporarily suppressed by an opaque launch mask. Snapping the
                 // Animatable to zero there made the return frame lose its blur and
                 // produced a visible sharp flash.
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                    animBlur.animateTo(targetValues.blur, blurSpec)
-                } else {
-                    animBlur.snapTo(0f)
-                }
+                animateLayerBlur(animBlur, targetValues.blur, blurSpec)
             },
             launch { animTransX.animateTo(targetValues.translationX, translationSpec) },
             launch { animTransY.animateTo(targetValues.translationY, translationSpec) },

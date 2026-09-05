@@ -2,6 +2,8 @@ package com.flue.launcher.ui.anim
 
 import android.os.Build
 import android.os.SystemClock
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
@@ -95,7 +97,8 @@ internal fun legacyBackdropViewportMatches(
 internal fun shouldDrawLiveBackdropContent(
     overlayActive: Boolean,
     capturedFrameAvailable: Boolean,
-): Boolean = !overlayActive || !capturedFrameAvailable
+    backend: OverlayBlurBackend = OverlayBlurBackend.SYSTEM,
+): Boolean = backend == OverlayBlurBackend.LEGACY || !overlayActive || !capturedFrameAvailable
 
 internal enum class BackdropContentSource {
     LIVE,
@@ -121,12 +124,19 @@ internal class BackdropFrameSession<T> {
     private var active = false
     private var retained: T? = null
 
-    fun select(overlayActive: Boolean, candidate: T?, isValid: (T) -> Boolean = { true }): T? {
-        if (!active || !overlayActive) retained = candidate
-        active = overlayActive
-        // Once the retained frame becomes unusable, keep the live fallback
-        // for this session, even if another capture or old size comes back.
+    fun select(
+        overlayActive: Boolean,
+        candidate: T?,
+        allowLateFrame: Boolean = false,
+        isValid: (T) -> Boolean = { true },
+    ): T? {
         if (retained?.let(isValid) == false) retained = null
+        if (!active || !overlayActive || (allowLateFrame && retained == null)) {
+            retained = candidate?.takeIf(isValid)
+        }
+        active = overlayActive
+        // SYSTEM cannot switch the clear scene mid-gesture. LEGACY only adds
+        // blur over the live face, so its first ready blur may arrive later.
         return retained
     }
 }
@@ -141,7 +151,7 @@ private fun DrawScope.drawLegacyBackdropCover(
     alpha: Float,
 ) {
     if (alpha <= 0.001f) return
-    val scale = contentScale.coerceIn(0.01f, 1f)
+    val scale = contentScale.coerceIn(0.01f, 4f)
     val viewportWidth = frames.viewportWidth.toFloat()
     val viewportHeight = frames.viewportHeight.toFloat()
     val translatedViewportY = if (size.height > 0f) {
@@ -277,6 +287,15 @@ internal fun Modifier.flueBackdropFill(
         sdkInt = Build.VERSION.SDK_INT,
         advancedMaterialEnabled = advancedMaterialEnabled,
     ) == OverlayBlurBackend.SYSTEM
+    // A first blur prepared after DOWN fades in; cache refreshes while an
+    // existing blur is retained do not restart this animation. Read in draw.
+    val legacyBlurAvailability = if (!canHardwareBlur) {
+        animateFloatAsState(
+            targetValue = if (legacyFrames != null) 1f else 0f,
+            animationSpec = tween(160),
+            label = "legacy_blur_ready",
+        )
+    } else null
     val hardwareCapturedImage = remember(hardwareCapturedFrame?.generation) {
         hardwareCapturedFrame
             ?.bitmap
@@ -288,11 +307,13 @@ internal fun Modifier.flueBackdropFill(
         val p = if (rawProgress.isFinite()) rawProgress.coerceIn(0f, 1f) else 0f
         val layerSize = size.toIntSize()
         val preparedFrames = captureState.frameSession.select(
-            overlayActive = freezeLiveContentWhenCaptured,
+            overlayActive = freezeLiveContentWhenCaptured || p > 0.001f,
+            allowLateFrame = !canHardwareBlur,
             candidate = legacyFrames?.takeIf {
                 it.visualKey == visualKey &&
                     legacyBackdropViewportMatches(it.viewportWidth, it.viewportHeight, layerSize) &&
-                    (!freezeLiveContentWhenCaptured || it.capturedGeneration != Long.MIN_VALUE)
+                    (!canHardwareBlur || !freezeLiveContentWhenCaptured ||
+                        it.capturedGeneration != Long.MIN_VALUE)
             },
             isValid = {
                 it.visualKey == visualKey &&
@@ -302,9 +323,18 @@ internal fun Modifier.flueBackdropFill(
         val sessionCapturedAvailable = preparedFrames?.capturedGeneration?.let {
             it != Long.MIN_VALUE
         } == true
+        // Zoom and shrink-disabled animations already cover the viewport.
+        // Draw the real layer so its alpha/blur remain intact, including the
+        // old animation's fade to zero. Edge fill is only needed for exposed edges.
+        val frameScale = contentScale?.invoke() ?: (1f - 0.08f * p)
+        val frameTranslationY = contentTranslationYFraction?.invoke() ?: (0.03f * p)
+        if (canHardwareBlur && frameScale >= 1f && frameTranslationY == 0f) {
+            drawContent()
+            return@drawWithContent
+        }
         // A partial or late capture must never replace the live face mid-gesture.
         // Renderer ticks are paused separately; drawing its last display list is safe.
-        if (freezeLiveContentWhenCaptured && preparedFrames == null) {
+        if (canHardwareBlur && freezeLiveContentWhenCaptured && preparedFrames == null) {
             drawRect(fallbackColor)
             drawContent()
             return@drawWithContent
@@ -400,22 +430,17 @@ internal fun Modifier.flueBackdropFill(
             val matchingFrames = preparedFrames?.takeIf {
                 legacyBackdropViewportMatches(it.viewportWidth, it.viewportHeight, layerSize)
             }
-            val capturedLegacyFrameAvailable =
-                hardwareCapturedFrame?.let { captured ->
-                    !captured.bitmap.isRecycled &&
-                        matchingFrames?.capturedGeneration == captured.generation
-                } == true
             val drawLiveContent = shouldDrawLiveBackdropContent(
                 overlayActive = freezeLiveContentWhenCaptured,
-                capturedFrameAvailable = sessionCapturedAvailable ||
-                    (!freezeLiveContentWhenCaptured && capturedLegacyFrameAvailable),
+                capturedFrameAvailable = sessionCapturedAvailable,
+                backend = OverlayBlurBackend.LEGACY,
             )
             val fallback = matchingFrames?.let { Color(it.fallbackArgb) } ?: Color(0xFF10151D)
             drawRect(fallback.copy(alpha = 1f))
             if (matchingFrames != null) {
                 val blend = legacyBackdropBlend(p)
                 val legacyScale = (contentScale?.invoke() ?: (1f - 0.08f * p))
-                    .coerceIn(0.01f, 1f)
+                    .coerceIn(0.01f, 4f)
                 val legacyTranslationY =
                     (contentTranslationYFraction?.invoke() ?: (0.03f * p)) * size.height
                 val blurredFrame = if (legacyDarkMode) {
@@ -427,28 +452,26 @@ internal fun Modifier.flueBackdropFill(
                 // shrinking live face. It never substitutes for the clear
                 // watch face itself.
                 drawLegacyBackdropCover(
-                    image = if (!drawLiveContent) matchingFrames.clear else blurredFrame,
+                    image = blurredFrame,
                     frames = matchingFrames,
                     layerSize = layerSize,
                     contentScale = legacyScale,
                     translationYPx = legacyTranslationY,
-                    alpha = blend.clearAlpha,
+                    alpha = blend.clearAlpha * (legacyBlurAvailability?.value ?: 1f),
                 )
             }
-            // Keep the real rendered watch face as the clear layer unless the
-            // overlay already has a matching captured frame. In that case the
-            // captured frame above is the clear layer and drawing the Android
-            // view again would defeat the freeze.
+            // Android 12 以下始终保留真实表盘，只在上面渐变叠加预制模糊。
+            // 缓存缺失也不能插入一张静态清晰图；后台 tick 与绘制独立门控。
             if (drawLiveContent) drawContent()
             if (matchingFrames != null) {
                 drawLegacyBackdropCover(
                     image = if (legacyDarkMode) matchingFrames.darkBlurred else matchingFrames.lightBlurred,
                     frames = matchingFrames,
                     layerSize = layerSize,
-                    contentScale = (contentScale?.invoke() ?: (1f - 0.08f * p)).coerceIn(0.01f, 1f),
+                    contentScale = (contentScale?.invoke() ?: (1f - 0.08f * p)).coerceIn(0.01f, 4f),
                     translationYPx =
                         (contentTranslationYFraction?.invoke() ?: (0.03f * p)) * size.height,
-                    alpha = legacyBackdropBlend(p).blurredAlpha,
+                    alpha = legacyBackdropBlend(p).blurredAlpha * (legacyBlurAvailability?.value ?: 1f),
                 )
             }
             drawRect(
@@ -467,16 +490,6 @@ internal fun Modifier.flueBackdropFill(
             legacyBackdropViewportMatches(it.viewportWidth, it.viewportHeight, layerSize)
         }
         if (preparedHardwareFrames != null) {
-            val preparedFrameAvailable =
-                hardwareCapturedFrame?.let { captured ->
-                    !captured.bitmap.isRecycled &&
-                        preparedHardwareFrames.capturedGeneration == captured.generation
-                } == true
-            val drawLiveContent = shouldDrawLiveBackdropContent(
-                overlayActive = freezeLiveContentWhenCaptured,
-                capturedFrameAvailable = sessionCapturedAvailable ||
-                    (!freezeLiveContentWhenCaptured && preparedFrameAvailable),
-            )
             val preparedScale = (contentScale?.invoke() ?: (1f - 0.08f * p))
                 .coerceIn(0.01f, 1f)
             val preparedTranslationY =
@@ -518,11 +531,8 @@ internal fun Modifier.flueBackdropFill(
             }
             magnifiedLayer.alpha = 1f
             clipRect { drawLayer(magnifiedLayer) }
-            // Keep the old live path until an actual captured frame is
-            // available. A captured frame can safely replace the live view for
-            // the whole gesture, including Android 12 with advanced material
-            // disabled.
-            if (drawLiveContent) drawContent()
+            // 完整帧已经统一模糊，无需在其上再次绘制真实表盘。
+            // 缓存缺失时上方分支直接绘制带自身 RenderEffect 的真实表盘。
             drawRect(Color.Black.copy(alpha = 0.20f * p))
             return@drawWithContent
         }
@@ -558,14 +568,7 @@ internal fun Modifier.flueBackdropFill(
             drawRect(Color.Black.copy(alpha = 0.20f * p))
             return@drawWithContent
         }
-        val liveContentFrozen = !shouldDrawLiveBackdropContent(
-            overlayActive = freezeLiveContentWhenCaptured,
-            capturedFrameAvailable = sessionCapturedAvailable ||
-                (!freezeLiveContentWhenCaptured && captureState.hasFrame),
-        )
-        // 真实内容只负责推进内部弹簧/时钟，随后被完整不透明的单层扩边画面
-        // 覆盖，不会再与回填层同时出现在屏幕上。
-        if (!liveContentFrozen) drawContent()
+        // LayerFrameSnapshot 直接读取动画时钟，无需额外绘制会被覆盖的内容。
         backdropLayer.renderEffect = null
         backdropLayer.alpha = 1f
         backdropLayer.colorFilter = null

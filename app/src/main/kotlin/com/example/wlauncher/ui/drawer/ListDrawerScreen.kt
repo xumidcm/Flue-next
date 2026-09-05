@@ -127,7 +127,7 @@ fun ListDrawerScreen(
     folderOpen: Boolean = false,
     useWatchFaceColors: Boolean = false,
     rowBorderEnabled: Boolean = false,
-    allowFolderCreation: Boolean = true,
+    allowFolderCreation: Boolean = false,
     onAppClick: (AppInfo, Offset) -> Unit,
     onReorder: (AppListCommand.Move) -> Unit = {},
     onCreateFolder: (AppListCommand.CreateFolder) -> Unit = {},

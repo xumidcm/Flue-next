@@ -9,6 +9,28 @@ import org.junit.Test
 
 class ScaleBlurModifierTest {
     @Test
+    fun legacyOverlayCanAddItsFirstPreparedBlurWithoutReplacingTheClearFace() {
+        val session = BackdropFrameSession<Any>()
+        org.junit.Assert.assertNull(session.select(true, null, allowLateFrame = true))
+        val ready = Any()
+        org.junit.Assert.assertSame(ready, session.select(true, ready, allowLateFrame = true))
+        org.junit.Assert.assertSame(ready, session.select(true, Any(), allowLateFrame = true))
+    }
+
+    @Test
+    fun legacyBlurKeepsTheRealFaceEvenWhenACaptureIsAvailable() {
+        for (captured in listOf(false, true)) {
+            assertTrue(
+                shouldDrawLiveBackdropContent(
+                    overlayActive = true,
+                    capturedFrameAvailable = captured,
+                    backend = OverlayBlurBackend.LEGACY,
+                ),
+            )
+        }
+    }
+
+    @Test
     fun backdropKeepsTheCompleteFrameObjectUntilTheOverlayCloses() {
         val session = BackdropFrameSession<Any>()
         val first = Any()
