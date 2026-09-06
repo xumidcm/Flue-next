@@ -260,8 +260,8 @@ fun WatchFaceLayer(
         onLongPress = onLongPress,
         onDoubleTap = onDoubleTap,
         showClock = true,
-        // 视频是高耗能资源，桌面离开表盘时交给 isFaceVisible 统一暂停，并保留静态首帧。
-        keepVideoAliveWhenHidden = false,
+        // 离开表盘时暂停解码，但保留播放器和当前帧，返回时直接续播。
+        keepVideoAliveWhenHidden = true,
         modifier = modifier
     )
 }
@@ -560,7 +560,8 @@ private fun MediaVideoBackground(
     AndroidView(
         factory = { context -> InternalLoopingVideoView(context) },
         update = { view ->
-            view.bind(filePath, isFaceVisible || keepAliveWhenHidden, fillScreen)
+            // 保留视图与继续播放是两件事；隐藏时只暂停，不卸载 Surface。
+            view.bind(filePath, isFaceVisible, fillScreen)
         },
         modifier = Modifier.fillMaxSize()
     )
