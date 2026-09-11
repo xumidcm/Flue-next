@@ -91,7 +91,7 @@
     <string name="settings_transition_motion_slide">Slide</string>
     <string name="settings_transition_motion_slide_sub">The list slides sideways with barely any scaling</string>
     <string name="search_d_transition_motion">Choose a slide or zoom transition, independent of the UI style</string>
-    <string name="settings_ui_aw">watchOS</string>
+    <string name="settings_ui_aw">WatchOS</string>
     <string name="settings_ui_aw_sub">Glass layers, compact cards, circular carriers, and tighter motion</string>
     <string name="settings_ui_md3">Material 3</string>
     <string name="settings_ui_md3_sub">Bigger blocks, MD3E geometry, and stronger layered surfaces</string>
@@ -110,7 +110,7 @@
     <string name="settings_visual_effects_header">Visual Effects</string>
     <string name="settings_blur">Blur</string>
     <string name="settings_blur_sub">Enable blur on supported Android versions</string>
-    <string name="settings_edge_blur">Edge Blur (Experimental)</string>
+    <string name="settings_edge_blur">Edge Blur</string>
     <string name="settings_edge_blur_sub">Apply extra blur near the top and bottom edges</string>
     <string name="settings_edge_blur_radius">Edge Blur Radius</string>
     <string name="settings_direct_launch">Open Flue to App List</string>
@@ -253,7 +253,7 @@
     <string name="settings_face_shrink">Watch Face Shrink Animation</string>
     <string name="settings_face_shrink_sub">Skip the scale when returning to the face or opening any overlay</string>
     <string name="settings_legacy_transition">Legacy Transition</string>
-    <string name="settings_legacy_transition_sub">Use the pre-watchOS transition: the face zooms toward you</string>
+    <string name="settings_legacy_transition_sub">Use the pre-WatchOS transition: the face zooms toward you</string>
     <string name="settings_stagger_entry">Staggered Entry</string>
     <string name="settings_stagger_entry_sub">Rows enter top-first with a cascading delay</string>
     <string name="settings_reduce_motion">Reduce Motion</string>
@@ -339,7 +339,7 @@
     <string name="search_d_row_bg">Row background in list mode</string>
     <string name="search_d_performance">Animation toggles and icon quality</string>
     <string name="search_d_stagger">Rows enter one after another</string>
-    <string name="search_d_legacy">Pre-watchOS three-stage animation</string>
+    <string name="search_d_legacy">Pre-WatchOS three-stage animation</string>
     <string name="search_d_app_list_shrink">Scale on return</string>
     <string name="search_d_icon_float">Replay the float-in animation when returning from an app</string>
     <string name="search_d_face_shrink">Scale when returning to watch face or pulling out an overlay</string>
@@ -819,7 +819,7 @@
     <string name="watch_editor_export_mode_title">Choose export type</string>
     <string name="watch_editor_export_mode_message">Protected export is compatible with WFTools and WatchMaker.</string>
     <string name="watch_editor_export_plain">Plain export</string>
-    <string name="watch_editor_export_protected">Protected export (experimental)</string>
+    <string name="watch_editor_export_protected">Protected export</string>
     <string name="watch_editor_status_importing_font">Importing font</string>
     <string name="watch_editor_error_read_font">Couldn\'t read the selected font</string>
     <string name="watch_editor_error_font_import">Font import failed</string>

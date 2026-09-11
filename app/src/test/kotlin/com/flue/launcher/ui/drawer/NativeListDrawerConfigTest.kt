@@ -2,6 +2,7 @@ package com.flue.launcher.ui.drawer
 
 import android.os.Build
 import com.flue.launcher.applist.nativeview.NativeAppListTheme
+import com.flue.launcher.applist.nativeview.NativeAppListConfig
 import com.flue.launcher.applist.nativeview.NativeAppListPresentation
 import com.flue.launcher.applist.nativeview.NativeBlurTier
 import org.junit.Assert.assertEquals
@@ -10,6 +11,13 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class NativeListDrawerConfigTest {
+    @Test
+    fun defaultsGridLikeLayoutsToThreeColumns() {
+        val config = NativeAppListConfig()
+        assertEquals(3, config.honeycombNarrowColumns)
+        assertEquals(3, config.denseGridColumns)
+    }
+
     @Test
     fun mapsComposeListGeometryAndSettingsWithoutDoubleScaling() {
         val config = nativeListDrawerConfig(
@@ -243,6 +251,16 @@ class NativeListDrawerConfigTest {
     }
 
     @Test
+    fun denseGridDefaultsToFourColumnsAndNoIconPlate() {
+        val config = nativeListDrawerConfig(
+            request(presentation = NativeAppListPresentation.DENSE_GRID),
+        )
+
+        assertEquals(4, config.denseGridColumns)
+        assertEquals(0L, config.palette.rowBackgroundColorArgb)
+    }
+
+    @Test
     fun mapsLegacyMaterialDenseGridGeometry() {
         val config = nativeListDrawerConfig(
             request(
@@ -352,7 +370,7 @@ class NativeListDrawerConfigTest {
         overlayOpen: Boolean = false,
         overlayProgress: Float = if (overlayOpen) 1f else 0f,
         rowBorderEnabled: Boolean = false,
-        gridIconPlateEnabled: Boolean = true,
+        gridIconPlateEnabled: Boolean = false,
         allowFolderCreation: Boolean = true,
         scrollIndicatorEnabled: Boolean = true,
         iconShadowEnabled: Boolean = true,

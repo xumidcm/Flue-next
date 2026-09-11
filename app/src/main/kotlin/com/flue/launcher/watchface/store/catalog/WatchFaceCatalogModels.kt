@@ -201,4 +201,12 @@ object WatchFaceLogicalIds {
             .joinToString("") { "%02x".format(it) }
         return "market:${digest.take(32)}"
     }
+
+    /** Stable identity for an edited/local copy detached from a market item. */
+    fun local(launcherId: String): String {
+        val digest = MessageDigest.getInstance("SHA-256")
+            .digest(launcherId.toByteArray(Charsets.UTF_8))
+            .joinToString("") { "%02x".format(it) }
+        return "local:${digest.take(32)}"
+    }
 }

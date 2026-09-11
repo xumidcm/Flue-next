@@ -3,13 +3,7 @@ package com.flue.launcher.layout
 import com.flue.launcher.ui.navigation.LayoutMode
 import com.flue.launcher.util.FlowCrescentDirection
 
-/**
- * 五种布局的出厂档案。
- *
- * 取值全部沿用改动前那套**全局扁平偏好的默认值**（鱼眼开、生效 4 行、缩小 100%、
- * 边缘间距压缩开、首行额外缩放关、左侧安全区 0），这样没动过设置的用户升级上来
- * 观感一个像素都不变。心流那两项是新的，见 [Flow] 上的注释。
- */
+/** 五种布局的出厂档案。心流固定关闭边缘间距压缩；其他布局保留原有默认。 */
 object FlueLayoutProfiles {
     const val HONEYCOMB_ID: String = "preset:honeycomb"
     const val GRID_ID: String = "preset:grid"
@@ -54,6 +48,7 @@ object FlueLayoutProfiles {
         id = FLOW_ID,
         name = "心流",
         layoutMode = LayoutMode.Flow,
+        edgeSpacingCompressionEnabled = false,
         crescentBulgePercent = 100,
     ).requireValid()
 

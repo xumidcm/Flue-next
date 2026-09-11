@@ -165,6 +165,7 @@ data class FlueLayoutProfile(
      */
     fun sanitized(): FlueLayoutProfile = copy(
         schemaVersion = FLUE_LAYOUT_SCHEMA_VERSION,
+        edgeSpacingCompressionEnabled = layoutMode != LayoutMode.Flow && edgeSpacingCompressionEnabled,
         name = name.trim().take(FLUE_LAYOUT_PROFILE_NAME_MAX_LENGTH).ifBlank { "布局" },
         fisheyeRangeRows = fisheyeRangeRows.coerceIn(
             FLUE_LAYOUT_FISHEYE_RANGE_ROWS_MIN,

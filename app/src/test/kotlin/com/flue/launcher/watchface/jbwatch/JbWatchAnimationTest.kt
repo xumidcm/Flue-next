@@ -1,12 +1,33 @@
 package com.flue.launcher.watchface.jbwatch
 
 import com.flue.launcher.watchface.standard.WatchTextAnimationPhase
+import com.flue.launcher.watchface.standard.WatchTextAnimationEpochs
+import com.flue.launcher.watchface.standard.WatchTextAnimationTrigger
+import com.flue.launcher.watchface.standard.watchmakerTickDelay
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class JbWatchAnimationTest {
+    @Test fun ambientCapsHighRefreshJbFacesAndWakePreservesLoadOnlyLoops() {
+        val layer = JbWatchLayer(type = "text", animIn = "SlideLeft", animOut = "SlideRight",
+            durationInSeconds = 1f, durationOnSeconds = 1f, durationOutSeconds = 1f,
+            durationOffSeconds = 1f, repeatCount = -1, restartOnLoad = true, restartOnBright = false)
+        assertEquals(1_000L, watchmakerTickDelay(true, jbLayerRequiresFrameTicks(layer)))
+        assertEquals(33L, watchmakerTickDelay(false, jbLayerRequiresFrameTicks(layer)))
+        val loaded = WatchTextAnimationEpochs(loadAtMs = 1_000)
+        val awakened = loaded.triggered(WatchTextAnimationTrigger.BRIGHT, 8_000)
+        val epoch = awakened.epochFor(layer.restartOnLoad, layer.restartOnBright)
+        assertEquals(1_000L, epoch)
+        assertEquals(jbTextAnimationFrame(layer, 7_350),
+            jbTextAnimationFrame(layer, 8_350 - requireNotNull(epoch), restartEnabled = true))
+        val brightOnly = layer.copy(restartOnLoad = false, restartOnBright = true)
+        val brightEpoch = awakened.epochFor(brightOnly.restartOnLoad, brightOnly.restartOnBright)
+        assertEquals(WatchTextAnimationPhase.ENTERING,
+            jbTextAnimationFrame(brightOnly, 8_100 - requireNotNull(brightEpoch), restartEnabled = true).phase)
+    }
+
     @Test
     fun epochSizedTimelineDoesNotOverflowAndLockTheFirstFrame() {
         val delayMs = 70L

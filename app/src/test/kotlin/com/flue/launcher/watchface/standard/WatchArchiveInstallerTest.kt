@@ -46,6 +46,22 @@ class WatchArchiveInstallerTest {
     }
 
     @Test
+    fun forceNewInstallCreatesAnIndependentDirectoryForReinstall() = withTemporaryDirectory { root ->
+        val archive = File(root, "simple.watch")
+        writeZip(archive, "watch.xml" to FORMAT_ONE_XML.toByteArray())
+        val installRoot = File(root, "installed")
+
+        val first = WatchArchiveInstaller().install(archive, installRoot)
+        val second = WatchArchiveInstaller().install(archive, installRoot, forceNewInstall = true)
+
+        assertTrue(first.rootDirectory.isDirectory)
+        assertTrue(second.rootDirectory.isDirectory)
+        assertFalse(first.rootDirectory.canonicalFile == second.rootDirectory.canonicalFile)
+        assertTrue(first.watchXml.isFile)
+        assertTrue(second.watchXml.isFile)
+    }
+
+    @Test
     fun installsProtectedWatchmakerDefinitionAndDecodesProtectedImages() =
         withTemporaryDirectory { root ->
             val archive = File(root, "protected.watch")

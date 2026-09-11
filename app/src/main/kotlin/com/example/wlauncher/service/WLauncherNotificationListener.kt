@@ -110,18 +110,24 @@ class WLauncherNotificationListener : NotificationListenerService() {
 
     override fun onListenerConnected() {
         instance = this
+        com.flue.launcher.status.DoNotDisturbState.setListener(this) { currentInterruptionFilter }
         Log.d(TAG, "Notification listener connected")
         refreshNotifications()
     }
 
     override fun onListenerDisconnected() {
         instance = null
+        com.flue.launcher.status.DoNotDisturbState.setListener(this, null)
         Log.d(TAG, "Notification listener disconnected")
         _notifications.value = emptyList()
         WatchNotificationCounts.publish(0)
         synchronized(pendingIntentMap) { pendingIntentMap.clear() }
         synchronized(pendingActionIntentMap) { pendingActionIntentMap.clear() }
         synchronized(packageIconCache) { packageIconCache.clear() }
+    }
+
+    override fun onInterruptionFilterChanged(interruptionFilter: Int) {
+        com.flue.launcher.status.DoNotDisturbState.refresh(this)
     }
 
     override fun onNotificationPosted(sbn: StatusBarNotification?) {

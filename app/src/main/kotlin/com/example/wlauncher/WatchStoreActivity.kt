@@ -2,6 +2,7 @@ package com.flue.launcher
 
 import com.flue.launcher.i18n.FlueComponentActivity
 
+import androidx.lifecycle.repeatOnLifecycle
 import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
@@ -689,7 +690,8 @@ private fun WatchStoreScreen(
         }?.takeIf(String::isNotBlank)
     }
 
-    LaunchedEffect(notificationSession?.token) {
+    val notificationLifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
+    LaunchedEffect(notificationSession?.token, unreadCounter, notificationLifecycleOwner) {
         val token = notificationSession?.token
         if (token == null) {
             unreadNotificationCount = 0
@@ -697,9 +699,13 @@ private fun WatchStoreScreen(
             return@LaunchedEffect
         }
         // 这个循环随本页一起被取消 —— 离开市场页就不再拉。
-        while (true) {
-            unreadNotificationCount = runCatching { unreadCounter.count(token) }.getOrDefault(0)
-            kotlinx.coroutines.delay(WatchStoreUnreadCounter.DEFAULT_THROTTLE_MS)
+        notificationLifecycleOwner.lifecycle.repeatOnLifecycle(androidx.lifecycle.Lifecycle.State.STARTED) {
+            var first = true
+            while (true) {
+                unreadNotificationCount = unreadCounter.count(token, force = first)
+                first = false
+                kotlinx.coroutines.delay(WatchStoreUnreadCounter.DEFAULT_THROTTLE_MS)
+            }
         }
     }
     // 自定义市场地址：拉取失败时就地弹输入框，不再把用户丢到设置的工具页。
@@ -1735,7 +1741,10 @@ private fun WatchStoreScreen(
                         token = token,
                         onUnreadCountChange = { count ->
                             unreadNotificationCount = count
-                            if (count == 0) scope.launch { unreadCounter.markAllRead() }
+                            scope.launch {
+                                unreadCounter.updateCount(token, count)
+                                if (notificationSession?.token == token) unreadNotificationCount = count
+                            }
                         },
                         onTokenExpired = {
                             notificationAuthStore.clear()
@@ -2747,20 +2756,16 @@ private fun InstallStateLineContent(
             modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically,
         ) {
+            Box(Modifier.weight(1f), contentAlignment = Alignment.CenterStart) {
+                downloadCountLine?.invoke()
+            }
+            Spacer(Modifier.width(6.dp))
             Text(
                 stringResource(R.string.watch_store_installed),
                 color = style.positiveColor,
                 fontSize = 10.sp,
                 maxLines = 1,
             )
-            if (downloadCountLine != null) {
-                Spacer(Modifier.width(6.dp))
-                // 下载量靠右：与「未安装」那一支（下载量在左、按钮在右）保持同一个重心，
-                // 一列卡片扫下来数字始终贴着同一侧。
-                Box(Modifier.weight(1f), contentAlignment = Alignment.CenterEnd) {
-                    downloadCountLine()
-                }
-            }
         }
         is WatchStoreInstallState.Failed -> {
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -4024,17 +4029,7 @@ private fun WatchStoreSocialDetailSection(
                         }
                     }
                 }
-            }
-        }
-
-        // 标签已经接到标题卡的「分类 / 屏形」那一行后面，这里不再单独铺一排。
-
-        // ── 评分卡 ──────────────────────────────────────────────────────────
-        if (visibility.showRating) {
-            FlueCard(
-            modifier = Modifier.fillMaxWidth().storeChordBlock(),
-            border = null,
-        ) {
+                if (visibility.showRating) {
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -4064,8 +4059,11 @@ private fun WatchStoreSocialDetailSection(
                         }
                     }
                 }
+                }
             }
         }
+
+        // 标签已经接到标题卡的「分类 / 屏形」那一行后面，这里不再单独铺一排。
 
         // ── 评论卡 ──────────────────────────────────────────────────────────
         // 结构：头部（「评论 (n)」+ 写评论按钮）→ 列表 → 输入框（默认收起）。
@@ -4781,9 +4779,11 @@ private fun NotificationCenterOverlay(
     var loading by remember { mutableStateOf(true) }
     var loadError by remember { mutableStateOf<String?>(null) }
     var markingAll by remember { mutableStateOf(false) }
+    var unreadOutsidePage by remember(token) { mutableIntStateOf(0) }
+    val pendingReads = remember(token) { mutableSetOf<String>() }
 
     fun publishUnread() {
-        onUnreadCountChange(items.count { it.unread })
+        onUnreadCountChange(unreadOutsidePage + items.count { it.unread })
     }
 
     LaunchedEffect(token) {
@@ -4792,6 +4792,7 @@ private fun NotificationCenterOverlay(
         runCatching { withContext(Dispatchers.IO) { api.listNotifications(token) } }
             .onSuccess { page ->
                 items = page.data
+                unreadOutsidePage = (page.unread - items.count { it.unread }).coerceAtLeast(0)
                 onUnreadCountChange(page.unread)
             }
             .onFailure { error ->
@@ -4806,8 +4807,8 @@ private fun NotificationCenterOverlay(
     }
 
     fun markOneRead(notification: WatchStoreNotification) {
-        if (!notification.unread) return
-        val previous = items
+        val previous = items.firstOrNull { it.id == notification.id } ?: return
+        if (markingAll || !previous.unread || !pendingReads.add(notification.id)) return
         // 乐观置灰：readAt 随便给个非 null 值即可，这一页只判空。
         items = items.map { current ->
             if (current.id == notification.id) current.copy(readAt = "local") else current
@@ -4818,16 +4819,19 @@ private fun NotificationCenterOverlay(
                 withContext(Dispatchers.IO) { api.markNotificationRead(token, notification.id) }
             }.onFailure { error ->
                 error.throwIfCancellation()
-                items = previous
+                items = items.map { if (it.id == previous.id) previous else it }
                 publishUnread()
             }
+            pendingReads.remove(notification.id)
         }
     }
 
     fun markAllRead() {
-        if (markingAll || items.none { it.unread }) return
+        if (markingAll || pendingReads.isNotEmpty() || (unreadOutsidePage == 0 && items.none { it.unread })) return
         markingAll = true
         val previous = items
+        val previousOutside = unreadOutsidePage
+        unreadOutsidePage = 0
         items = items.map { current -> if (current.unread) current.copy(readAt = "local") else current }
         onUnreadCountChange(0)
         scope.launch {
@@ -4836,6 +4840,7 @@ private fun NotificationCenterOverlay(
             }.onFailure { error ->
                 error.throwIfCancellation()
                 items = previous
+                unreadOutsidePage = previousOutside
                 publishUnread()
             }
             markingAll = false
@@ -4873,7 +4878,7 @@ private fun NotificationCenterOverlay(
                     subtitle = null,
                     modifier = Modifier.weight(1f),
                 )
-                if (items.any { it.unread }) {
+                if (unreadOutsidePage > 0 || items.any { it.unread }) {
                     TextButton(
                         onClick = ::markAllRead,
                         enabled = !markingAll,

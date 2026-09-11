@@ -11,6 +11,9 @@ import com.flue.launcher.watchface.standard.WatchmakerProtection
 import com.flue.launcher.watchface.standard.WatchmakerWatchFaceStorage
 import com.flue.launcher.watchface.standard.normalizeWatchColorLiteral
 import com.flue.launcher.watchface.standard.resolveWatchLayerParentIndices
+import com.flue.launcher.watchface.standard.WatchTapAction
+import com.flue.launcher.watchface.standard.WatchTapActionParser
+import com.flue.launcher.watchface.standard.watchSoundAssetCandidates
 import org.w3c.dom.Document
 import org.w3c.dom.Element
 import org.w3c.dom.Node
@@ -79,6 +82,21 @@ class WatchEditorSession private constructor(
     private var savedScriptBytes: ByteArray?
     private var closed = false
     private var activeTransformGesture: TransformGesture? = null
+    private var activeTranslationGesture: TranslationGesture? = null
+
+    private data class TranslationTarget(
+        val key: WatchEditorLayerKey,
+        val initial: WatchEditorTransform,
+        val x: String?,
+        val y: String?,
+        val inverseParent: WatchEditorAffine,
+    )
+
+    private data class TranslationGesture(
+        val before: EditorState,
+        val targets: List<TranslationTarget>,
+        val ambient: Boolean,
+    )
 
     private data class TransformGesture(
         val key: WatchEditorLayerKey,
@@ -214,13 +232,119 @@ class WatchEditorSession private constructor(
             } else {
                 emptySet()
             }
-            changes.forEach { (name, value) -> setOrRemoveAttribute(layer, name, value) }
+            changes.filterKeys { !it.startsWith("Ambient.") }
+                .forEach { (name, value) -> setOrRemoveAttribute(layer, name, value) }
+            val ambientChanges = changes.filterKeys { it.startsWith("Ambient.") }
+                .mapKeys { it.key.removePrefix("Ambient.") }
+            if (ambientChanges.isNotEmpty()) setAmbientAttributesDirect(layer, ambientChanges)
             stashUnreferencedResources(obsolete)
         }
     }
 
     fun updateLayerAttribute(key: WatchEditorLayerKey, name: String, value: String?) =
         updateLayerAttributes(key, mapOf(name to value))
+
+    fun updateAmbientAttributes(key: WatchEditorLayerKey, changes: Map<String, String?>) =
+        updateLayerAttributes(key, changes.mapKeys { "Ambient.${it.key}" })
+
+    private fun setAmbientAttributesDirect(layer: Element, changes: Map<String, String?>) {
+        require(changes.keys.all { it in setOf("color", "opacity", "x", "y", "width", "height", "rotation", "fontSize") })
+        var ambient = layer.childNodes.elements().firstOrNull { it.tagName.equals("Ambient", true) }
+        if (ambient == null && changes.values.any { it != null }) {
+            ambient = document.createElement("Ambient").also(layer::appendChild)
+        }
+        ambient?.let { node ->
+            changes.forEach { (name, value) -> setOrRemoveAttribute(node, name, value) }
+            if (node.attributes.length == 0 && !node.hasChildNodes()) layer.removeChild(node)
+        }
+    }
+
+    /** World-space translation, with one transaction and no double movement through parents. */
+    @Synchronized
+    @JvmOverloads
+    fun beginLayerTranslationGesture(
+        keys: Set<WatchEditorLayerKey>,
+        resolvedTransforms: Map<WatchEditorLayerKey, WatchEditorTransform> = emptyMap(),
+        ambientMode: Boolean = false,
+    ): Map<WatchEditorLayerKey, WatchEditorTransform> {
+        ensureOpen()
+        cancelActiveTransformGesture()
+        val layers = snapshot().layers
+        val geometries = buildWatchEditorLayerGeometries(layers, transformOverrides = resolvedTransforms)
+        val matrices = buildWatchEditorWorldMatrices(geometries)
+        val targets = geometries.mapIndexedNotNull { index, geometry ->
+            if (geometry.key !in keys) return@mapIndexedNotNull null
+            var ancestor = geometry.parentIndex
+            val visited = mutableSetOf<Int>()
+            while (ancestor != null && visited.add(ancestor)) {
+                val parent = geometries.getOrNull(ancestor) ?: break
+                if (parent.key in keys) return@mapIndexedNotNull null
+                ancestor = parent.parentIndex
+            }
+            val layer = layers[index]
+            val overrides = if (ambientMode && isStudioDefinition()) layer.ambientAttributes else emptyMap()
+            TranslationTarget(
+                geometry.key, geometry.transform,
+                overrides["x"] ?: layer.attributes["x"], overrides["y"] ?: layer.attributes["y"],
+                geometry.parentIndex?.let { matrices.getOrNull(it)?.inverted() } ?: WatchEditorAffine.IDENTITY,
+            )
+        }
+        require(targets.isNotEmpty()) { "No selected layers" }
+        activeTranslationGesture = TranslationGesture(captureState(), targets, ambientMode && isStudioDefinition())
+        return targets.associate { it.key to it.initial }
+    }
+
+    @Synchronized
+    fun updateLayerTranslationPreview(deltaX: Float, deltaY: Float): Map<WatchEditorLayerKey, WatchEditorTransform> {
+        ensureOpen()
+        require(deltaX.isFinite() && deltaY.isFinite())
+        val gesture = activeTranslationGesture ?: throw WatchEditorException("没有活动的多选移动手势")
+        return gesture.targets.associate { target ->
+            val delta = target.inverseParent.applyVector(deltaX, deltaY)
+            val changes = mapOf("x" to translatedExpression(target.x, delta.x), "y" to translatedExpression(target.y, delta.y))
+            val layer = findLayer(target.key)
+            if (gesture.ambient) setAmbientAttributesDirect(layer, changes)
+            else changes.forEach { (name, value) -> setOrRemoveAttribute(layer, name, value) }
+            target.key to target.initial.copy(x = target.initial.x + delta.x, y = target.initial.y + delta.y)
+        }
+    }
+
+    private fun translatedExpression(original: String?, delta: Float): String? = when {
+        delta == 0f -> original
+        original.isNullOrBlank() -> formatTransformNumber(delta)
+        original.toFloatOrNull() != null -> formatTransformNumber(original.toFloat() + delta)
+        else -> "($original)+(${formatTransformNumber(delta)})"
+    }
+
+    @Synchronized
+    fun commitLayerTranslationGesture(): Boolean {
+        ensureOpen()
+        val gesture = activeTranslationGesture ?: return false
+        activeTranslationGesture = null
+        return try {
+            validateDocument()
+            if (sameState(gesture.before, captureState())) false else {
+                pushUndo(gesture.before)
+                clearRedo()
+                pruneResourceStash()
+                true
+            }
+        } catch (error: Exception) {
+            restoreState(gesture.before)
+            throw error
+        }
+    }
+
+    @Synchronized
+    fun cancelLayerTranslationGesture(): Boolean {
+        // Cleanup can race Activity disposal; the synchronized closed check also avoids TOCTOU.
+        if (closed) return false
+        val gesture = activeTranslationGesture ?: return false
+        activeTranslationGesture = null
+        restoreState(gesture.before)
+        pruneResourceStash()
+        return true
+    }
 
     /**
      * Reads the transform attributes used by the editor canvas. Missing or
@@ -258,6 +382,7 @@ class WatchEditorSession private constructor(
     @Synchronized
     fun beginLayerTransformGesture(key: WatchEditorLayerKey): WatchEditorTransform {
         ensureOpen()
+        cancelLayerTranslationGesture()
         activeTransformGesture?.let { active ->
             if (active.key == key) return layerTransform(key)
             activeTransformGesture = null
@@ -441,6 +566,51 @@ class WatchEditorSession private constructor(
 
     fun moveLayer(key: WatchEditorLayerKey, targetIndex: Int): Boolean =
         reorderLayer(key, targetIndex)
+
+    /** Moves the selected block in document order; IDs, parent links and nested payloads survive. */
+    @Synchronized
+    fun reorderLayers(keys: Set<WatchEditorLayerKey>, targetIndex: Int): Boolean {
+        ensureOpen()
+        cancelActiveTransformGesture()
+        val block = watchEditorLayerSelectionBlock(snapshot().layers, keys)
+        if (layerKeys.getOrNull(targetIndex) in block) return false
+        return reorderLayerBlock(block, targetIndex)
+    }
+
+    /** Step the entire block across one adjacent unselected row, independent of drop indices. */
+    @Synchronized
+    fun moveLayersByOne(keys: Set<WatchEditorLayerKey>, direction: Int): Boolean {
+        require(direction == -1 || direction == 1)
+        ensureOpen()
+        cancelActiveTransformGesture()
+        val block = watchEditorLayerSelectionBlock(snapshot().layers, keys)
+        val indices = layerKeys.indices.filter { layerKeys[it] in block }
+        if (indices.isEmpty()) return false
+        val neighborIndex = if (direction < 0) indices.first() - 1 else indices.last() + 1
+        val neighbor = layerKeys.getOrNull(neighborIndex) ?: return false
+        val remaining = layerKeys.filterNot { it in block }
+        val insertion = remaining.indexOf(neighbor) + if (direction > 0) 1 else 0
+        return reorderLayerBlock(block, insertion)
+    }
+
+    private fun reorderLayerBlock(block: Set<WatchEditorLayerKey>, targetIndex: Int): Boolean {
+        val movedKeys = layerKeys.filter { it in block }
+        if (movedKeys.isEmpty()) return false
+        val remainingKeys = layerKeys.filterNot { it in block }.toMutableList()
+        val destination = targetIndex.coerceIn(0, remainingKeys.size)
+        remainingKeys.addAll(destination, movedKeys)
+        if (remainingKeys == layerKeys) return false
+        return mutate {
+            val byKey = layerKeys.zip(topLevelLayerElements()).toMap()
+            movedKeys.forEach { key -> byKey.getValue(key).let { it.parentNode.removeChild(it) } }
+            movedKeys.forEachIndexed { index, key ->
+                insertLayerAtDocumentIndex(byKey.getValue(key), destination + index,
+                    topLevelLayerElements(), preferredLayerContainer(document.documentElement))
+            }
+            layerKeys = remainingKeys
+            true
+        }
+    }
 
     @Synchronized
     fun undo(): Boolean {
@@ -1271,6 +1441,7 @@ class WatchEditorSession private constructor(
             first.xml.contentEquals(second.xml)
 
     private fun cancelActiveTransformGesture() {
+        cancelLayerTranslationGesture()
         val active = activeTransformGesture ?: return
         activeTransformGesture = null
         restoreState(active.before)
@@ -1501,6 +1672,8 @@ class WatchEditorSession private constructor(
                 .toList(),
             order = order,
             definitionIndex = definitionIndex,
+            ambientAttributes = element.childNodes.elements()
+                .firstOrNull { it.tagName.equals("Ambient", true) }?.let(::attributesOf).orEmpty(),
         )
 
     private fun validateDocument() {
@@ -1788,7 +1961,22 @@ class WatchEditorSession private constructor(
                 draftRelativeAssetPath(value, "videos"),
             ).filterNotNull()
         }
-        .toSet()
+        .toSet() + referencedAudioPaths()
+
+    private fun referencedAudioPaths(): Set<String> {
+        val values = allLayerElements().flatMap { attributesOf(it).values }
+        val actions = values.map(WatchTapActionParser::parse)
+        val names = actions.filterIsInstance<WatchTapAction.PlaySound>().map { it.name }
+        val raw = values.joinToString("\n") + "\n" + globalScriptText().orEmpty()
+        val scripts = actions.filterIsInstance<WatchTapAction.Script>().joinToString("\n") { it.source } +
+            "\n" + globalScriptText().orEmpty()
+        val scripted = raw.contains("wm_sfx", true) || raw.contains("wm_sound", true) ||
+            scripts.contains("play_sound:", true) || names.any { '{' in it }
+        val candidates = names.flatMap(::watchSoundAssetCandidates).map { it.lowercase(Locale.ROOT) }.toSet()
+        return resourcePathsInternal().filter { path ->
+            path.startsWith("sfx/", true) && (scripted || path.lowercase(Locale.ROOT) in candidates)
+        }.toSet()
+    }
 
     /**
      * 草稿里全部素材的清单：路径、字节数、有没有被图层引用。

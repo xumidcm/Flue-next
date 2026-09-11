@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="aod_title">Always-on display (AOD)</string>
+    <string name="aod_description">Dim after inactivity, use Ambient face content, and pause video and motion sensors.</string>
+    <string name="aod_enabled">Enable always-on display</string>
+    <string name="aod_charging">Always enable while charging</string>
+    <string name="aod_timeout">Idle timeout</string>
+    <string name="aod_brightness">Ambient brightness</string>
+    <string name="aod_reawaken">Reawaken after screen off</string>
+    <string name="aod_lock">Lock gestures</string>
+    <string name="aod_lock_delay">Gesture lock delay</string>
+    <string name="aod_shallow">Shallow sleep: touch to brighten</string>
+    <string name="aod_power_exit">Power button exits locked ambient</string>
+    <string name="aod_unlock_hint">Double-tap to unlock. A waking touch never activates a face action.</string>
+    <string name="aod_permission_granted">Overlay permission granted. Returning from other apps is available where supported by Android.</string>
+    <string name="aod_permission_description">Returning to the face after screen off in another app needs overlay permission. Foreground AOD remains available without it.</string>
+    <string name="aod_permission_action">Grant overlay permission</string>
+</resources>

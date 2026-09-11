@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="diagnostics_title">调试</string>
+    <string name="diagnostics_crash">手动触发崩溃</string>
+    <string name="diagnostics_crash_description">验证崩溃页与日志收集</string>
+    <string name="diagnostics_missing_face">切换到空表盘</string>
+    <string name="diagnostics_missing_face_description">触发 5 秒加载兜底</string>
+    <string name="diagnostics_restore_face">恢复默认表盘</string>
+    <string name="diagnostics_restore_face_description">清除空表盘测试状态</string>
+    <string name="diagnostics_refresh_cache">刷新调试缓存</string>
+    <string name="diagnostics_cache_idle">未执行</string>
+    <string name="diagnostics_cache_refreshed">已刷新，清理预览 %1$d 项</string>
+    <string name="diagnostics_cache_failed">刷新失败，请重试</string>
+    <string name="diagnostics_performance_title">性能浮窗</string>
+    <string name="diagnostics_performance_description">仅显示在 Flue 页面，默认全部关闭。按实际渲染帧统计，静止页面可为 0 FPS；浮窗自身的绘制也会计入。</string>
+    <string name="diagnostics_fps">FPS 与帧耗时</string>
+    <string name="diagnostics_memory">进程内存</string>
+    <string name="diagnostics_threads">进程线程数</string>
+    <string name="diagnostics_recording_description">录制全部三项指标，每秒采样，最长 5 分钟。后台暂停采样，计时继续；结束后生成 CSV 与系统配置 JSON 的 ZIP。浮窗开关不受录制影响。</string>
+    <string name="diagnostics_recording_idle">尚未录制</string>
+    <string name="diagnostics_recording_preparing">正在准备录制…</string>
+    <string name="diagnostics_recording_active">录制中：%1$d / %2$d 秒</string>
+    <string name="diagnostics_recording_finishing">正在生成导出文件…</string>
+    <string name="diagnostics_recording_ready">录制文件已准备好</string>
+    <string name="diagnostics_recording_auto_ready">已满 5 分钟，导出文件已准备好</string>
+    <string name="diagnostics_start_recording">开始录制</string>
+    <string name="diagnostics_stop_recording">停止并生成 ZIP</string>
+    <string name="diagnostics_export">导出性能 ZIP</string>
+    <string name="diagnostics_recording_failed">录制失败，请检查可用存储空间后重试</string>
+    <string name="diagnostics_export_failed">导出失败，请检查文件与可用存储空间后重试</string>
+    <string name="diagnostics_recovery_failed">上次录制恢复失败，仍可开始新的录制</string>
+    <string name="diagnostics_no_share_handler">没有可以接收 ZIP 文件的应用</string>
+    <string name="diagnostics_overlay_waiting">正在采样…</string>
+    <string name="diagnostics_overlay_fps">FPS %1$.1f · %2$.1f ms</string>
+    <string name="diagnostics_overlay_jank">慢帧 %1$.1f%% · 最大 %2$.1f ms</string>
+    <string name="diagnostics_overlay_memory">PSS %1$s MB</string>
+    <string name="diagnostics_overlay_threads">线程 %1$s</string>
+    <string name="diagnostics_information_title">系统与 Flue 信息</string>
+    <string name="diagnostics_information_privacy">包含版本、设备、屏幕、权限状态及表盘、布局、动画、模糊、小组件和 AOD 配置。仅采集诊断白名单字段，不包含账号凭据、位置或小组件内容。</string>
+    <string name="diagnostics_information_failed">读取信息失败，请刷新重试</string>
+    <string name="diagnostics_show_information">查看完整信息</string>
+    <string name="diagnostics_hide_information">收起完整信息</string>
+    <string name="diagnostics_copy_information">复制全部信息</string>
+    <string name="diagnostics_refresh_information">刷新信息</string>
+    <string name="diagnostics_information_copied">诊断信息已复制</string>
+    <string name="diagnostics_copy_failed">复制失败，请重试</string>
+</resources>

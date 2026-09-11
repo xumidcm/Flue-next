@@ -43,18 +43,25 @@ import java.io.File
 import java.util.Locale
 
 class CrashActivity : FlueComponentActivity() {
+    private var crashEmoticon: String = ""
+    override fun onSaveInstanceState(outState: Bundle) {
+        outState.putString("crash_emoticon", crashEmoticon)
+        super.onSaveInstanceState(outState)
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         RecentsVisibility.apply(this)
         val crashInfo = intent.getStringExtra("crash_info") ?: readCache("crash_info.txt", "Unknown error")
         val crashBrief = intent.getStringExtra("crash_brief") ?: readCache("crash_brief.txt", "Unknown")
         val appInfo = intent.getStringExtra("crash_app_info") ?: readCache("crash_app_info.txt", "Unknown")
-        val messageSelection = selectCrashMessageIndices(
-            titleCount = resources.getStringArray(R.array.crash_titles).size,
-            subtitleCount = resources.getStringArray(R.array.crash_subtitles).size,
-        )
-        val crashTitle = resources.getStringArray(R.array.crash_titles)[messageSelection.titleIndex]
-        val crashSubtitle = resources.getStringArray(R.array.crash_subtitles)[messageSelection.subtitleIndex]
+        val isChinese = resources.configuration.locales[0].language.startsWith("zh")
+        val face = savedInstanceState?.getString("crash_emoticon")
+            ?: listOf("(>_<)", "(；ω；)", "(╥﹏╥)", "(つД`) ").random().trim()
+        crashEmoticon = face
+        val crashTitle = (if (isChinese) "哎呀，崩溃了" else "App Crashed") + " " + face
+        val crashSubtitle = if (isChinese) "请复制详细错误并提供复现步骤给开发者。"
+            else "Shows first five error lines by default. Tap to expand full log."
         val fullCrashLog = buildString {
             appendLine(appInfo)
             appendLine()
@@ -63,7 +70,7 @@ class CrashActivity : FlueComponentActivity() {
             append(crashInfo)
         }.trim()
         setContent {
-            val isZh = remember { Locale.getDefault().language.startsWith("zh") }
+            val isZh = isChinese
             CrashScreen(
                 isZh = isZh,
                 title = crashTitle,

@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="aod_title">常時表示（AOD）</string>
+    <string name="aod_description">操作がないと画面を暗くし、Ambient 表示に切り替えて動画とモーションセンサーを停止します。</string>
+    <string name="aod_enabled">常時表示を有効にする</string>
+    <string name="aod_charging">充電中は常に有効</string>
+    <string name="aod_timeout">待機時間</string>
+    <string name="aod_brightness">常時表示の明るさ</string>
+    <string name="aod_reawaken">画面消灯後に再点灯</string>
+    <string name="aod_lock">ジェスチャーをロック</string>
+    <string name="aod_lock_delay">ロックまでの時間</string>
+    <string name="aod_shallow">浅いスリープ：タッチで明るくする</string>
+    <string name="aod_power_exit">電源ボタンで常時表示ロックを解除</string>
+    <string name="aod_unlock_hint">ダブルタップでロック解除。復帰するタッチでは文字盤の操作は実行されません。</string>
+    <string name="aod_permission_granted">重ねて表示が許可されています。Android が対応する場合、他のアプリから文字盤に戻れます。</string>
+    <string name="aod_permission_description">他のアプリで消灯した後に文字盤へ戻るには重ねて表示の権限が必要です。未許可でも前面での常時表示は使えます。</string>
+    <string name="aod_permission_action">重ねて表示を許可</string>
+</resources>

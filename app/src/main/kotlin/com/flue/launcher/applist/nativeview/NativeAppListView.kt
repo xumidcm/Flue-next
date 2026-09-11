@@ -2561,13 +2561,7 @@ class NativeAppListView @JvmOverloads constructor(
         invalidate()
     }
 
-    /**
-     * 指示器两支笔的颜色与线宽。
-     *
-     * 颜色取 [NativeAppListPalette.labelColorArgb]（应用名的颜色）而不是另立一项配色：
-     * 指示器和文字都是「浮在内容之上的前景」，主题一换必须同时换。深色主题下标签是白的、
-     * 浅色主题下是黑的，指示器跟着走就永远和背景对得上，不需要再判一次 [NativeAppListTheme]。
-     */
+    /** 指示器使用灰白前景色，不跟随表盘主题色。 */
     private fun updateScrollIndicatorPaints() {
         val color = currentConfig.value.palette.labelColorArgb.toInt()
         val thicknessPx = NATIVE_SCROLL_INDICATOR_THICKNESS_DP * resources.displayMetrics.density

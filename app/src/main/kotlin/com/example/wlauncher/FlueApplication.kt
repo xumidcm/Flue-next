@@ -31,6 +31,7 @@ class FlueApplication : Application() {
     override fun onCreate() {
         super.onCreate()
         FlueLog.configureDiagnostics(this)
+        com.flue.launcher.status.DoNotDisturbState.initialize(this)
         // Standard, JB, and editor previews all resolve their null weather
         // source through this one application-owned repository. Its cached
         // snapshot and temperature-unit preference therefore survive host
@@ -57,6 +58,7 @@ class FlueRepositories(context: Context) {
     val sharedState = SharedLauncherState()
     val appRepository: AppRepository by lazy { AppRepository(appContext) }
     val widgetRepository: WidgetRepository by lazy { WidgetRepository(appContext) }
+    internal val widgetRefreshCoordinator by lazy { com.flue.launcher.widget.WidgetRefreshCoordinator(appContext) }
     val appWidgetHost: AppWidgetHost by lazy {
         AppWidgetHost(appContext, SIDE_SCREEN_APP_WIDGET_HOST_ID)
     }

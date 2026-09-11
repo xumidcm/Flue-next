@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="watch_editor_multi_select">多选</string>
+    <string name="watch_editor_multi_select_done">完成多选</string>
+    <string name="watch_editor_selection_count">已选 %1$d 项</string>
+    <string name="watch_editor_preview_viewport">预览设备</string>
+    <string name="watch_editor_preview_current_device">当前设备</string>
+    <string name="watch_editor_preview_custom">自定义尺寸</string>
+    <string name="watch_editor_preview_width">宽度（像素）</string>
+    <string name="watch_editor_preview_height">高度（像素）</string>
+    <string name="watch_editor_preview_only">仅改变预览视口，设计尺寸和导出内容保持不变</string>
+    <string name="watch_editor_preview_invalid_size">请输入大于 0 的整数宽度和高度</string>
+    <string name="watch_editor_preview_follow_shape">跟随表盘形状</string>
+    <string name="watch_editor_preview_round">圆形</string>
+    <string name="watch_editor_preview_rectangle">矩形</string>
+    <string name="watch_editor_preview_bright">亮屏预览</string>
+    <string name="watch_editor_preview_ambient">息屏预览</string>
+    <string name="watch_editor_ambient_properties">息屏属性</string>
+    <string name="watch_editor_ambient_inherit">留空继承亮屏属性</string>
+    <string name="watch_editor_open_other_apps">在其他应用中打开</string>
+    <string name="watch_editor_open_no_handler">没有找到能打开 .watch 文件的应用</string>
+    <string name="watch_editor_audio_import">导入音频</string>
+    <string name="watch_editor_audio_play">试听音频</string>
+    <string name="watch_editor_audio_action">播放音频</string>
+    <string name="watch_editor_audio_empty">请先在资源管理器中导入音频</string>
+    <string name="watch_editor_audio_error">无法播放此音频文件</string>
+    <string name="watch_editor_attribute_color_dim">息屏颜色</string>
+    <string name="watch_editor_attribute_restart_on_bright">亮屏时重新开始</string>
+    <string name="watch_editor_protocol_yes">是</string>
+    <string name="watch_editor_protocol_no">否</string>
+</resources>

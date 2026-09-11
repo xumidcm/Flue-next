@@ -12,6 +12,16 @@ import kotlin.math.min
 internal fun shouldRouteStageTouchToPrimary(videoLayerCount: Int): Boolean =
     videoLayerCount > 0
 
+data class WatchmakerLiveLayerTransform(
+    val layerIndex: Int,
+    val layerId: String? = null,
+    val x: Float,
+    val y: Float,
+    val rotationDegrees: Float,
+    val scaleX: Float,
+    val scaleY: Float,
+)
+
 internal fun shouldRefreshBorrowedSegmentState(
     appliedSignature: String?,
     nextSignature: String,
@@ -53,6 +63,7 @@ internal class WatchmakerWatchFaceStageView @JvmOverloads constructor(
 
     private var appliedSignature: String? = null
     private var playing = true
+    private var ambientMode = false
     private var windowVisible = true
     private val overlayRenderGate = WatchmakerOverlayRenderGate()
     private val clipPath = Path()
@@ -111,6 +122,15 @@ internal class WatchmakerWatchFaceStageView @JvmOverloads constructor(
 
     fun clearLiveLayerTransform() = forEachCanvasSegment(WatchmakerWatchFaceView::clearLiveLayerTransform)
 
+    fun setLiveLayerTransforms(transforms: List<WatchmakerLiveLayerTransform>) =
+        forEachCanvasSegment { it.setLiveLayerTransforms(transforms) }
+
+    fun resolveEditorLayerTransform(layerIndex: Int): WatchmakerLiveLayerTransform? =
+        primaryView.resolveEditorLayerTransform(layerIndex)
+
+    fun setEditorPreviewRoundOverride(round: Boolean?) =
+        forEachCanvasSegment { it.setEditorPreviewRoundOverride(round) }
+
     fun cancelLiveLayerTransformHandoff() =
         forEachCanvasSegment(WatchmakerWatchFaceView::cancelLiveLayerTransformHandoff)
 
@@ -137,9 +157,17 @@ internal class WatchmakerWatchFaceStageView @JvmOverloads constructor(
         } else {
             if (!overlayRenderGate.beginOverlayResume()) return
             forEachCanvasSegment { it.setOverlayRenderFrozen(false) }
-            videoViews.forEach { it.setPlaying(playing && windowVisible) }
+            videoViews.forEach { it.setPlaying(playing && windowVisible && !ambientMode) }
             overlayRenderGate.markResumeComplete()
         }
+    }
+
+    fun setAmbientMode(ambient: Boolean) {
+        if (ambientMode == ambient) return
+        ambientMode = ambient
+        forEachCanvasSegment { it.setAmbientMode(ambient) }
+        videoViews.forEach { it.setPlaying(playing && windowVisible && !ambientMode && !overlayRenderGate.dynamicWorkPaused) }
+        updateVideoGeometry()
     }
 
     private inline fun forEachCanvasSegment(action: (WatchmakerWatchFaceView) -> Unit) {
@@ -150,7 +178,7 @@ internal class WatchmakerWatchFaceStageView @JvmOverloads constructor(
     private fun onPlaybackChanged(shouldPlay: Boolean) {
         playing = shouldPlay
         videoViews.forEach {
-            it.setPlaying(shouldPlay && windowVisible && !overlayRenderGate.dynamicWorkPaused)
+            it.setPlaying(shouldPlay && windowVisible && !ambientMode && !overlayRenderGate.dynamicWorkPaused)
         }
     }
 
@@ -220,7 +248,7 @@ internal class WatchmakerWatchFaceStageView @JvmOverloads constructor(
             val videoView = videoViews[index]
             videoView.bindSource(entry.absolutePath)
             videoView.setPlaying(
-                playing && windowVisible && !overlayRenderGate.dynamicWorkPaused,
+                playing && windowVisible && !ambientMode && !overlayRenderGate.dynamicWorkPaused,
             )
             addView(videoView)
             videoLayerIndices += entry.layerIndex
@@ -338,7 +366,7 @@ internal class WatchmakerWatchFaceStageView @JvmOverloads constructor(
         super.onWindowVisibilityChanged(visibility)
         windowVisible = visibility == VISIBLE
         videoViews.forEach {
-            it.setPlaying(playing && windowVisible && !overlayRenderGate.dynamicWorkPaused)
+            it.setPlaying(playing && windowVisible && !ambientMode && !overlayRenderGate.dynamicWorkPaused)
         }
     }
 

@@ -5,6 +5,8 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -265,6 +267,7 @@ private fun Modifier.flueAbsorbPointer(): Modifier = pointerInput(Unit) {
  * `ColumnScope` 扩展，所以传 `false` 之后调用点可以**自己**给列表标
  * `weight(1f, fill = false)`，不需要这里代劳。
  */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun FlueAlertDialog(
     onDismissRequest: () -> Unit,
@@ -324,6 +327,7 @@ fun FlueAlertDialog(
  * - **MIUIX** → 左右并排两个胶囊，取消是浅底、确定是强调色（HyperOS 的排法）；
  * - **MD3** → 右对齐的文字按钮，跟着 Material 走。
  */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun FlueDialogButtons(
     confirmText: String,
@@ -366,7 +370,7 @@ fun FlueDialogButtons(
                 FlueDialogButton(confirmText, onConfirm, primary = true, enabled = confirmEnabled, height = 46.dp)
             }
         }
-        UiStyle.MATERIAL_3 -> Row(
+        UiStyle.MATERIAL_3 -> FlowRow(
             modifier = modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.End,
         ) {
@@ -451,6 +455,7 @@ private fun FlueDialogButton(
  * 正文槽自己内部还要再传一次这个意图（把列表标成 `weight(1f, fill = false)`），因为
  * [text] 是 `@Composable () -> Unit`、**没有** `ColumnScope`，我们没法从外面替它标。
  */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun FlueAlertDialog(
     onDismissRequest: () -> Unit,
@@ -551,20 +556,13 @@ fun FlueAlertDialog(
                     FlueDialogActionSlot(primary = false, height = 42.dp, content = extraAction)
                 }
             }
-            // MD3：三个动作同一行 —— 中性动作靠左，取消/确定靠右。
-            //
-            // 以前 extraAction 是单独 `extraAction?.invoke()` 挂在 Row 下面，于是
-            // 「恢复默认」被孤零零丢到第二行左下角，和右上角的取消/保存隔着一大片空白
-            //（老师报的「md3 这个按钮位置不会很怪吗」）。M3 规范里这类中性动作就是
-            // 放在确认对里的**左侧同一行**，不是另起一行。
-            //
-            // Apple / MIUIX 两档保持竖排整宽胶囊：手表上一行摆三枚胶囊点不准。
-            UiStyle.MATERIAL_3 -> Row(
+            // 窄屏按按钮实际宽度换行，避免末个按钮被压到零宽、逐字撑高整张弹窗。
+            UiStyle.MATERIAL_3 -> FlowRow(
                 modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.End,
+                verticalArrangement = Arrangement.spacedBy(4.dp),
             ) {
                 extraAction?.invoke()
-                Spacer(Modifier.weight(1f))
                 dismissButton?.invoke()
                 confirmButton()
             }

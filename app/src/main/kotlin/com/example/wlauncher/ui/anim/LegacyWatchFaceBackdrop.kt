@@ -121,6 +121,8 @@ internal fun rememberLegacyWatchFacePixelCopyFrame(
     }
 
     val latestCaptureAllowed = rememberUpdatedState(captureAllowed)
+    val cleanWindow = remember { com.flue.launcher.watchface.standard.WatchFaceCaptureEpoch() }
+    cleanWindow.observe(captureAllowed)
     // captureAllowed 不进入 key：覆层开始时不能取消 DOWN 已经发出的首笔
     // PixelCopy，否则背衬永远等不到冻结帧。状态变化只由下面的 latest 值控制：
     // 首笔立即请求允许完成，延迟替换请求则必须在稳定 Face 状态下才继续。
@@ -153,6 +155,7 @@ internal fun rememberLegacyWatchFacePixelCopyFrame(
             if (settleDelay > 0L) delay(settleDelay)
             ensureActive()
             if (settleDelay > 0L && !latestCaptureAllowed.value) return@LaunchedEffect
+            val requestEpoch = cleanWindow.epoch
             val frame = requestWindowPixelCopy(
                 window = requestedWindow,
                 requestedBounds = requestedRect,
@@ -166,7 +169,7 @@ internal fun rememberLegacyWatchFacePixelCopyFrame(
                 // processed, not when DOWN queued it. Accepting a late result
                 // after an overlay appeared baked that overlay into the frozen
                 // watch-face frame and produced a temporary two-layer UI.
-                if (!shouldAcceptWatchFaceCapture(latestCaptureAllowed.value)) continue
+                if (!shouldAcceptWatchFaceCapture(latestCaptureAllowed.value) || !cleanWindow.accepts(requestEpoch)) continue
                 val previous = captured
                 val next = LegacyWatchFaceCapturedFrame(
                     visualKey = visualKey,

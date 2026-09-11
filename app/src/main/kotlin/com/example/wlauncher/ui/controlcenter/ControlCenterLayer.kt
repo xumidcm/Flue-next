@@ -1,5 +1,6 @@
 ﻿package com.flue.launcher.ui.controlcenter
 
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import android.Manifest
 import android.app.NotificationManager
 import android.bluetooth.BluetoothAdapter
@@ -389,6 +390,8 @@ fun ControlCenterLayer(
     var connectivity by remember(context) { mutableStateOf(readConnectivitySnapshot(context)) }
     var bluetoothEnabled by remember(context) { mutableStateOf(isBluetoothLikelyEnabled(context)) }
     var dndEnabled by remember(context) { mutableStateOf(isDndEnabled(context)) }
+    val observedDnd by com.flue.launcher.status.DoNotDisturbState.enabled.collectAsStateWithLifecycle()
+    LaunchedEffect(observedDnd) { dndEnabled = observedDnd }
     val mediaState = rememberMediaState(context, active = contentVisible)
     val density = LocalDensity.current
     val verticalScrollState = rememberScrollState()
@@ -3083,10 +3086,8 @@ private fun requestBluetoothEnable(enableLauncher: ActivityResultLauncher<Intent
     }
 }
 
-private fun isDndEnabled(context: Context): Boolean {
-    val manager = context.getSystemService(NotificationManager::class.java) ?: return false
-    return manager.currentInterruptionFilter != NotificationManager.INTERRUPTION_FILTER_ALL
-}
+private fun isDndEnabled(context: Context): Boolean =
+    com.flue.launcher.status.DoNotDisturbState.refresh(context)
 
 private fun toggleDnd(context: Context) {
     val manager = context.getSystemService(NotificationManager::class.java) ?: return

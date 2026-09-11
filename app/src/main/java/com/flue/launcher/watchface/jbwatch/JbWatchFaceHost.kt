@@ -42,6 +42,9 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.res.stringResource
 import com.flue.launcher.R
 import com.flue.launcher.watchface.WatchFaceDescriptor
+import com.flue.launcher.watchface.standard.WatchTextAnimationEpochs
+import com.flue.launcher.watchface.standard.WatchTextAnimationTrigger
+import com.flue.launcher.watchface.standard.watchmakerTickDelay
 import com.flue.launcher.watchface.standard.WatchDataProvider
 import com.flue.launcher.watchface.standard.WatchDataSnapshot
 import com.flue.launcher.watchface.standard.WatchTagResolution
@@ -151,6 +154,7 @@ data class JbWatchLayer(
     val delayStartSeconds: Float = 0f,
     val repeatCount: Int = 1,
     val restartOnLoad: Boolean = false,
+    val restartOnBright: Boolean = false,
     val animScaleX: Float = 100f,
     val animScaleY: Float = 100f,
     val font: String? = null,
@@ -281,6 +285,9 @@ object JbWatchParser {
                         restartOnLoad = element.getAttribute("restart_on_load").let { raw ->
                             raw.equals("Y", ignoreCase = true) || raw.equals("true", ignoreCase = true)
                         },
+                        restartOnBright = element.getAttribute("restart_on_bright").let { raw ->
+                            raw.equals("Y", ignoreCase = true) || raw.equals("true", ignoreCase = true)
+                        },
                         animScaleX = element.getAttribute("anim_scale_x").toFloatOrZero(default = 100f),
                         animScaleY = element.getAttribute("anim_scale_y").toFloatOrZero(default = 100f),
                         font = sanitizeVisibleText(element.getAttribute("font")).takeIf { it.isNotBlank() },
@@ -395,6 +402,7 @@ fun JbWatchFaceHost(
     textEntryAnimationEnabled: Boolean = true,
     textExitAnimationEnabled: Boolean = true,
     textExitAnimationActive: Boolean = false,
+    ambientMode: Boolean = false,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -426,31 +434,55 @@ fun JbWatchFaceHost(
         if (face != null) onRenderReady?.invoke(refreshToken)
     }
     var nowMillis by remember { mutableStateOf(System.currentTimeMillis()) }
-    var textAnimationStartedAtUptimeMs by remember(descriptor.stableKey, refreshToken) {
-        mutableStateOf(SystemClock.uptimeMillis())
+    var textAnimationEpochs by remember(face) {
+        mutableStateOf(WatchTextAnimationEpochs(loadAtMs = face?.animationStartedAtUptimeMs))
     }
-    var textExitAnimationStartedAtUptimeMs by remember(descriptor.stableKey, refreshToken) {
-        mutableStateOf(0L)
-    }
-    LaunchedEffect(isFaceVisible, face, textEntryAnimationEnabled) {
-        if (isFaceVisible && textEntryAnimationEnabled) {
-            textAnimationStartedAtUptimeMs = SystemClock.uptimeMillis()
+    var textExitAnimationStartedAtUptimeMs by remember(face) { mutableStateOf(0L) }
+    var previousAmbient by remember(face) { mutableStateOf(ambientMode) }
+    val latestAmbient by rememberUpdatedState(ambientMode)
+    LaunchedEffect(face, ambientMode) {
+        if (previousAmbient && !ambientMode) {
+            textAnimationEpochs = textAnimationEpochs.triggered(WatchTextAnimationTrigger.BRIGHT, SystemClock.uptimeMillis())
         }
+        previousAmbient = ambientMode
+    }
+    DisposableEffect(context, face) {
+        var interactive = (context.getSystemService(Context.POWER_SERVICE) as? android.os.PowerManager)?.isInteractive != false
+        val receiver = object : android.content.BroadcastReceiver() {
+            override fun onReceive(context: Context, intent: Intent) {
+                when (intent.action) {
+                    Intent.ACTION_SCREEN_OFF -> interactive = false
+                    Intent.ACTION_SCREEN_ON -> {
+                        if (!interactive && !latestAmbient) {
+                            textAnimationEpochs = textAnimationEpochs.triggered(WatchTextAnimationTrigger.BRIGHT, SystemClock.uptimeMillis())
+                        }
+                        interactive = true
+                    }
+                }
+            }
+        }
+        val registered = runCatching {
+            androidx.core.content.ContextCompat.registerReceiver(context, receiver, android.content.IntentFilter().apply {
+                addAction(Intent.ACTION_SCREEN_OFF)
+                addAction(Intent.ACTION_SCREEN_ON)
+            }, androidx.core.content.ContextCompat.RECEIVER_NOT_EXPORTED)
+        }.isSuccess
+        onDispose { if (registered) runCatching { context.unregisterReceiver(receiver) } }
     }
     LaunchedEffect(textExitAnimationActive, textExitAnimationEnabled) {
-        if (textExitAnimationActive && textExitAnimationEnabled) {
-            textExitAnimationStartedAtUptimeMs = SystemClock.uptimeMillis()
-        }
+        if (textExitAnimationActive && textExitAnimationEnabled) textExitAnimationStartedAtUptimeMs = SystemClock.uptimeMillis()
     }
-    val renderFace = remember(face, textAnimationStartedAtUptimeMs) {
-        face?.copy(animationStartedAtUptimeMs = textAnimationStartedAtUptimeMs)
-    }
+    val renderFace = face
     val ownedDataProvider = rememberWatchmakerWatchDataProvider(
         active = dataProvider == null && isFaceVisible,
+        ambientMode = ambientMode,
     )
     val resolvedDataProvider = dataProvider ?: ownedDataProvider
     val dataSnapshot = runCatching { resolvedDataProvider.snapshot(nowMillis) }
-        .getOrDefault(WatchDataSnapshot())
+        .getOrDefault(WatchDataSnapshot()).let { snapshot ->
+            snapshot.copy(brightMode = !ambientMode && snapshot.brightMode != false,
+                millisSinceBright = if (ambientMode) null else snapshot.millisSinceBright)
+        }
     val is24Hour = remember(context) { DateFormat.is24HourFormat(context) }
     val latestFace by rememberUpdatedState(face)
     val latestNowMillis by rememberUpdatedState(nowMillis)
@@ -459,13 +491,14 @@ fun JbWatchFaceHost(
     LaunchedEffect(
         isFaceVisible,
         face?.needsHighRefresh,
+        ambientMode,
         textExitAnimationActive,
         descriptor.stableKey,
         refreshToken,
     ) {
         while (isFaceVisible || (textExitAnimationActive && textExitAnimationEnabled)) {
             nowMillis = System.currentTimeMillis()
-            delay(if (face?.needsHighRefresh == true) 33L else 1_000L)
+            delay(watchmakerTickDelay(ambientMode, face?.needsHighRefresh == true))
         }
     }
     Box(
@@ -512,7 +545,8 @@ fun JbWatchFaceHost(
                             width = size.width.toInt(),
                             height = size.height.toInt(),
                             is24Hour = is24Hour,
-                            textEntryAnimationEnabled = textEntryAnimationEnabled,
+                            textEntryAnimationEnabled = textEntryAnimationEnabled && !ambientMode,
+                            textAnimationEpochs = textAnimationEpochs,
                             textExitAnimationActive = textExitAnimationActive && textExitAnimationEnabled,
                             textExitAnimationStartedAtUptimeMs = textExitAnimationStartedAtUptimeMs,
                         )
@@ -536,6 +570,7 @@ private fun drawJbFace(
     height: Int,
     is24Hour: Boolean,
     textEntryAnimationEnabled: Boolean,
+    textAnimationEpochs: WatchTextAnimationEpochs,
     textExitAnimationActive: Boolean,
     textExitAnimationStartedAtUptimeMs: Long,
 ) {
@@ -560,6 +595,7 @@ private fun drawJbFace(
             luaRuntime,
             is24Hour,
             textEntryAnimationEnabled,
+            textAnimationEpochs,
             textExitAnimationActive,
             textExitAnimationStartedAtUptimeMs,
         )
@@ -577,6 +613,7 @@ private fun drawJbLayer(
     luaRuntime: JbWatchLuaExpressionRuntime?,
     is24Hour: Boolean,
     textEntryAnimationEnabled: Boolean,
+    textAnimationEpochs: WatchTextAnimationEpochs,
     textExitAnimationActive: Boolean,
     textExitAnimationStartedAtUptimeMs: Long,
 ) {
@@ -598,7 +635,9 @@ private fun drawJbLayer(
     } else if (textEntryAnimationEnabled && animatedLayer.type.startsWith("text") &&
         (!animatedLayer.animIn.isNullOrBlank() || !animatedLayer.animOut.isNullOrBlank())
     ) {
-        jbTextAnimationFrame(animatedLayer, animationElapsedMs)
+        val epoch = textAnimationEpochs.epochFor(animatedLayer.restartOnLoad, animatedLayer.restartOnBright)
+        jbTextAnimationFrame(animatedLayer,
+            epoch?.let { SystemClock.uptimeMillis() - it } ?: 0L, restartEnabled = epoch != null)
     } else {
         null
     }
@@ -1138,7 +1177,7 @@ private fun evaluateJbNumericExpression(
 }
 
 /** Shared WatchMaker text timeline used by both standard and JB renderers. */
-internal fun jbTextAnimationFrame(layer: JbWatchLayer, elapsedMs: Long) =
+internal fun jbTextAnimationFrame(layer: JbWatchLayer, elapsedMs: Long, restartEnabled: Boolean = layer.restartOnLoad) =
     watchTextAnimationFrame(
         animIn = layer.animIn,
         animOut = layer.animOut,
@@ -1148,7 +1187,7 @@ internal fun jbTextAnimationFrame(layer: JbWatchLayer, elapsedMs: Long) =
         durationOffSeconds = layer.durationOffSeconds,
         delayStartSeconds = layer.delayStartSeconds,
         repeatCount = layer.repeatCount,
-        restartOnLoad = layer.restartOnLoad,
+        restartOnLoad = restartEnabled,
         elapsedMs = elapsedMs,
     )
 

@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="watch_editor_multi_select">Select multiple</string>
+    <string name="watch_editor_multi_select_done">Finish selection</string>
+    <string name="watch_editor_selection_count">%1$d selected</string>
+    <string name="watch_editor_preview_viewport">Preview device</string>
+    <string name="watch_editor_preview_current_device">Current device</string>
+    <string name="watch_editor_preview_custom">Custom size</string>
+    <string name="watch_editor_preview_width">Width (pixels)</string>
+    <string name="watch_editor_preview_height">Height (pixels)</string>
+    <string name="watch_editor_preview_only">Changes only the preview viewport; design dimensions and exports are preserved</string>
+    <string name="watch_editor_preview_invalid_size">Enter positive whole numbers for width and height</string>
+    <string name="watch_editor_preview_follow_shape">Follow watch shape</string>
+    <string name="watch_editor_preview_round">Round</string>
+    <string name="watch_editor_preview_rectangle">Rectangular</string>
+    <string name="watch_editor_preview_bright">Bright preview</string>
+    <string name="watch_editor_preview_ambient">Ambient preview</string>
+    <string name="watch_editor_ambient_properties">Ambient properties</string>
+    <string name="watch_editor_ambient_inherit">Leave empty to inherit bright properties</string>
+    <string name="watch_editor_open_other_apps">Open in other apps</string>
+    <string name="watch_editor_open_no_handler">No app found that can open .watch files</string>
+    <string name="watch_editor_audio_import">Import audio</string>
+    <string name="watch_editor_audio_play">Preview audio</string>
+    <string name="watch_editor_audio_action">Play audio</string>
+    <string name="watch_editor_audio_empty">Import audio in the resource manager first</string>
+    <string name="watch_editor_audio_error">Unable to play this audio file</string>
+    <string name="watch_editor_attribute_color_dim">Ambient color</string>
+    <string name="watch_editor_attribute_restart_on_bright">Restart when bright</string>
+    <string name="watch_editor_protocol_yes">Yes</string>
+    <string name="watch_editor_protocol_no">No</string>
+</resources>

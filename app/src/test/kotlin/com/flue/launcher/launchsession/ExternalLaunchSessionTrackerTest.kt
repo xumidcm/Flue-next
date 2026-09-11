@@ -10,6 +10,20 @@ import org.junit.Test
 
 class ExternalLaunchSessionTrackerTest {
 
+    @Test
+    fun `ambient foreground discards app return state and ignores its late callbacks`() {
+        val id = tracker.begin(request())
+        tracker.onDispatchResult(id, success = true)
+        tracker.onPaused()
+        tracker.onStopped()
+        tracker.finishWithoutReturnAnimation()
+        tracker.onResumed()
+        tracker.onDispatchResult(id, success = true)
+        tracker.onBackgroundConfirmationTimedOut(id)
+        assertSame(ExternalLaunchState.Idle, tracker.state)
+        assertFalse(tracker.state.retainsLaunchIcon)
+    }
+
     private var now = 1_000L
     private val tracker = ExternalLaunchSessionTracker { now }
 

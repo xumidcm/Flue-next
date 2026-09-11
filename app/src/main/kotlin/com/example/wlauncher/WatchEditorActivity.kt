@@ -5,6 +5,9 @@ import com.flue.launcher.i18n.FlueComponentActivity
 import android.Manifest
 import android.app.Activity
 import android.content.Intent
+import android.content.ActivityNotFoundException
+import android.content.ClipData
+import androidx.core.content.FileProvider
 import android.content.Context
 import android.content.pm.PackageManager
 import android.graphics.BitmapFactory
@@ -215,6 +218,17 @@ import com.flue.launcher.watchface.editor.watchXmlAssetPath
 import com.flue.launcher.ui.theme.WatchColors
 import com.flue.launcher.ui.editor.EditorResourceThumbnail
 import com.flue.launcher.watchface.editor.WatchEditorResourceEntry
+import com.flue.launcher.watchface.editor.WatchEditorResourceKind
+import com.flue.launcher.watchface.editor.WatchEditorViewport
+import com.flue.launcher.watchface.editor.watchEditorAudioTapAction
+import com.flue.launcher.watchface.editor.watchEditorLayerSelectionBlock
+import com.flue.launcher.watchface.editor.EditorPreviewViewportDialog
+import com.flue.launcher.watchface.editor.EditorAmbientProperties
+import com.flue.launcher.watchface.editor.rememberEditorAudioPreview
+import com.flue.launcher.watchface.editor.WatchEditorPoint
+import com.flue.launcher.watchface.standard.WatchmakerLiveLayerTransform
+import com.flue.launcher.watchface.standard.watchmakerDisplayAttributes
+import com.flue.launcher.watchface.standard.watchmakerDisplayVisible
 import com.flue.launcher.watchface.editor.WatchEditorSnapshot
 import com.flue.launcher.watchface.editor.WatchEditorSourceRect
 import com.flue.launcher.watchface.editor.WatchEditorSnapping
@@ -405,6 +419,10 @@ private fun WatchEditorRoute(
     var session by remember { mutableStateOf<WatchEditorSession?>(null) }
     var snapshot by remember { mutableStateOf<WatchEditorSnapshot?>(null) }
     var selectedLayerKey by remember { mutableStateOf<WatchEditorLayerKey?>(null) }
+    var selectedLayerKeys by remember { mutableStateOf<Set<WatchEditorLayerKey>>(emptySet()) }
+    var multiSelectMode by rememberSaveable { mutableStateOf(false) }
+    var previewAmbient by rememberSaveable { mutableStateOf(false) }
+    var batchTransformPreview by remember { mutableStateOf<Map<WatchEditorLayerKey, WatchEditorTransform>>(emptyMap()) }
     var selectionGeneration by remember { mutableIntStateOf(0) }
     var previewToken by remember { mutableIntStateOf(0) }
     var loading by remember { mutableStateOf(true) }
@@ -476,15 +494,25 @@ private fun WatchEditorRoute(
     ) {
         snapshot = next
         val resolvedSelection = preferred?.takeIf { key -> next.layers.any { it.key == key } }
-            ?: next.layers.firstOrNull()?.key
+            ?: if (multiSelectMode) next.layers.firstOrNull { it.key in selectedLayerKeys }?.key
+            else next.layers.firstOrNull()?.key
         if (selectedLayerKey != resolvedSelection) selectionGeneration++
         selectedLayerKey = resolvedSelection
+        selectedLayerKeys = if (multiSelectMode) selectedLayerKeys.intersect(next.layers.map { it.key }.toSet())
+            else setOfNotNull(resolvedSelection)
         if (resetPropertyDrafts) propertyDraftRevision++
     }
 
     fun selectLayer(key: WatchEditorLayerKey?) {
+        if (multiSelectMode && key != null) {
+            selectedLayerKeys = if (key in selectedLayerKeys) selectedLayerKeys - key else selectedLayerKeys + key
+            selectedLayerKey = key.takeIf { it in selectedLayerKeys } ?: selectedLayerKeys.lastOrNull()
+            selectionGeneration++
+            return
+        }
         if (selectedLayerKey != key) selectionGeneration++
         selectedLayerKey = key
+        selectedLayerKeys = setOfNotNull(key)
     }
 
     /**
@@ -734,6 +762,19 @@ private fun WatchEditorRoute(
         }
     }.getOrNull()?.takeIf(String::isNotBlank)
         ?: uri.lastPathSegment?.substringAfterLast('/').orEmpty().ifBlank { "font.bin" }
+
+    val audioPicker = rememberLauncherForActivityResult(OpenDocument()) { uri ->
+        if (uri != null) {
+            runSessionOperation(context.getString(R.string.watch_editor_audio_import), operation = { editor ->
+                context.contentResolver.openInputStream(uri)?.use { input ->
+                    editor.importResource(input, displayNameForUri(uri), "sfx")
+                } ?: error(context.getString(R.string.watch_editor_error_read_file))
+                selectedLayerKey
+            }, onComplete = {
+                scope.launch { resourceInventory = withContext(Dispatchers.IO) { session?.resourceInventory() } }
+            })
+        }
+    }
 
     fun handleBitmapFontUris(uris: List<Uri>) {
         val active = session
@@ -1628,6 +1669,72 @@ private fun WatchEditorRoute(
                     WatchEditorScreen(
                         snapshot = current,
                         selectedLayer = selected,
+                        selectedLayerKeys = selectedLayerKeys,
+                        multiSelectMode = multiSelectMode,
+                        onToggleMultiSelect = {
+                            multiSelectMode = !multiSelectMode
+                            if (!multiSelectMode) selectedLayerKeys = setOfNotNull(selectedLayerKey)
+                            selectionGeneration++
+                        },
+                        previewAmbient = previewAmbient,
+                        onToggleAmbient = { previewAmbient = !previewAmbient },
+                        batchTransformPreview = batchTransformPreview,
+                        onBeginTranslation = { key ->
+                            if (!transformGate.tryBeginGesture()) false else {
+                                runCatching {
+                                    liveApplicator?.consumePendingChanges()?.let { (pendingKey, changes) -> active.updateLayerAttributes(pendingKey, changes) }
+                                    pendingTransformRefreshToken = null
+                                    previewRenderer?.cancelLiveLayerTransformHandoff()
+                                    val resolved = current.layers.mapNotNull { layer ->
+                                        previewRenderer?.resolveEditorLayerTransform(layer.definitionIndex)?.let { t ->
+                                            layer.key to WatchEditorTransform(t.x, t.y, t.scaleX, t.scaleY, t.rotationDegrees)
+                                        }
+                                    }.toMap()
+                                    batchTransformPreview = active.beginLayerTranslationGesture(
+                                        if (multiSelectMode) selectedLayerKeys else setOf(key), resolved, previewAmbient,
+                                    )
+                                    true
+                                }.getOrElse { error ->
+                                    transformGate.cancelGesture()
+                                    errorMessage = context.localizedEditorError(R.string.watch_editor_error_begin_gesture, error)
+                                    false
+                                }
+                            }
+                        },
+                        onUpdateTranslation = { dx, dy ->
+                            if (transformGate.hasActiveGesture()) {
+                                batchTransformPreview = active.updateLayerTranslationPreview(dx, dy)
+                            }
+                        },
+                        onEndTranslation = { cancelled ->
+                            if (transformGate.beginCommit()) {
+                                transformCommitInFlight = true
+                                scope.launch {
+                                    try {
+                                        val next = withContext(Dispatchers.IO) {
+                                            if (cancelled) active.cancelLayerTranslationGesture()
+                                            else { active.commitLayerTranslationGesture(); active.flushDraftForPreview() }
+                                            active.snapshot()
+                                        }
+                                        updateSnapshot(next)
+                                        if (cancelled) batchTransformPreview = emptyMap() else {
+                                            val token = previewToken + 1
+                                            previewRenderer?.handoffLiveLayerTransformOnSourceReady(token)
+                                            pendingTransformRefreshToken = token
+                                            previewToken = token
+                                        }
+                                    } catch (cancelledError: CancellationException) {
+                                        runCatching { active.cancelLayerTranslationGesture() }
+                                        batchTransformPreview = emptyMap()
+                                        throw cancelledError
+                                    } catch (error: Throwable) {
+                                        runCatching { active.cancelLayerTranslationGesture() }
+                                        batchTransformPreview = emptyMap()
+                                        errorMessage = context.localizedEditorError(R.string.watch_editor_error_commit_gesture, error)
+                                    } finally { transformGate.finishCommit(); transformCommitInFlight = false }
+                                }
+                            }
+                        },
                         previewDescriptor = draftDescriptor(context, active, current),
                         previewToken = previewToken,
                         transformPreview = transformPreview,
@@ -1640,6 +1747,11 @@ private fun WatchEditorRoute(
                         gravityBackdropBlurEnabled = editorGravityBackdropBlurEnabled,
                         onBack = ::requestClose,
                         onSelectLayer = ::selectLayer,
+                        onFocusLayer = { key ->
+                            selectedLayerKeys = if (multiSelectMode) selectedLayerKeys + key else setOf(key)
+                            if (selectedLayerKey != key) selectionGeneration++
+                            selectedLayerKey = key
+                        },
                         onBeginTransform = { key ->
                             if (!transformGate.tryBeginGesture()) {
                                 null
@@ -1764,7 +1876,8 @@ private fun WatchEditorRoute(
                         },
                         onMoveLayer = { key, target ->
                             runSessionOperation(context.getString(R.string.watch_editor_status_reorder_layer), operation = { editor ->
-                                editor.reorderLayer(key, target)
+                                if (multiSelectMode && key in selectedLayerKeys) editor.reorderLayers(selectedLayerKeys, target)
+                                else editor.reorderLayer(key, target)
                                 key
                             })
                         },
@@ -1848,6 +1961,47 @@ private fun WatchEditorRoute(
                         },
                         onExport = {
                             requestExportOptions(toDirectory = false)
+                        },
+                        onStepLayer = { key, direction ->
+                            runSessionOperation(context.getString(R.string.watch_editor_status_reorder_layer), operation = { editor ->
+                                if (multiSelectMode && key in selectedLayerKeys) {
+                                    editor.moveLayersByOne(selectedLayerKeys, direction)
+                                } else {
+                                    editor.snapshot().layers.firstOrNull { it.key == key }?.let { layer ->
+                                        editor.reorderLayer(key, layer.order + direction)
+                                    }
+                                }
+                                key
+                            })
+                        },
+                        onOpenOtherApps = {
+                            if (busyMessage == null && !transformGate.isBusy()) scope.launch {
+                                busyMessage = context.getString(R.string.watch_editor_status_exporting)
+                                errorMessage = null
+                                try {
+                                    var flushError: Throwable? = null
+                                    liveApplicator?.flush(onApplied = {}, onError = { flushError = it })
+                                    flushError?.let { throw it }
+                                    refreshDraftPreview(active)
+                                    val file = withContext(Dispatchers.IO) {
+                                        active.flushDraftForPreview()
+                                        File.createTempFile("flue_open_", ".watch", context.cacheDir).also {
+                                            active.exportWatch(it, protectedExport = active.isProtected)
+                                        }
+                                    }
+                                    val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
+                                    val intent = Intent(Intent.ACTION_VIEW).setDataAndType(uri, "application/octet-stream")
+                                        .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                                        .apply { clipData = ClipData.newRawUri("watch", uri) }
+                                    if (context.packageManager.queryIntentActivities(intent, PackageManager.MATCH_DEFAULT_ONLY).isEmpty()) {
+                                        errorMessage = context.getString(R.string.watch_editor_open_no_handler)
+                                    } else context.startActivity(Intent.createChooser(intent, context.getString(R.string.watch_editor_open_other_apps)))
+                                } catch (_: ActivityNotFoundException) {
+                                    errorMessage = context.getString(R.string.watch_editor_open_no_handler)
+                                } catch (error: Throwable) {
+                                    errorMessage = context.localizedEditorError(R.string.watch_editor_error_operation, error)
+                                } finally { busyMessage = null }
+                            }
                         },
                         onUpdateShape = { shapeCode ->
                             runSessionOperation(context.getString(R.string.watch_editor_status_update_shape), operation = { editor ->
@@ -1950,12 +2104,14 @@ private fun WatchEditorRoute(
                             if (pendingTransformRefreshToken == loadedToken) {
                                 pendingTransformRefreshToken = null
                                 transformPreview = null
+                                batchTransformPreview = emptyMap()
                             }
                         },
                         onPreviewRefreshFailed = { failedToken ->
                             if (pendingTransformRefreshToken == failedToken) {
                                 pendingTransformRefreshToken = null
                                 transformPreview = null
+                                batchTransformPreview = emptyMap()
                             }
                         },
                     )
@@ -2018,6 +2174,7 @@ private fun WatchEditorRoute(
                             entries = inventory,
                             busy = busyMessage != null,
                             draftDirectory = active.draftDirectory,
+                            onImportAudio = { audioPicker.launch(arrayOf("audio/*")) },
                             onDelete = { path ->
                                 runSessionOperation(
                                     status = context.getString(R.string.watch_editor_status_deleting_resource),
@@ -2147,6 +2304,15 @@ private fun resolveDraftImageSize(draftDirectory: File, path: String): Pair<Floa
 private fun WatchEditorScreen(
     snapshot: WatchEditorSnapshot,
     selectedLayer: WatchEditorLayer?,
+    selectedLayerKeys: Set<WatchEditorLayerKey>,
+    multiSelectMode: Boolean,
+    onToggleMultiSelect: () -> Unit,
+    previewAmbient: Boolean,
+    onToggleAmbient: () -> Unit,
+    batchTransformPreview: Map<WatchEditorLayerKey, WatchEditorTransform>,
+    onBeginTranslation: (WatchEditorLayerKey) -> Boolean,
+    onUpdateTranslation: (Float, Float) -> Unit,
+    onEndTranslation: (Boolean) -> Unit,
     previewDescriptor: WatchFaceDescriptor,
     previewToken: Int,
     transformPreview: WatchEditorTransformPreview?,
@@ -2159,6 +2325,7 @@ private fun WatchEditorScreen(
     draftDirectory: File,
     onBack: () -> Unit,
     onSelectLayer: (WatchEditorLayerKey?) -> Unit,
+    onFocusLayer: (WatchEditorLayerKey) -> Unit,
     onBeginTransform: (WatchEditorLayerKey) -> WatchEditorTransform?,
     onUpdateTransform: (WatchEditorLayerKey, WatchEditorTransform) -> Unit,
     onEndTransform: (WatchEditorLayerKey, Boolean) -> Unit,
@@ -2166,6 +2333,7 @@ private fun WatchEditorScreen(
     onRedo: () -> Unit,
     onAddLayer: (String) -> Unit,
     onMoveLayer: (WatchEditorLayerKey, Int) -> Unit,
+    onStepLayer: (WatchEditorLayerKey, Int) -> Unit,
     onDuplicateLayer: (WatchEditorLayerKey) -> Unit,
     onDeleteLayer: (WatchEditorLayerKey) -> Unit,
     onLiveAttributeChange: (WatchEditorLayerKey, Map<String, String?>) -> Unit,
@@ -2183,6 +2351,7 @@ private fun WatchEditorScreen(
     onSave: () -> Unit,
     onRename: () -> Unit,
     onExport: () -> Unit,
+    onOpenOtherApps: () -> Unit,
     onExportLong: () -> Unit,
     onUpdateShape: (String) -> Unit,
     onUpdateBackground: (String?) -> Unit,
@@ -2224,9 +2393,24 @@ private fun WatchEditorScreen(
         WatchEditorPanel.PROPERTIES -> propertiesListState
         WatchEditorPanel.WATCH -> watchListState
     }
+    val selectedBlockOrders = remember(snapshot.layers, selectedLayerKeys) {
+        val block = watchEditorLayerSelectionBlock(snapshot.layers, selectedLayerKeys)
+        snapshot.layers.filter { it.key in block }.map { it.order }
+    }
     var collapsedLayerKeys by rememberSaveable { mutableStateOf<Set<String>>(emptySet()) }
     var scrollToLayerRequest by remember { mutableStateOf<Pair<Int, String>?>(null) }
     val context = LocalContext.current
+    val deviceViewport = remember(context.resources.displayMetrics) {
+        context.resources.displayMetrics.let { WatchEditorViewport(it.widthPixels.coerceAtLeast(1), it.heightPixels.coerceAtLeast(1)) }
+    }
+    var previewViewport by remember { mutableStateOf(deviceViewport) }
+    var previewRoundOverride by remember { mutableStateOf<Boolean?>(null) }
+    var showViewportDialog by remember { mutableStateOf(false) }
+    if (showViewportDialog) EditorPreviewViewportDialog(
+        currentSize = previewViewport, deviceSize = deviceViewport, roundOverride = previewRoundOverride,
+        onApply = { size, round -> previewViewport = size; previewRoundOverride = round; showViewportDialog = false },
+        onDismiss = { showViewportDialog = false },
+    )
     var bodySensorsPermissionGranted by remember(context) {
         mutableStateOf(hasEditorBodySensorsPermission(context))
     }
@@ -2323,12 +2507,20 @@ private fun WatchEditorScreen(
             bodySensorsPermissionGranted = bodySensorsPermissionGranted,
             layers = snapshot.layers,
             selectedLayer = selectedLayer,
+            selectedLayerKeys = selectedLayerKeys,
+            multiSelectMode = multiSelectMode,
+            ambientMode = previewAmbient,
+            previewRoundOverride = previewRoundOverride,
+            batchTransformPreview = batchTransformPreview,
+            onBeginTranslation = onBeginTranslation,
+            onUpdateTranslation = onUpdateTranslation,
+            onEndTranslation = onEndTranslation,
             transformPreview = transformPreview,
             enabled = busyMessage == null && !transformCommitInFlight,
             imageSizeLookup = imageSizeLookup,
             onSelectFromCanvas = { key -> onSelectLayer(key) },
             onCanvasTap = { key ->
-                if (key != null) {
+                if (key != null && !multiSelectMode) {
                     if (previewFullscreen) {
                         editorLayout = WatchEditorLayout.SPLIT
                         panel = WatchEditorPanel.PROPERTIES
@@ -2353,7 +2545,7 @@ private fun WatchEditorScreen(
             designExtentWidth = WatchCanvasSize.DEFAULT.designExtentWidth,
             designExtentHeight = WatchCanvasSize.DEFAULT.designExtentHeight,
             // 视频层的圆形裁剪判据，与渲染器给 Canvas 段那一刀同源（表盘声明的形状）。
-            faceIsRound = watchFaceShape(snapshot.rootAttributes["shape"]) == WatchFaceShape.ROUND,
+            faceIsRound = previewRoundOverride ?: (watchFaceShape(snapshot.rootAttributes["shape"]) == WatchFaceShape.ROUND),
         )
     }
 
@@ -2441,10 +2633,13 @@ private fun WatchEditorScreen(
                         ),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    IconButton(onClick = onBack, modifier = Modifier.size(36.dp)) {
+                    IconButton(onClick = onToggleMultiSelect,
+                        enabled = busyMessage == null && !transformCommitInFlight && transformPreview == null && batchTransformPreview.isEmpty(),
+                        modifier = Modifier.size(36.dp)) {
                         Icon(
-                            MiuixIcons.Back,
-                            contentDescription = stringResource(R.string.watch_editor_back),
+                            FlueMiuixIcons.Check,
+                            contentDescription = stringResource(if (multiSelectMode) R.string.watch_editor_multi_select_done else R.string.watch_editor_multi_select),
+                            tint = if (multiSelectMode) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
                         )
                     }
                     Column(
@@ -2460,11 +2655,12 @@ private fun WatchEditorScreen(
                         )
                         Text(
                             stringResource(
-                                if (snapshot.dirty) {
+                                if (multiSelectMode) R.string.watch_editor_selection_count else if (snapshot.dirty) {
                                     R.string.watch_editor_draft_dirty
                                 } else {
                                     R.string.watch_editor_draft_synced
                                 },
+                                selectedLayerKeys.size,
                             ),
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -2480,6 +2676,15 @@ private fun WatchEditorScreen(
                             .widthIn(max = toolbarViewportDp.dp)
                             .horizontalScroll(rememberScrollState()),
                     ) {
+                        IconButton(onClick = onBack, modifier = Modifier.size(36.dp)) {
+                            Icon(MiuixIcons.Back, contentDescription = stringResource(R.string.watch_editor_back))
+                        }
+                        TextButton(onClick = { showViewportDialog = true }, enabled = !transformCommitInFlight && transformPreview == null && batchTransformPreview.isEmpty()) {
+                            Text(stringResource(R.string.watch_editor_preview_viewport))
+                        }
+                        TextButton(onClick = onToggleAmbient, enabled = !transformCommitInFlight && transformPreview == null && batchTransformPreview.isEmpty()) {
+                            Text(stringResource(if (previewAmbient) R.string.watch_editor_preview_ambient else R.string.watch_editor_preview_bright))
+                        }
                         IconButton(
                             onClick = { previewPlaying = !previewPlaying },
                             modifier = Modifier.size(36.dp),
@@ -2557,7 +2762,7 @@ private fun WatchEditorScreen(
                 val availableHeight = editorMaxHeight * previewFraction
                 // 用 designExtent 的比例而不是声明像素比：渲染器就是按
                 // designExtent 画的，容器必须同源，否则出现黑边或裁切。
-                val ratio = (WatchCanvasSize.DEFAULT.designExtentWidth / WatchCanvasSize.DEFAULT.designExtentHeight)
+                val ratio = previewViewport.aspectRatio
                     .takeIf { it.isFinite() && it > 0f } ?: 1f
                 val byHeight = availableHeight * ratio        // 以高定宽
                 val previewWidth = min(byHeight, editorMaxWidth)
@@ -2671,7 +2876,7 @@ private fun WatchEditorScreen(
                                     draggedLayerTouchOffsetY = position.y - info.offset
                                     draggedLayerHeightPx = info.size.toFloat()
                                     draggedLayerTargetOrder = row.layer.order
-                                    onSelectLayer(row.layer.key)
+                                    onFocusLayer(row.layer.key)
                                 },
                                 onDrag = { change, dragAmount ->
                                     val activeKey = draggedLayerKey ?: return@detectDragGesturesAfterLongPress
@@ -2828,7 +3033,7 @@ private fun WatchEditorScreen(
                                 layer = layer,
                                 thumbnail = renderedTextThumbnail ?: thumbnail,
                                 textThumbnail = textThumbnail,
-                                selected = layer.key == selectedLayer?.key,
+                                selected = layer.key in selectedLayerKeys,
                                 layerCount = snapshot.layers.size,
                                 depth = row.depth,
                                 hasChildren = row.hasChildren,
@@ -2855,7 +3060,7 @@ private fun WatchEditorScreen(
                                 avoidanceOffsetY = avoidanceOffsetY,
                                 onSelect = {
                                     onSelectLayer(layer.key)
-                                    panel = WatchEditorPanel.PROPERTIES
+                                    if (!multiSelectMode) panel = WatchEditorPanel.PROPERTIES
                                 },
                                 onToggleExpanded = {
                                     val key = layer.key.value
@@ -2865,7 +3070,13 @@ private fun WatchEditorScreen(
                                         collapsedLayerKeys + key
                                     }
                                 },
-                                onMove = { onMoveLayer(layer.key, it) },
+                                onMoveStep = { onStepLayer(layer.key, it) },
+                                canMoveUp = if (multiSelectMode && layer.key in selectedLayerKeys) {
+                                    (selectedBlockOrders.minOrNull() ?: 0) > 0
+                                } else layer.order > 0,
+                                canMoveDown = if (multiSelectMode && layer.key in selectedLayerKeys) {
+                                    (selectedBlockOrders.maxOrNull() ?: snapshot.layers.lastIndex) < snapshot.layers.lastIndex
+                                } else layer.order < snapshot.layers.lastIndex,
                                 onDuplicate = { onDuplicateLayer(layer.key) },
                                 onDelete = { onDeleteLayer(layer.key) },
                             )
@@ -2972,7 +3183,7 @@ private fun WatchEditorScreen(
                                 avoidanceOffsetY = 0f,
                                 onSelect = {},
                                 onToggleExpanded = {},
-                                onMove = {},
+                                onMoveStep = {},
                                 onDuplicate = {},
                                 onDelete = {},
                             )
@@ -3018,6 +3229,8 @@ private fun WatchEditorScreen(
                             ) {
                                 LayerPropertiesEditor(
                                     layer = selectedLayer,
+                                    formatVersion = snapshot.formatVersion,
+                                    audioOptions = snapshot.resourcePaths.filter { it.startsWith("sfx/", true) },
                                     draftResetKey = propertyDraftRevision,
                                     enabled = busyMessage == null,
                                     fontOptions = remember(snapshot.resourcePaths, selectedLayer.attributes["font"]) {
@@ -3277,6 +3490,9 @@ private fun WatchEditorScreen(
                                 onLongClick = onExportLong,
                                 modifier = Modifier.fillMaxWidth(),
                             )
+                            FlueOutlinedButton(onClick = onOpenOtherApps, enabled = busyMessage == null, modifier = Modifier.fillMaxWidth()) {
+                                Text(stringResource(R.string.watch_editor_open_other_apps))
+                            }
                             FlueOutlinedButton(
                                 onClick = onUploadToStore,
                                 enabled = busyMessage == null,
@@ -3548,12 +3764,17 @@ private fun EditorResourceManagerOverlay(
      * 没有 content URI、也不在媒体库里，任何现成加载器都拿不到（见 EditorResourceThumbnail）。
      */
     draftDirectory: File,
+    onImportAudio: () -> Unit,
     onDelete: (String) -> Unit,
     onDismiss: () -> Unit,
 ) {
     val style = LauncherTheme.style
     BackHandler(onBack = onDismiss)
     val orphanBytes = remember(entries) { entries.filterNot { it.referenced }.sumOf { it.bytes } }
+    val context = LocalContext.current
+    val playAudio = rememberEditorAudioPreview {
+        Toast.makeText(context, R.string.watch_editor_audio_error, Toast.LENGTH_SHORT).show()
+    }
 
     Surface(
         modifier = Modifier.fillMaxSize().zIndex(20f),
@@ -3592,6 +3813,9 @@ private fun EditorResourceManagerOverlay(
             }
             // StoreRoundList 那一套（圆屏弦宽 + 回弹 + 首尾能拉到圆心）在这里同样适用。
             StoreRoundList(modifier = Modifier.weight(1f)) {
+                item("import_audio") {
+                    OutlinedButton(onClick = onImportAudio, enabled = !busy) { Text(stringResource(R.string.watch_editor_audio_import)) }
+                }
                 if (entries.isEmpty()) {
                     item("empty") {
                         Text(
@@ -3634,6 +3858,11 @@ private fun EditorResourceManagerOverlay(
                                     color = style.secondaryTextColor,
                                     fontSize = 10.sp,
                                 )
+                            }
+                            if (entry.kind == WatchEditorResourceKind.AUDIO) {
+                                IconButton(onClick = { playAudio(File(draftDirectory, entry.relativePath)) }, enabled = !busy) {
+                                    Icon(FlueMiuixIcons.Play, contentDescription = stringResource(R.string.watch_editor_audio_play))
+                                }
                             }
                             if (entry.referenced) {
                                 Text(
@@ -3853,6 +4082,14 @@ private fun WatchEditorPreview(
     bodySensorsPermissionGranted: Boolean,
     layers: List<WatchEditorLayer>,
     selectedLayer: WatchEditorLayer?,
+    selectedLayerKeys: Set<WatchEditorLayerKey>,
+    multiSelectMode: Boolean,
+    ambientMode: Boolean,
+    previewRoundOverride: Boolean?,
+    batchTransformPreview: Map<WatchEditorLayerKey, WatchEditorTransform>,
+    onBeginTranslation: (WatchEditorLayerKey) -> Boolean,
+    onUpdateTranslation: (Float, Float) -> Unit,
+    onEndTranslation: (Boolean) -> Unit,
     transformPreview: WatchEditorTransformPreview?,
     enabled: Boolean,
     imageSizeLookup: (String) -> Pair<Float, Float>?,
@@ -3894,19 +4131,47 @@ private fun WatchEditorPreview(
     val context = LocalContext.current
     var loadError by remember(descriptor.stableKey, refreshToken) { mutableStateOf<String?>(null) }
     var canvasSize by remember { mutableStateOf(IntSize.Zero) }
+    var faceView by remember { mutableStateOf<WatchmakerWatchFaceView?>(null) }
+    var faceStage by remember { mutableStateOf<WatchmakerWatchFaceStageView?>(null) }
+    var geometryRevision by remember { mutableIntStateOf(0) }
+    var geometrySourceKey by remember { mutableStateOf<Pair<String, Int>?>(null) }
+    var geometryAmbientMode by remember { mutableStateOf<Boolean?>(null) }
+    LaunchedEffect(faceView, previewPlaying, transformPreview, batchTransformPreview) {
+        while (faceView != null && previewPlaying && transformPreview == null && batchTransformPreview.isEmpty()) {
+            delay(250L)
+            geometryRevision++
+        }
+    }
     // 图层自身尺寸、父子关系和基础变换在一次手势里都不变。循环背景的 path
     // 可能非常长，不能因为拖动坐标每帧变化就重新解析所有图层几何。
-    val baseGeometries = remember(layers, imageSizeLookup) {
-        buildWatchEditorLayerGeometries(layers, imageSizeLookup)
+    val baseGeometries = remember(layers, imageSizeLookup, ambientMode, geometryRevision) {
+        val resolved = layers.mapNotNull { layer ->
+            faceView?.resolveEditorLayerTransform(layer.definitionIndex)?.let { t ->
+                layer.key to WatchEditorTransform(t.x, t.y, t.scaleX, t.scaleY, t.rotationDegrees)
+            }
+        }.toMap()
+        buildWatchEditorLayerGeometries(layers.map { layer ->
+            val attrs = watchmakerDisplayAttributes(layer.attributes, layer.ambientAttributes, ambientMode)
+            val hidden = !watchmakerDisplayVisible(attrs["display"], ambientMode) { true }
+            layer.copy(attributes = if (hidden) attrs + ("display" to "false") else attrs)
+        }, imageSizeLookup, resolved)
     }
-    val geometries = remember(baseGeometries, transformPreview) {
-        val preview = transformPreview ?: return@remember baseGeometries
+    val geometries = remember(baseGeometries, transformPreview, batchTransformPreview) {
+        val preview = transformPreview
         baseGeometries.map { geometry ->
-            if (geometry.key == preview.key) geometry.copy(transform = preview.transform) else geometry
+            val transform = batchTransformPreview[geometry.key] ?: preview?.takeIf { it.key == geometry.key }?.transform
+            if (transform != null) geometry.copy(transform = transform) else geometry
         }
     }
     val latestGeometries = rememberUpdatedState(geometries)
+    val latestLayers = rememberUpdatedState(layers)
     val latestSelectedKey = rememberUpdatedState(selectedLayer?.key)
+    val latestSelectedKeys = rememberUpdatedState(selectedLayerKeys)
+    val latestMulti = rememberUpdatedState(multiSelectMode)
+    val latestAmbient = rememberUpdatedState(ambientMode)
+    val latestBeginTranslation = rememberUpdatedState(onBeginTranslation)
+    val latestUpdateTranslation = rememberUpdatedState(onUpdateTranslation)
+    val latestEndTranslation = rememberUpdatedState(onEndTranslation)
     val latestEnabled = rememberUpdatedState(enabled)
     val latestCanvasSize = rememberUpdatedState(canvasSize)
     val latestSelect = rememberUpdatedState(onSelectFromCanvas)
@@ -3926,6 +4191,7 @@ private fun WatchEditorPreview(
     val dataProvider = rememberWatchmakerWatchDataProvider(
         active = true,
         permissionRevision = bodySensorsPermissionGranted,
+        ambientMode = ambientMode,
     )
     Box(
         modifier = modifier
@@ -3938,10 +4204,8 @@ private fun WatchEditorPreview(
             .onSizeChanged { canvasSize = it },
         contentAlignment = Alignment.Center,
     ) {
-        var faceView by remember { mutableStateOf<WatchmakerWatchFaceView?>(null) }
         // 实时变换要广播给所有 Canvas 段（见 WatchmakerWatchFaceStageView），
         // 所以另外记住 stage 本身，不能只拿首段。
-        var faceStage by remember { mutableStateOf<WatchmakerWatchFaceStageView?>(null) }
         AndroidView(
             modifier = Modifier.fillMaxSize(),
             factory = { context ->
@@ -3953,6 +4217,13 @@ private fun WatchEditorPreview(
             },
             update = { stage ->
                 val view = stage.renderer
+                stage.setAmbientMode(ambientMode)
+                // Evaluation must follow the native mode switch, including while playback is paused.
+                if (geometryAmbientMode != ambientMode) {
+                    geometryAmbientMode = ambientMode
+                    geometryRevision++
+                }
+                stage.setEditorPreviewRoundOverride(previewRoundOverride)
                 view.setWatchDataProvider(dataProvider)
                 // Editor preview is intentionally independent from the launcher
                 // setting: authors must be able to see and tune gyro layers even
@@ -3965,7 +4236,7 @@ private fun WatchEditorPreview(
                 if (!previewPlaying) view.resetEditorPreviewViewpoint()
                 // 拖动任意元素时都暂停循环素材；否则它的 30fps 解码/刷新仍会和
                 // 当前元素的跟手重绘竞争，即使拖动目标本身不是循环背景。
-                view.setEditorAnimationInteractionFrozen(transformPreview != null)
+                view.setEditorAnimationInteractionFrozen(transformPreview != null || batchTransformPreview.isNotEmpty())
                 view.bind(
                     descriptor = descriptor,
                     refreshToken = refreshToken,
@@ -3979,6 +4250,11 @@ private fun WatchEditorPreview(
                     onSourceReady = { token ->
                         // 素材就绪才知道有几个可播 video、路径各是什么。
                         stage.syncVideoSegments()
+                        val sourceKey = descriptor.stableKey to token
+                        if (geometrySourceKey != sourceKey) {
+                            geometrySourceKey = sourceKey
+                            geometryRevision++
+                        }
                         onRefreshReady(token)
                     },
                     // 编辑器预览始终按表盘 XML 播放，和启动器全局开关独立。
@@ -3998,8 +4274,17 @@ private fun WatchEditorPreview(
         )
         // 拖动期间把手势变换逐帧喂给渲染器：元素和选中框一起动，
         // 不再是「只有框在动、松手后像素才跳过去」。
-        LaunchedEffect(transformPreview, layers, faceStage) {
+        LaunchedEffect(transformPreview, batchTransformPreview, layers, faceStage) {
             val stage = faceStage ?: return@LaunchedEffect
+            if (batchTransformPreview.isNotEmpty()) {
+                stage.setEditorAnimationInteractionFrozen(true)
+                stage.setLiveLayerTransforms(layers.mapNotNull { layer ->
+                    batchTransformPreview[layer.key]?.let { t ->
+                        WatchmakerLiveLayerTransform(layer.definitionIndex, layer.id, t.x, t.y, t.rotation, t.scaleX, t.scaleY)
+                    }
+                })
+                return@LaunchedEffect
+            }
             val preview = transformPreview
             if (preview == null) {
                 stage.setEditorAnimationInteractionFrozen(false)
@@ -4052,7 +4337,13 @@ private fun WatchEditorPreview(
                             designWidth = designExtentWidth,
                             designHeight = designExtentHeight,
                         )
-                        val currentGeometries = latestGeometries.value
+                        val currentGeometries = latestGeometries.value.map { geometry ->
+                            val layer = latestLayers.value.firstOrNull { it.key == geometry.key }
+                            val evaluated = layer?.let { faceStage?.resolveEditorLayerTransform(it.definitionIndex) }
+                            if (evaluated == null) geometry else geometry.copy(transform = WatchEditorTransform(
+                                evaluated.x, evaluated.y, evaluated.scaleX, evaluated.scaleY, evaluated.rotationDegrees,
+                            ))
+                        }
                         val matrices = buildWatchEditorWorldMatrices(currentGeometries)
                         val downDesignX = mapping.designX(down.position.x)
                         val downDesignY = mapping.designY(down.position.y)
@@ -4062,6 +4353,44 @@ private fun WatchEditorPreview(
                             mapping.designLength(EDITOR_ROTATION_HANDLE_OFFSET_DP.dp.toPx())
                         val hitSlopDesign =
                             mapping.designLength(EDITOR_LAYER_HIT_SLOP_DP.dp.toPx())
+
+                        if (latestMulti.value || latestAmbient.value) {
+                            val hit = hitTestWatchEditorLayers(currentGeometries, matrices, downDesignX, downDesignY, hitSlopDesign)
+                            val key = hit?.let { currentGeometries[it].key }
+                            var moved = false
+                            var began = false
+                            var completed = false
+                            var dx = 0f
+                            var dy = 0f
+                            try {
+                                down.consume()
+                                while (true) {
+                                    val event = awaitPointerEvent()
+                                    if (!latestEnabled.value || event.changes.any { it.isConsumed }) break
+                                    val pan = event.calculatePan()
+                                    dx += mapping.designLength(pan.x)
+                                    dy += mapping.designLength(pan.y)
+                                    moved = moved || event.changes.any {
+                                        hypot(it.position.x - down.position.x, it.position.y - down.position.y) > viewConfiguration.touchSlop
+                                    }
+                                    if (moved && !began && key != null && (!latestMulti.value || key in latestSelectedKeys.value)) {
+                                        if (!latestMulti.value && key != latestSelectedKey.value) latestSelect.value(key)
+                                        began = latestBeginTranslation.value(key)
+                                        if (!began) break
+                                    }
+                                    if (began) latestUpdateTranslation.value(dx, dy)
+                                    event.changes.forEach { it.consume() }
+                                    if (event.changes.none { it.pressed }) { completed = true; break }
+                                }
+                            } finally {
+                                if (began) latestEndTranslation.value(!completed)
+                                if (completed && !moved && key != null) {
+                                    latestSelect.value(key)
+                                    latestTap.value(key)
+                                }
+                            }
+                            return@awaitEachGesture
+                        }
 
                         var mode = EditorCanvasGestureMode.NONE
                         var handle: WatchEditorHandle? = null
@@ -4342,19 +4671,30 @@ private fun WatchEditorPreview(
         // it vanished here, scaling/rotation would still look like a one-frame
         // snap even though the native layer pixels no longer roll back.
         if (
-            (enabled || transformPreview != null) &&
+            (enabled || transformPreview != null || batchTransformPreview.isNotEmpty()) &&
             selectedGeometryIndex >= 0 &&
             canvasSize.width > 0
         ) {
             val matrices = remember(geometries) { buildWatchEditorWorldMatrices(geometries) }
+            val selectedBoxes = geometries.mapIndexedNotNull { index, geometry ->
+                if (geometry.key in selectedLayerKeys) watchEditorSelectionBox(geometry, matrices[index]) else null
+            }
+            val combinedBox = if (multiSelectMode && selectedBoxes.isNotEmpty()) {
+                val points = selectedBoxes.flatMap { listOf(it.topLeft, it.topRight, it.bottomLeft, it.bottomRight) }
+                val left = points.minOf { it.x }; val right = points.maxOf { it.x }
+                val top = points.minOf { it.y }; val bottom = points.maxOf { it.y }
+                WatchEditorSelectionBox(WatchEditorPoint((left + right) / 2, (top + bottom) / 2),
+                    WatchEditorPoint(left, top), WatchEditorPoint(right, top), WatchEditorPoint(left, bottom), WatchEditorPoint(right, bottom))
+            } else null
             EditorSelectionOverlay(
-                box = watchEditorSelectionBox(
+                box = combinedBox ?: watchEditorSelectionBox(
                     geometries[selectedGeometryIndex],
                     matrices[selectedGeometryIndex],
                 ),
                 modifier = Modifier.fillMaxSize(),
                 designExtentWidth = designExtentWidth,
                 designExtentHeight = designExtentHeight,
+                showHandles = !multiSelectMode && !ambientMode,
             )
         }
         loadError?.let { message ->
@@ -4395,6 +4735,7 @@ private fun EditorSelectionOverlay(
     modifier: Modifier = Modifier,
     designExtentWidth: Float = WatchmakerGeometry.DESIGN_SIZE,
     designExtentHeight: Float = WatchmakerGeometry.DESIGN_SIZE,
+    showHandles: Boolean = true,
 ) {
     Canvas(modifier = modifier) {
         // 必须和手势用同一个 mapping：一边等比中心反投、一边单轴按宽换算，
@@ -4419,6 +4760,8 @@ private fun EditorSelectionOverlay(
         drawLine(EDITOR_SELECTION_STROKE_COLOR, topRight, bottomRight, strokeWidth)
         drawLine(EDITOR_SELECTION_STROKE_COLOR, bottomRight, bottomLeft, strokeWidth)
         drawLine(EDITOR_SELECTION_STROKE_COLOR, bottomLeft, topLeft, strokeWidth)
+
+        if (!showHandles) return@Canvas
 
         val rotationOffsetDesign =
             mapping.designLength(EDITOR_ROTATION_HANDLE_OFFSET_DP.dp.toPx())
@@ -4822,9 +5165,11 @@ private fun EditorLayerRow(
     avoidanceOffsetY: Float,
     onSelect: () -> Unit,
     onToggleExpanded: () -> Unit,
-    onMove: (Int) -> Unit,
+    onMoveStep: (Int) -> Unit,
     onDuplicate: () -> Unit,
     onDelete: () -> Unit,
+    canMoveUp: Boolean = layer.order > 0,
+    canMoveDown: Boolean = layer.order < layerCount - 1,
 ) {
     val localizedLayerType = watchEditorLayerTypeLabel(layer.type)
     val container = if (selected) {
@@ -4939,8 +5284,8 @@ private fun EditorLayerRow(
         }
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
             IconButton(
-                onClick = { onMove(layer.order - 1) },
-                enabled = enabled && layer.order > 0,
+                onClick = { onMoveStep(-1) },
+                enabled = enabled && canMoveUp,
                 modifier = Modifier.size(48.dp),
             ) {
                 Icon(
@@ -4949,8 +5294,8 @@ private fun EditorLayerRow(
                 )
             }
             IconButton(
-                onClick = { onMove(layer.order + 1) },
-                enabled = enabled && layer.order < layerCount - 1,
+                onClick = { onMoveStep(1) },
+                enabled = enabled && canMoveDown,
                 modifier = Modifier.size(48.dp),
             ) {
                 Icon(
@@ -5022,6 +5367,8 @@ private fun EditorLongPressImportButton(
 @Composable
 private fun LayerPropertiesEditor(
     layer: WatchEditorLayer,
+    formatVersion: WatchFormatVersion,
+    audioOptions: List<String>,
     draftResetKey: Int,
     enabled: Boolean,
     onLiveChange: (Map<String, String?>) -> Unit,
@@ -5038,7 +5385,9 @@ private fun LayerPropertiesEditor(
     onImportBitmapFontLong: (() -> Unit)? = null,
 ) {
     val localizedLayerType = watchEditorLayerTypeLabel(layer.type)
-    val editableAttributes = remember(layer.type) { editableAttributesFor(layer.type) }
+    val editableAttributes = remember(layer.type, formatVersion) {
+        editableAttributesFor(layer.type).filterNot { formatVersion == WatchFormatVersion.V2 && it == "color_dim" }
+    }
     // Drafts survive live applies (draftResetKey stays put) but reset whenever
     // the attributes change from the outside: undo, canvas drags, imports.
     var drafts by remember(layer.key, draftResetKey) {
@@ -5074,6 +5423,7 @@ private fun LayerPropertiesEditor(
             stringResource(R.string.watch_editor_layer_properties_fmt, localizedLayerType),
             fontWeight = FontWeight.SemiBold,
         )
+        if (formatVersion == WatchFormatVersion.V2) EditorAmbientProperties(layer, draftResetKey, enabled, onLiveChange)
         // 分组标题的去重游标。形状族一层能有二十多个属性，平铺一长条在 230dp
         // 圆屏上根本找不到东西，所以按「变换 / 几何 / 颜色 / 描边 / 阴影 / 着色器」分段。
         var lastSectionHeader: Int? = null
@@ -5293,6 +5643,7 @@ private fun LayerPropertiesEditor(
             }
             var showAppPicker by remember { mutableStateOf(false) }
             var showPresetPicker by remember { mutableStateOf(false) }
+            var showAudioPicker by remember { mutableStateOf(false) }
 
             fun applyAction(raw: String) {
                 tapActionText = TextFieldValue(raw, TextRange(raw.length))
@@ -5330,6 +5681,23 @@ private fun LayerPropertiesEditor(
                 )
             }
 
+            if (showAudioPicker) FlueAlertDialog(
+                onDismissRequest = { showAudioPicker = false },
+                title = { Text(stringResource(R.string.watch_editor_audio_action)) },
+                text = {
+                    Column(Modifier.heightIn(max = 260.dp).verticalScroll(rememberScrollState())) {
+                        if (audioOptions.isEmpty()) Text(stringResource(R.string.watch_editor_audio_empty))
+                        audioOptions.forEach { path ->
+                            TextButton(onClick = {
+                                applyAction(watchEditorAudioTapAction(path))
+                                showAudioPicker = false
+                            }) { Text(path.substringAfterLast('/')) }
+                        }
+                    }
+                },
+                confirmButton = { TextButton(onClick = { showAudioPicker = false }) { Text(stringResource(R.string.watch_editor_back)) } },
+            )
+
             Surface(
                 color = MaterialTheme.colorScheme.surfaceVariant,
                 shape = RoundedCornerShape(10.dp),
@@ -5344,6 +5712,9 @@ private fun LayerPropertiesEditor(
                         stringResource(R.string.watch_editor_tap_action),
                         style = MaterialTheme.typography.labelMedium,
                     )
+                    OutlinedButton(onClick = { showAudioPicker = true }, enabled = enabled) {
+                        Text(stringResource(R.string.watch_editor_audio_action))
+                    }
                     OutlinedTextField(
                         value = tapActionText,
                         onValueChange = { v ->
@@ -6587,6 +6958,8 @@ internal fun attributeLabelRes(layerType: String, name: String): Int = when (nam
     "delay_start" -> R.string.watch_editor_attribute_start_delay
     "repeat_count" -> R.string.watch_editor_attribute_repeat_count
     "restart_on_load" -> R.string.watch_editor_attribute_restart_on_load
+    "restart_on_bright" -> R.string.watch_editor_attribute_restart_on_bright
+    "color_dim" -> R.string.watch_editor_attribute_color_dim
     else -> R.string.watch_editor_attribute_unknown
 }
 
@@ -7008,6 +7381,8 @@ private val EDITABLE_ATTRIBUTES = listOf(
     "text",
     "text_size",
     "color",
+    "color_dim",
+    "display",
     "path",
 )
 
@@ -7021,6 +7396,7 @@ private val TEXT_ANIMATION_ATTRIBUTES = listOf(
     "delay_start",
     "repeat_count",
     "restart_on_load",
+    "restart_on_bright",
 )
 
 /**
@@ -7108,7 +7484,7 @@ internal val RING_STYLE_ATTRIBUTES = listOf(
 )
 
 /** 走取色器的属性。这些位置不给表达式入口 —— 色块本身就是最快的输入方式。 */
-internal val COLOR_ATTRIBUTES = setOf("color", "color2", "color3", "color4", "o_color", "w_color")
+internal val COLOR_ATTRIBUTES = setOf("color", "color_dim", "color2", "color3", "color4", "o_color", "w_color")
 
 /**
  * 有固定取值表的属性名。这些位置的下拉槽位给枚举面板，不给表达式面板。
@@ -7117,6 +7493,8 @@ internal val COLOR_ATTRIBUTES = setOf("color", "color2", "color3", "color4", "o_
  * （`end_style` 在 `progress` 与 `ring` 上取值不同），而这里只需要「是不是枚举」。
  */
 internal val ENUM_ATTRIBUTE_NAMES = setOf(
+    "restart_on_load",
+    "restart_on_bright",
     "shape",
     "corner_type",
     "outline",
@@ -7164,7 +7542,7 @@ internal fun editableAttributesFor(type: String): List<String> = buildList {
         "progress" -> addAll(PROGRESS_STYLE_ATTRIBUTES)
         "ring" -> addAll(RING_STYLE_ATTRIBUTES)
     }
-}
+}.distinct()
 
 /**
  * 属性面板里 `path` 输入框的显示值：把任何约定目录前缀剥掉，只留「相对 `images/` 的路径」。
@@ -7210,6 +7588,10 @@ internal fun attributeEnumOptions(
     layerType: String,
     name: String,
 ): List<EditorEnumOption>? = when (name) {
+    "restart_on_load", "restart_on_bright" -> listOf(
+        EditorEnumOption("Y", labelRes = R.string.watch_editor_protocol_yes),
+        EditorEnumOption("N", labelRes = R.string.watch_editor_protocol_no),
+    )
     "anim_in", "anim_out" -> TEXT_ENTRY_ANIMATION_OPTIONS.map { (value, labelRes) ->
         EditorEnumOption(value, labelRes = labelRes)
     }

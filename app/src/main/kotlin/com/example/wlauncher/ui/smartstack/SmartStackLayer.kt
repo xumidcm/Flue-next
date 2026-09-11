@@ -1000,10 +1000,11 @@ fun SmartStackLayer(
     }
 }
 
-@OptIn(ExperimentalFoundationApi::class)
+@OptIn(ExperimentalFoundationApi::class, androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 @Composable
 fun WidgetPageLayer(
     apps: List<AppInfo>,
+    active: Boolean = true,
     sideScreenWidgetSlots: List<String?>,
     leftSafeInsetPercent: Int,
     glassHighlightEnabled: Boolean = true,
@@ -1068,6 +1069,37 @@ fun WidgetPageLayer(
         groupWidgetCardsIntoSections(previewCards ?: widgetCards)
     }
     val widgetCardCenters = remember { mutableStateMapOf<String, Offset>() }
+    val widgetHostOwner = remember { Any() }
+    val refreshLifecycle = androidx.lifecycle.compose.LocalLifecycleOwner.current
+    val refreshScope = rememberCoroutineScope()
+    var refreshFailed by remember { mutableStateOf(false) }
+    fun refreshProviders(force: Boolean = false) {
+        refreshScope.launch {
+            val listening = runCatching { repositories.widgetHostLifecycle.acquire(widgetHostOwner) }.isSuccess
+            val dispatched = withContext(kotlinx.coroutines.Dispatchers.IO) {
+                repositories.widgetRefreshCoordinator.refresh(widgetCards.map { it.widget }, force)
+            }
+            refreshFailed = !listening || !dispatched
+        }
+    }
+    DisposableEffect(active, refreshLifecycle, widgetCards) {
+        val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
+            if (active && event == androidx.lifecycle.Lifecycle.Event.ON_RESUME) {
+                refreshProviders()
+            }
+            if (event == androidx.lifecycle.Lifecycle.Event.ON_STOP) {
+                repositories.widgetHostLifecycle.release(widgetHostOwner)
+            }
+        }
+        refreshLifecycle.lifecycle.addObserver(observer)
+        if (active && refreshLifecycle.lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED)) {
+            refreshProviders()
+        }
+        onDispose {
+            refreshLifecycle.lifecycle.removeObserver(observer)
+            repositories.widgetHostLifecycle.release(widgetHostOwner)
+        }
+    }
     val widgetCardBounds = remember { mutableStateMapOf<String, Rect>() }
     var editMode by remember { mutableStateOf(false) }
     var showPicker by remember { mutableStateOf(false) }
@@ -1343,6 +1375,12 @@ fun WidgetPageLayer(
             .clip(flueOverlayMaskShape(overlayMaskCornerRadiusDp))
             .background(launcherStyle.screenBackground.copy(alpha = 0.62f))
     ) {
+        if (refreshFailed) {
+            androidx.compose.material3.TextButton(
+                onClick = { refreshProviders(force = true) },
+                modifier = Modifier.align(Alignment.TopCenter).zIndex(20f),
+            ) { Text(stringResource(R.string.widget_refresh_retry)) }
+        }
         val leftSafeInset = maxWidth * (leftSafeInsetPercent.coerceIn(0, 50) / 100f)
         val availableWidth = maxWidth - leftSafeInset
         val contentWidth = availableWidth * SIDE_SCREEN_CONTENT_WIDTH_RATIO
@@ -1820,12 +1858,17 @@ fun WidgetPageLayer(
                             textAlign = TextAlign.Center,
                             modifier = Modifier.fillMaxWidth(),
                         )
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        androidx.compose.foundation.layout.FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                             WidgetPageChip(
                                 label = stringResource(
                                     if (editMode) R.string.widget_done else R.string.widget_edit,
                                 ),
                                 onClick = { editMode = !editMode },
+                                enabled = widgetCards.isNotEmpty(),
+                            )
+                            WidgetPageChip(
+                                label = stringResource(R.string.widget_refresh),
+                                onClick = { refreshProviders(force = true) },
                                 enabled = widgetCards.isNotEmpty(),
                             )
                             WidgetPageChip(
@@ -1851,12 +1894,17 @@ fun WidgetPageLayer(
                             fontSize = 24.sp,
                             fontWeight = FontWeight.SemiBold,
                         )
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        androidx.compose.foundation.layout.FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                             WidgetPageChip(
                                 label = stringResource(
                                     if (editMode) R.string.widget_done else R.string.widget_edit,
                                 ),
                                 onClick = { editMode = !editMode },
+                                enabled = widgetCards.isNotEmpty(),
+                            )
+                            WidgetPageChip(
+                                label = stringResource(R.string.widget_refresh),
+                                onClick = { refreshProviders(force = true) },
                                 enabled = widgetCards.isNotEmpty(),
                             )
                             WidgetPageChip(

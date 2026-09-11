@@ -9,6 +9,15 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class AndroidWatchDataProviderPolicyTest {
+    @Test fun ambientKeepsStepCountingButUnregistersActiveMotionAndHeartSensors() {
+        assertTrue(watchSensorActiveInMode(Sensor.TYPE_STEP_COUNTER, true))
+        for (type in listOf(Sensor.TYPE_ACCELEROMETER, Sensor.TYPE_GYROSCOPE,
+            Sensor.TYPE_ROTATION_VECTOR, Sensor.TYPE_MAGNETIC_FIELD, Sensor.TYPE_HEART_RATE)) {
+            assertFalse(watchSensorActiveInMode(type, true))
+            assertTrue(watchSensorActiveInMode(type, false))
+        }
+    }
+
     @Test
     fun accelerometerIsRegisteredAlongsideGyroscopeForTiltFaces() {
         assertEquals(

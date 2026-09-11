@@ -89,7 +89,7 @@ data class NativeAppListConfig(
     val iconShape: NativeAppListIconShape = NativeAppListIconShape.CIRCLE,
     val iconCornerRadiusPx: Float = 0f,
     val honeycombCellSizePx: Float = 0f,
-    val honeycombNarrowColumns: Int = 4,
+    val honeycombNarrowColumns: Int = 3,
     val honeycombFisheyeRangeRows: Int = 4,
     /** MD3 密集蜂窝顶部鱼眼开关；默认关闭，底部鱼眼仍由 [fisheyeEnabled] 控制。 */
     val honeycombTopFisheyeEnabled: Boolean = false,
@@ -120,7 +120,7 @@ data class NativeAppListConfig(
      * 让格子跟着图标走的话，列数一多就再也铺不满屏。
      */
     val ringCellSizePx: Float = 0f,
-    val denseGridColumns: Int = 5,
+    val denseGridColumns: Int = 3,
     val denseGridHorizontalPaddingPx: Float = 8f,
     val denseGridItemSpacingPx: Float = 4f,
     val denseGridItemAspectRatio: Float = 0.92f,

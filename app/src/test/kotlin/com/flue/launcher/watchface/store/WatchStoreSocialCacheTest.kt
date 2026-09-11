@@ -9,6 +9,35 @@ import org.junit.Test
 class WatchStoreSocialCacheTest {
 
     @Test
+    fun `local read actions update the polling cache without contaminating another account`() = runBlocking {
+        val counter = WatchStoreUnreadCounter(fetch = { 7 })
+        counter.count("one", nowMs = 0)
+        counter.updateCount("one", 3, nowMs = 1)
+        assertEquals(3, counter.count("one", nowMs = 2))
+        counter.count("two", nowMs = 3)
+        counter.updateCount("one", 0, nowMs = 4)
+        assertEquals(7, counter.count("two", nowMs = 5))
+    }
+
+    @Test
+    fun `forced foreground refresh bypasses throttle and failed refresh preserves count`() = runBlocking {
+        var value = 2
+        val counter = WatchStoreUnreadCounter(fetch = { if (value < 0) error("offline") else value })
+        assertEquals(2, counter.count("one", nowMs = 0))
+        value = 5
+        assertEquals(5, counter.count("one", nowMs = 1, force = true))
+        value = -1
+        assertEquals(5, counter.count("one", nowMs = 2, force = true))
+    }
+
+    @Test
+    fun `changing account bypasses the previous accounts throttle and count`() = runBlocking {
+        val counter = WatchStoreUnreadCounter(fetch = { if (it == "first") 7 else 2 })
+        assertEquals(7, counter.count("first", nowMs = 0L))
+        assertEquals(2, counter.count("second", nowMs = 1L))
+    }
+
+    @Test
     fun `flags are cached inside the ttl and refetched after it`() = runBlocking {
         var calls = 0
         val cache = WatchStoreFeatureFlagCache(

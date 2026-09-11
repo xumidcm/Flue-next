@@ -79,11 +79,23 @@ class WatchStoreUnreadCounter(
     private val mutex = Mutex()
     private var lastCount: Int = 0
     private var lastFetchedAtMs: Long = Long.MIN_VALUE
+    private var accountToken: String? = null
 
-    suspend fun count(token: String, nowMs: Long = System.currentTimeMillis()): Int =
+    suspend fun count(token: String, nowMs: Long = System.currentTimeMillis(), force: Boolean = false): Int =
         mutex.withLock {
-            if (nowMs - lastFetchedAtMs in 0 until throttleMs) return@withLock lastCount
-            val loaded = runCatching { fetch(token) }.getOrNull()
+            if (accountToken != token) {
+                accountToken = token
+                lastCount = 0
+                lastFetchedAtMs = Long.MIN_VALUE
+            }
+            if (!force && nowMs - lastFetchedAtMs in 0 until throttleMs) return@withLock lastCount
+            val loaded = try {
+                fetch(token)
+            } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                null
+            }
             if (loaded != null) {
                 // 只有请求真的成功才推进时间戳：失败也推进的话，一次网络抖动会让红点
                 // 静默停摆整个节流窗口。
@@ -99,16 +111,29 @@ class WatchStoreUnreadCounter(
         lastFetchedAtMs = nowMs
     }
 
+    /** Reconcile a notification-page action after an older in-flight poll finishes. */
+    suspend fun updateCount(token: String, count: Int, nowMs: Long = System.currentTimeMillis()) = mutex.withLock {
+        if (accountToken == token) {
+            lastCount = count.coerceAtLeast(0)
+            lastFetchedAtMs = nowMs
+        }
+    }
+
     /** 退出登录：清掉计数与节流窗口，换号之后第一次问就该真发请求。 */
     suspend fun reset() = mutex.withLock {
         lastCount = 0
         lastFetchedAtMs = Long.MIN_VALUE
+        accountToken = null
     }
 
     companion object {
         const val DEFAULT_THROTTLE_MS: Long = 30L * 1_000L
 
         fun of(api: HttpWatchStoreApi, throttleMs: Long = DEFAULT_THROTTLE_MS): WatchStoreUnreadCounter =
-            WatchStoreUnreadCounter(fetch = { token -> api.getUnreadNotificationCount(token) }, throttleMs = throttleMs)
+            WatchStoreUnreadCounter(fetch = { token ->
+                kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                    api.getUnreadNotificationCount(token)
+                }
+            }, throttleMs = throttleMs)
     }
 }

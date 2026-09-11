@@ -216,7 +216,10 @@ class WatchFaceCatalogTest {
         val edited = catalog.detachEditedMarketInstall(launcherId)
 
         assertNull(edited.findMarketInstall(STORE_ID, "wf-edited"))
-        assertTrue(edited.records.isEmpty())
+        assertEquals(1, edited.records.size)
+        assertTrue(edited.records.single().source is WatchFaceInstallSource.LocalImport)
+        assertEquals(launcherId, edited.records.single().activeLauncherId)
+        assertTrue(edited.records.single().logicalId.startsWith("local:"))
     }
 
     @Test

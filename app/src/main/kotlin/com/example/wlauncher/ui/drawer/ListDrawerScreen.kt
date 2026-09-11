@@ -91,7 +91,7 @@ import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.math.abs
 private const val LIST_MENU_TRIGGER_MS = 620L
 private const val LIST_MENU_DRAG_START_DP = 20f
-private const val LIST_FOLDER_HOVER_MS = 500L
+private const val LIST_FOLDER_HOVER_MS = 400L
 private const val LIST_FOLDER_HOVER_MAX_SPEED_DP_PER_MS = 0.55f
 private const val LIST_AUTO_SCROLL_EDGE_DP = 84f
 private const val LIST_AUTO_SCROLL_MAX_PX = 30f
@@ -565,21 +565,11 @@ fun ListDrawerScreen(
                             dragOffsetY = 0f
                             dragPointerY = Float.NaN
                             glidePressedIndex = null
-                            if (droppedApp != null) {
-                                settlingApp = droppedApp
-                                settlingKey = droppedApp.componentKey
-                                scope.launch {
-                                    settlingCenterY.snapTo(releaseCenter)
-                                    settlingCenterY.animateTo(targetCenter, tween(durationMillis = 170))
-                                    onReorder(reorderCommand)
-                                    delay(48)
-                                    settlingApp = null
-                                    settlingKey = null
-                                    settlingCenterY.snapTo(0f)
-                                }
-                            } else {
-                                onReorder(reorderCommand)
-                            }
+                            // 重排提交后直接交给列表稳定槽位，删除拖动图标的归位回弹，
+                            // 避免 overlay 与行重排不同步造成闪回和邻居冻结。
+                            settlingApp = null
+                            settlingKey = null
+                            onReorder(reorderCommand)
                         } else {
                             dragFromIndex = null
                             dragCurrentIndex = null

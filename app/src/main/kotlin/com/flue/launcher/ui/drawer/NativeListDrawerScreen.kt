@@ -170,7 +170,7 @@ fun NativeListDrawerScreen(
     /**
      * 网格布局圆图标底下那块底板要不要画。见 [NativeListDrawerConfigRequest.gridIconPlateEnabled]。
      */
-    gridIconPlateEnabled: Boolean = true,
+    gridIconPlateEnabled: Boolean = false,
     allowFolderCreation: Boolean = false,
     /**
      * 屏幕右侧的滑动进度指示器。四种（以及以后新增的）列表样式共用一条，
@@ -178,7 +178,7 @@ fun NativeListDrawerScreen(
      */
     scrollIndicatorEnabled: Boolean = true,
     presentation: NativeAppListPresentation = NativeAppListPresentation.LINEAR,
-    honeycombNarrowColumns: Int = 4,
+    honeycombNarrowColumns: Int = 3,
     /** 心流月牙鼓出量，占内容宽度的百分比（0 = 不鼓，心流退化成规则网格）。 */
     flowCrescentBulgePercent: Int = 0,
     /** 心流月牙朝右（true）还是朝左。 */
@@ -455,7 +455,7 @@ internal data class NativeListDrawerConfigRequest(
      * 以前这里没有开关：网格布局是**无条件**吃 `rowBackgroundArgb` 的（`rowBorderEnabled ||
      * presentation == DENSE_GRID`），行边框开关只管线性布局，网格没有任何入口能关掉底板。
      */
-    val gridIconPlateEnabled: Boolean = true,
+    val gridIconPlateEnabled: Boolean = false,
     val allowFolderCreation: Boolean,
     /** 见 [NativeAppListConfig.scrollIndicatorEnabled]。默认开。 */
     val scrollIndicatorEnabled: Boolean = true,

@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="aod_title">常亮显示（AOD）</string>
+    <string name="aod_description">闲置后降低亮度，切换表盘的 Ambient 内容，并暂停视频与动态传感器。</string>
+    <string name="aod_enabled">启用常亮显示</string>
+    <string name="aod_charging">充电时始终启用</string>
+    <string name="aod_timeout">进入等待时间</string>
+    <string name="aod_brightness">常亮亮度</string>
+    <string name="aod_reawaken">熄屏后重新唤醒</string>
+    <string name="aod_lock">锁定手势</string>
+    <string name="aod_lock_delay">手势锁延迟</string>
+    <string name="aod_shallow">浅睡：轻触恢复亮度</string>
+    <string name="aod_power_exit">电源键退出锁定常亮</string>
+    <string name="aod_unlock_hint">锁定后双击解锁；唤醒触摸不会触发表盘操作。</string>
+    <string name="aod_permission_granted">已允许悬浮显示，可在系统支持时从其他应用返回表盘。</string>
+    <string name="aod_permission_description">从其他应用熄屏后返回表盘需要悬浮显示权限；未授权时保留前台常亮。</string>
+    <string name="aod_permission_action">授予悬浮显示权限</string>
+</resources>

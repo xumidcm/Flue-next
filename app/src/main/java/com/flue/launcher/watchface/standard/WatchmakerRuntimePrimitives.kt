@@ -1018,6 +1018,8 @@ sealed interface WatchTapAction {
     /** Execute inside the loaded face's shared CloX-compatible Lua sandbox. */
     data class Script(val source: String) : WatchTapAction
 
+    data class PlaySound(val name: String) : WatchTapAction
+
     /**
      * w_app:com.example.pkg/.MainActivity 或 m_app:com.example.pkg
      * 或 WatchMaker 社区格式 w_app:label`pkg`activity（backtick 分隔）。
@@ -1068,6 +1070,11 @@ object WatchTapActionParser {
             } else {
                 WatchTapAction.SetAlarm(hour = hour, minute = minute)
             }
+        }
+        if (lower.startsWith("play_sound:")) {
+            val name = value.substringAfter(':').trim()
+            return if (watchSoundAssetCandidates(name).isNotEmpty()) WatchTapAction.PlaySound(name)
+                else WatchTapAction.Unsupported("invalid sound name")
         }
         if (lower.isBlank()) return WatchTapAction.Unsupported("empty tap action")
         if (lower.startsWith("script:")) {
@@ -1240,4 +1247,14 @@ fun selectWatchColor(
         index = nextIndex,
         color = if (nextIndex == 0) normalizedDefault else WATCH_COLOR_SWITCH_PALETTE[nextIndex - 1],
     )
+}
+
+/** A sound action names a file in sfx, never a URL or arbitrary filesystem path. */
+fun watchSoundAssetCandidates(name: String): List<String> {
+    val value = name.trim()
+    if (value.isEmpty() || value.length > 160 || value.contains("..") ||
+        value.any { it == '/' || it == '\\' || it == ':' || it.isISOControl() }) return emptyList()
+    val extensions = listOf("mp3", "ogg", "wav", "m4a", "aac", "flac")
+    val extension = value.substringAfterLast('.', "").lowercase(java.util.Locale.ROOT)
+    return if (extension in extensions) listOf("sfx/$value") else extensions.map { "sfx/$value.$it" }
 }

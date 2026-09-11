@@ -173,7 +173,16 @@ internal fun AppleSwitch(
                         while (!owned && !abandoned) {
                             val event = awaitPointerEvent()
                             val change = event.changes.firstOrNull { it.id == down.id }
-                            if (change == null || !change.pressed) break
+                            if (change == null) {
+                                abandoned = true
+                                break
+                            }
+                            if (!change.pressed) {
+                                // Own a completed tap's UP, otherwise the clickable row also
+                                // toggles and immediately undoes the switch's new value.
+                                if (change.isConsumed) abandoned = true else change.consume()
+                                break
+                            }
                             // 别人（父级滚动）已经把它消费了：这串不归我们。
                             if (change.isConsumed) {
                                 abandoned = true
@@ -206,7 +215,7 @@ internal fun AppleSwitch(
                                     (if (travelPx == 0f) 0f else total / travelPx),
                                 velocityPxPerSecond = tracker.calculateVelocity().x,
                             )
-                            drag(down.id) { change: PointerInputChange ->
+                            val released = drag(down.id) { change: PointerInputChange ->
                                 tracker.addPointerInputChange(change)
                                 total += change.positionChange().x
                                 change.consume()
@@ -216,6 +225,11 @@ internal fun AppleSwitch(
                                         (if (travelPx == 0f) 0f else total / travelPx),
                                     velocityPxPerSecond = tracker.calculateVelocity().x,
                                 )
+                            }
+                            if (!released) {
+                                state.cancelPress(scope)
+                                completed = true
+                                return@awaitEachGesture
                             }
                         }
                         val target = if (owned && FlueDampedDrag.isDrag(total)) {

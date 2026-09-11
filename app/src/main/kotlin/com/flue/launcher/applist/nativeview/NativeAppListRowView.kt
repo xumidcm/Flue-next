@@ -921,8 +921,10 @@ internal class NativeAppListRowView(
         rowBounds.set(
             rowLeft,
             0f,
-            // 行底色 / 描边同样退到指示器左边：底色画到屏幕最右会从指示器底下透出来一角。
-            (width.toFloat() - config.rightSafeInsetPx).coerceAtLeast(rowLeft),
+            // 只有线性列表需要给右侧滚动指示器让位；网格底板必须铺满整个图标格。
+            (width.toFloat() - if (
+                config.presentation == NativeAppListPresentation.LINEAR
+            ) config.rightSafeInsetPx.toFloat() else 0f).coerceAtLeast(rowLeft),
             height.toFloat(),
         )
 

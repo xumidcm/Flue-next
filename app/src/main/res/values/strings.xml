@@ -91,7 +91,7 @@
     <string name="settings_transition_motion_slide">平移动画</string>
     <string name="settings_transition_motion_slide_sub">列表横向移出，缩放很轻</string>
     <string name="search_d_transition_motion">切换平移或缩放的转场动画，与界面风格无关</string>
-    <string name="settings_ui_aw">watchOS 风格</string>
+    <string name="settings_ui_aw">WatchOS 风格</string>
     <string name="settings_ui_aw_sub">玻璃质感、紧凑卡片、圆形承载与更轻巧的缩放动效</string>
     <string name="settings_ui_md3">Material 3 风格</string>
     <string name="settings_ui_md3_sub">大色块平铺、MD3E 图形、分层更明确的首页与列表</string>
@@ -110,7 +110,7 @@
     <string name="settings_visual_effects_header">视觉效果</string>
     <string name="settings_blur">高级材质</string>
     <string name="settings_blur_sub">建议 Android 12+ 设备开启</string>
-    <string name="settings_edge_blur">边缘模糊（实验性）</string>
+    <string name="settings_edge_blur">边缘模糊</string>
     <string name="settings_edge_blur_sub">在顶部和底部边缘增加模糊，可能带来少量问题</string>
     <string name="settings_edge_blur_radius">边缘模糊半径</string>
     <string name="settings_direct_launch">打开 Flue 直接进入应用列表</string>
@@ -253,7 +253,7 @@
     <string name="settings_face_shrink">表盘收缩动画</string>
     <string name="settings_face_shrink_sub">关闭后返回表盘、拉出负一屏 / 小组件 / 控制中心都不再整体缩放</string>
     <string name="settings_legacy_transition">还原老转场动画</string>
-    <string name="settings_legacy_transition_sub">使用 watchOS 三段式之前的老动画：表盘放大冲脸进入应用列表</string>
+    <string name="settings_legacy_transition_sub">使用 WatchOS 三段式之前的老动画：表盘放大冲脸进入应用列表</string>
     <string name="settings_stagger_entry">甩尾入场动画</string>
     <string name="settings_stagger_entry_sub">进入应用列表时第一行先入屏，下面的行逐行跟进</string>
     <string name="settings_reduce_motion">减弱动态效果</string>
@@ -339,7 +339,7 @@
     <string name="search_d_row_bg">列表行底色</string>
     <string name="search_d_performance">动画开关与图标质量</string>
     <string name="search_d_stagger">逐行错峰进入</string>
-    <string name="search_d_legacy">watchOS 三段式之前的老动画</string>
+    <string name="search_d_legacy">WatchOS 三段式之前的老动画</string>
     <string name="search_d_app_list_shrink">返回时整体缩放</string>
     <string name="search_d_icon_float">从应用退回重播上浮入场</string>
     <string name="search_d_face_shrink">返回表盘与拉出覆层时的整体缩放</string>
@@ -838,7 +838,7 @@
     <string name="watch_editor_export_mode_title">选择导出方式</string>
     <string name="watch_editor_export_mode_message">受保护导出兼容 WFTools 和 WatchMaker。</string>
     <string name="watch_editor_export_plain">普通导出</string>
-    <string name="watch_editor_export_protected">加密导出（实验性）</string>
+    <string name="watch_editor_export_protected">加密导出</string>
     <string name="watch_editor_status_importing_font">正在导入字体</string>
     <string name="watch_editor_error_read_font">无法读取所选字体</string>
     <string name="watch_editor_error_font_import">字体导入失败</string>

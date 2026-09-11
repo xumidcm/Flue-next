@@ -199,6 +199,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
          * 拖了就生效），所以整库都要落盘，不能只存自定义那几份。
          */
         val KEY_LAYOUT_PROFILES = stringPreferencesKey("layout_profiles")
+        private val KEY_FLOW_SPACING_DISABLED = booleanPreferencesKey("flow_spacing_disabled_v1")
         /** 每种布局当前选中的档案 id，JSON 对象：{"honeycomb":"preset:honeycomb", …}。 */
         val KEY_ACTIVE_LAYOUT_PROFILE_IDS = stringPreferencesKey("active_layout_profile_ids")
         /**
@@ -258,6 +259,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         val KEY_ICON_PACK_PACKAGE = stringPreferencesKey("icon_pack_package")
         val KEY_SELECTED_WATCHFACE_ID = stringPreferencesKey("selected_watchface_id")
         val KEY_LAST_WATCHFACE_ERROR = stringPreferencesKey("last_watchface_error")
+        private val KEY_DEBUG_FORCE_MISSING_WATCHFACE = booleanPreferencesKey("debug_force_missing_watchface")
         val KEY_BUILTIN_PHOTO_PATH = stringPreferencesKey("builtin_photo_path")
         val KEY_BUILTIN_VIDEO_PATH = stringPreferencesKey("builtin_video_path")
         val KEY_PHOTO_CLOCK_POSITION = stringPreferencesKey("photo_clock_position")
@@ -520,9 +522,8 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     val appListWatchFaceColors: StateFlow<Boolean> = _appListWatchFaceColors.asStateFlow()
     private val _appListRowBorderEnabled = MutableStateFlow(false)
     val appListRowBorderEnabled: StateFlow<Boolean> = _appListRowBorderEnabled.asStateFlow()
-    // 默认 true = 保持网格布局一直以来的样子（圆图标底下那块底板）。
-    // 这个开关是新增的「能关掉」，不是新的默认外观，所以老用户升级后画面不变。
-    private val _appListGridIconPlateEnabled = MutableStateFlow(true)
+    // 新安装默认关闭；已有 DataStore 值仍按用户选择读取。
+    private val _appListGridIconPlateEnabled = MutableStateFlow(false)
     val appListGridIconPlateEnabled: StateFlow<Boolean> = _appListGridIconPlateEnabled.asStateFlow()
     private val _appListFoldersEnabled = MutableStateFlow(false)
     val appListFoldersEnabled: StateFlow<Boolean> = _appListFoldersEnabled.asStateFlow()
@@ -660,6 +661,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
 
     private val _selectedWatchFaceId = MutableStateFlow(BUILT_IN_WATCHFACE_ID)
     val selectedWatchFaceId: StateFlow<String> = _selectedWatchFaceId.asStateFlow()
+    private var debugForceMissingWatchFace: Boolean = false
 
     private val _selectedWatchFace = MutableStateFlow(
         WatchFaceDescriptors.builtInDescriptor(application, BUILT_IN_WATCHFACE_ID),
@@ -991,7 +993,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                 val devicePresetApplied = prefs[KEY_DEVICE_PRESET_APPLIED] ?: false
                 val shouldApplyDevicePreset = !devicePresetApplied && isXiaomi17ProSeriesDevice()
                 val hasSavedHoneycombCols = prefs[KEY_HONEYCOMB_COLS] != null
-                val honeycombColsDefault = if (shouldApplyDevicePreset && !hasSavedHoneycombCols) 2 else 3
+                val honeycombColsDefault = 3
 
                 val loadedHoneycombCols = (prefs[KEY_HONEYCOMB_COLS] ?: honeycombColsDefault).coerceIn(1, 5)
                 if (_honeycombCols.value != loadedHoneycombCols) _honeycombCols.value = loadedHoneycombCols
@@ -1058,9 +1060,10 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                 activeLayoutProfileIds =
                     decodeActiveLayoutProfileIds(prefs[KEY_ACTIVE_LAYOUT_PROFILE_IDS])
                 applyActiveLayoutProfile()
-                if (storedLayoutProfiles == null) {
+                if (storedLayoutProfiles == null || prefs[KEY_FLOW_SPACING_DISABLED] != true) {
                     // 迁移结果立刻落盘，否则每次冷启动都要重算一遍迁移。
                     persistLayoutProfiles(loadedLayoutProfiles)
+                    persist { store.edit { it[KEY_FLOW_SPACING_DISABLED] = true } }
                 }
 
                 val loadedAppListBackground =
@@ -1091,8 +1094,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                     _appListRowBorderEnabled.value = loadedAppListRowBorder
                 }
 
-                // 缺键按 true 读：这块底板在开关存在之前就一直画着，缺省值必须复现旧行为。
-                val loadedAppListGridIconPlate = prefs[KEY_APP_LIST_GRID_ICON_PLATE] ?: true
+                val loadedAppListGridIconPlate = prefs[KEY_APP_LIST_GRID_ICON_PLATE] ?: false
                 if (_appListGridIconPlateEnabled.value != loadedAppListGridIconPlate) {
                     _appListGridIconPlateEnabled.value = loadedAppListGridIconPlate
                 }
@@ -1317,9 +1319,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
 
                 if (!devicePresetApplied) {
                     store.edit {
-                        if (shouldApplyDevicePreset && !hasSavedHoneycombCols) {
-                            it[KEY_HONEYCOMB_COLS] = 2
-                        }
+                        // 未保存列数的新安装统一使用 3；已有值保持不变。
                         if (shouldApplyDevicePreset && !hasSavedLeftSafeInset) {
                             it[KEY_APP_LIST_LEFT_SAFE_INSET_PERCENT] = 20
                         }
@@ -1347,6 +1347,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
 
                 val loadedWatchFaceId = prefs[KEY_SELECTED_WATCHFACE_ID] ?: BUILT_IN_WATCHFACE_ID
                 if (_selectedWatchFaceId.value != loadedWatchFaceId) _selectedWatchFaceId.value = loadedWatchFaceId
+                debugForceMissingWatchFace = prefs[KEY_DEBUG_FORCE_MISSING_WATCHFACE] ?: false
 
                 val loadedWatchFaceError = prefs[KEY_LAST_WATCHFACE_ERROR]
                 if (_watchFaceLastError.value != loadedWatchFaceError) _watchFaceLastError.value = loadedWatchFaceError
@@ -1768,6 +1769,18 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
             return
         }
         resolveHomeIntent()
+    }
+
+    fun onLauncherAodForeground() {
+        cancelPendingReturnResolution()
+        launchJob?.cancel()
+        launchJob = null
+        externalLaunchTracker.finishWithoutReturnAnimation()
+        publishExternalLaunchState()
+        _currentApp.value = null
+        _currentLaunchIcon.value = null
+        _revealedNotificationTarget.value = null
+        _screenState.value = ScreenState.Face
     }
 
     private fun resolveHomeIntent() {
@@ -3179,7 +3192,11 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
             watchFaceRefreshJob?.cancel()
             require(archive.isFile) { "市场下载的 .watch 文件不存在" }
             val descriptor = withContext(Dispatchers.IO) {
-                val imported = WatchmakerWatchFaceStorage.importArchiveFile(getApplication(), archive)
+                val imported = WatchmakerWatchFaceStorage.importArchiveFile(
+                    getApplication(),
+                    archive,
+                    forceNewInstall = true,
+                )
                 WatchEditorSession.open(getApplication(), imported).use { editor ->
                     editor.updateRootAttribute("shape", if (installAsRound) "R" else "S")
                     editor.saveCurrentRevision()
@@ -3317,6 +3334,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     }
 
     fun selectWatchFace(id: String) {
+        debugForceMissingWatchFace = false
         _selectedWatchFaceId.value = id
         _watchFaceLastError.value = null
         if (isImportedArchiveId(id) && _availableWatchFaces.value.none { it.id == id }) {
@@ -3328,6 +3346,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                 store.edit {
                     it[KEY_SELECTED_WATCHFACE_ID] = _selectedWatchFaceId.value
                     it.remove(KEY_LAST_WATCHFACE_ERROR)
+                    it.remove(KEY_DEBUG_FORCE_MISSING_WATCHFACE)
                 }
             }
             return
@@ -3338,6 +3357,27 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
             store.edit {
                 it[KEY_SELECTED_WATCHFACE_ID] = id
                 it.remove(KEY_LAST_WATCHFACE_ERROR)
+                it.remove(KEY_DEBUG_FORCE_MISSING_WATCHFACE)
+            }
+        }
+    }
+
+    /** Debug-only hook: intentionally keeps selection unresolved so the loading fallback can be tested. */
+    fun selectMissingWatchFaceForDebug() {
+        val missingId = "watchmaker:debug-missing"
+        _selectedWatchFaceId.value = missingId
+        _selectedWatchFace.value = WatchFaceDescriptor(
+            id = missingId,
+            type = com.flue.launcher.watchface.WatchFaceType.WATCHMAKER,
+            displayName = "Debug missing watch face",
+        )
+        _watchFaceLastError.value = null
+        _watchFaceSelectionReady.value = false
+        debugForceMissingWatchFace = true
+        persist {
+            store.edit {
+                it[KEY_SELECTED_WATCHFACE_ID] = missingId
+                it[KEY_DEBUG_FORCE_MISSING_WATCHFACE] = true
             }
         }
     }
@@ -3356,12 +3396,14 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     }
 
     fun fallbackToBuiltIn(error: String? = null) {
+        debugForceMissingWatchFace = false
         _selectedWatchFaceId.value = BUILT_IN_WATCHFACE_ID
         _watchFaceLastError.value = error
         syncSelectedWatchFace()
         persist {
             store.edit {
                 it[KEY_SELECTED_WATCHFACE_ID] = BUILT_IN_WATCHFACE_ID
+                it.remove(KEY_DEBUG_FORCE_MISSING_WATCHFACE)
                 if (error.isNullOrBlank()) {
                     it.remove(KEY_LAST_WATCHFACE_ERROR)
                 } else {
@@ -3379,12 +3421,14 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
      * 表盘并重启」按钮必须用这条，否则重启完还是卡在同一个地方。
      */
     suspend fun fallbackToBuiltInAndAwaitPersist(error: String? = null) {
+        debugForceMissingWatchFace = false
         _selectedWatchFaceId.value = BUILT_IN_WATCHFACE_ID
         _watchFaceLastError.value = error
         syncSelectedWatchFace()
         withContext(Dispatchers.IO) {
             store.edit {
                 it[KEY_SELECTED_WATCHFACE_ID] = BUILT_IN_WATCHFACE_ID
+                it.remove(KEY_DEBUG_FORCE_MISSING_WATCHFACE)
                 if (error.isNullOrBlank()) {
                     it.remove(KEY_LAST_WATCHFACE_ERROR)
                 } else {
@@ -3842,7 +3886,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         _widgetGlassHighlightEnabled.value = true
         _appListWatchFaceColors.value = false
         _appListRowBorderEnabled.value = false
-        _appListGridIconPlateEnabled.value = true
+        _appListGridIconPlateEnabled.value = false
         _appListFoldersEnabled.value = false
         _appListScrollIndicatorEnabled.value = true
         _musicTextSwitchAnimation.value = MusicTextSwitchAnimations.DEFAULT_ID
@@ -3883,6 +3927,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         WatchDateLocale.override = null
         _hiddenApps.value = emptySet()
         _selectedIconPackPackage.value = null
+        debugForceMissingWatchFace = false
         _selectedWatchFaceId.value = BUILT_IN_WATCHFACE_ID
         _selectedWatchFace.value = WatchFaceDescriptors.builtInDescriptor(
             getApplication<Application>(),
@@ -4020,6 +4065,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                 it.remove(KEY_HIDDEN_APPS)
                 it.remove(KEY_ICON_PACK_PACKAGE)
                 it[KEY_SELECTED_WATCHFACE_ID] = BUILT_IN_WATCHFACE_ID
+                it.remove(KEY_DEBUG_FORCE_MISSING_WATCHFACE)
                 it[KEY_PHOTO_CLOCK_POSITION] = WatchClockPosition.CENTER.name
                 it[KEY_VIDEO_CLOCK_POSITION] = WatchClockPosition.CENTER.name
                 it[KEY_PHOTO_CLOCK_SIZE] = 64
@@ -4092,6 +4138,10 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         runCatching { WatchClockPosition.valueOf(value) }.getOrDefault(WatchClockPosition.CENTER)
 
     private fun syncSelectedWatchFace(freshScanCompleted: Boolean = false) {
+        if (debugForceMissingWatchFace) {
+            _watchFaceSelectionReady.value = false
+            return
+        }
         val requestedId = _selectedWatchFaceId.value.ifBlank { BUILT_IN_WATCHFACE_ID }
         val available = _availableWatchFaces.value
         val match = available.firstOrNull { it.id == requestedId }

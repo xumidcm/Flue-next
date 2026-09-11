@@ -5,6 +5,36 @@ import java.io.IOException
 import java.util.Locale
 import java.util.UUID
 
+/** Physical preview dimensions; these never enter watch.xml or design-canvas limits. */
+data class WatchEditorViewport(val width: Int, val height: Int) {
+    init { require(width > 0 && height > 0) }
+    val aspectRatio: Float get() = width.toFloat() / height
+    val label: String get() = "$width × $height"
+}
+
+/** Keep the extension so two sounds with the same stem remain distinguishable. */
+fun watchEditorAudioTapAction(resourcePath: String): String =
+    "play_sound:${resourcePath.replace('\\', '/').substringAfterLast('/')}"
+
+/** A selected parent carries its descendants for both row controls and drag reordering. */
+fun watchEditorLayerSelectionBlock(
+    layers: List<WatchEditorLayer>,
+    keys: Set<WatchEditorLayerKey>,
+): Set<WatchEditorLayerKey> {
+    val geometries = buildWatchEditorLayerGeometries(layers)
+    val block = keys.intersect(layers.map { it.key }.toSet()).toMutableSet()
+    geometries.forEach { geometry ->
+        var ancestor = geometry.parentIndex
+        val visited = mutableSetOf<Int>()
+        while (ancestor != null && visited.add(ancestor)) {
+            val parent = geometries.getOrNull(ancestor) ?: break
+            if (parent.key in keys) { block.add(geometry.key); break }
+            ancestor = parent.parentIndex
+        }
+    }
+    return block
+}
+
 /**
  * Hard limits shared by source copying, XML mutation and resource imports so
  * the editor cannot accidentally become an unbounded file-copy surface.
@@ -89,6 +119,8 @@ data class WatchEditorLayer(
      * `setEditorAnimatedImageLayer`）都必须用这个值，不能用 [order]。
      */
     val definitionIndex: Int = order,
+    /** Studio 2.0 overrides remain a child node in the source document. */
+    val ambientAttributes: Map<String, String> = emptyMap(),
 )
 
 /**
@@ -165,6 +197,7 @@ data class WatchEditorExportResult(
 enum class WatchEditorResourceKind {
     IMAGE,
     VIDEO,
+    AUDIO,
     /** 可被 `Typeface` 加载的矢量字体（ttf / otf）。 */
     FONT,
     /** 位图字体描述文件（`.fnt`）—— 是文本，出不了缩略图。 */
@@ -189,6 +222,7 @@ data class WatchEditorResourceEntry(
         get() = when (extension) {
             in IMAGE_EXTENSIONS -> WatchEditorResourceKind.IMAGE
             in VIDEO_EXTENSIONS -> WatchEditorResourceKind.VIDEO
+            in AUDIO_EXTENSIONS -> WatchEditorResourceKind.AUDIO
             in FONT_EXTENSIONS -> WatchEditorResourceKind.FONT
             "fnt" -> WatchEditorResourceKind.BITMAP_FONT
             in SCRIPT_EXTENSIONS -> WatchEditorResourceKind.SCRIPT
@@ -199,6 +233,7 @@ data class WatchEditorResourceEntry(
         // ppng 是受保护表盘里的加密孪生图，解不开也就出不了缩略图 —— 不列进 IMAGE。
         val IMAGE_EXTENSIONS = setOf("png", "jpg", "jpeg", "webp", "bmp", "gif")
         val VIDEO_EXTENSIONS = setOf("mp4", "m4v", "mov", "webm", "mkv", "3gp")
+        val AUDIO_EXTENSIONS = setOf("mp3", "ogg", "wav", "m4a", "aac", "flac")
         val FONT_EXTENSIONS = setOf("ttf", "otf")
         val SCRIPT_EXTENSIONS = setOf("txt", "lua")
     }

@@ -40,24 +40,40 @@ internal class NativeStableKeyItemAnimator(
         viewHolder: RecyclerView.ViewHolder,
         preLayoutInfo: ItemHolderInfo,
         postLayoutInfo: ItemHolderInfo?,
-    ): Boolean = false
+    ): Boolean {
+        endAnimation(viewHolder)
+        reset(viewHolder)
+        dispatchAnimationFinished(viewHolder)
+        return false
+    }
 
     override fun animateAppearance(
         viewHolder: RecyclerView.ViewHolder,
         preLayoutInfo: ItemHolderInfo?,
         postLayoutInfo: ItemHolderInfo,
-    ): Boolean = false
+    ): Boolean {
+        endAnimation(viewHolder)
+        reset(viewHolder)
+        dispatchAnimationFinished(viewHolder)
+        return false
+    }
 
     override fun animatePersistence(
         viewHolder: RecyclerView.ViewHolder,
         preLayoutInfo: ItemHolderInfo,
         postLayoutInfo: ItemHolderInfo,
     ): Boolean {
-        if (!shouldAnimateHolder(viewHolder)) return false
+        endAnimation(viewHolder)
+        if (!shouldAnimateHolder(viewHolder)) {
+            dispatchAnimationFinished(viewHolder)
+            return false
+        }
         val deltaX = (preLayoutInfo.left - postLayoutInfo.left).toFloat()
         val deltaY = (preLayoutInfo.top - postLayoutInfo.top).toFloat()
-        if (deltaX == 0f && deltaY == 0f) return false
-        endAnimation(viewHolder)
+        if (deltaX == 0f && deltaY == 0f) {
+            dispatchAnimationFinished(viewHolder)
+            return false
+        }
         setMoveTranslation(viewHolder, deltaX, deltaY)
         pendingMoves[viewHolder] = Move(viewHolder, deltaX, deltaY)
         return true
@@ -71,6 +87,12 @@ internal class NativeStableKeyItemAnimator(
     ): Boolean = if (oldHolder === newHolder) {
         animatePersistence(oldHolder, preLayoutInfo, postLayoutInfo)
     } else {
+        endAnimation(oldHolder)
+        endAnimation(newHolder)
+        reset(oldHolder)
+        reset(newHolder)
+        dispatchAnimationFinished(oldHolder)
+        dispatchAnimationFinished(newHolder)
         false
     }
 

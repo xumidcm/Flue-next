@@ -65,8 +65,16 @@ object WatchmakerWatchFaceStorage {
         }
     }
 
-    fun importArchiveFile(context: Context, archive: File): WatchFaceDescriptor {
-        val installed = WatchArchiveInstaller().install(archive, rootDirectory(context))
+    fun importArchiveFile(
+        context: Context,
+        archive: File,
+        forceNewInstall: Boolean = false,
+    ): WatchFaceDescriptor {
+        val installed = WatchArchiveInstaller().install(
+            archive,
+            rootDirectory(context),
+            forceNewInstall = forceNewInstall,
+        )
         return installed.toDescriptor()
     }
 

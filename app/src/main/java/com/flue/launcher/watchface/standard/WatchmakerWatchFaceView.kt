@@ -142,7 +142,7 @@ internal fun watchFaceNeedsLuaRuntime(
     return layers.any { layer ->
         WatchTapActionParser.parse(
             layer.attributes["tap_action"] ?: layer.attributes["action"],
-        ) is WatchTapAction.Script || layer.attributes.values.any { value ->
+        ) is WatchTapAction.Script || watchmakerLayerAttributeValues(layer).any { value ->
             EXTERNAL_DATA_REFERENCE.containsMatchIn(value)
         }
     }
@@ -210,8 +210,103 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
     private var renderReadyRefreshToken: Int? = null
     private var renderReadyDeadlineUptimeMs = 0L
     private var faceVisible = false
+    private val faceSoundPlayback = WatchFaceSoundPlayback(::faceSoundEligible)
+    private fun faceSoundEligible(): Boolean = !disposed && faceVisible && isAttachedToWindow &&
+        windowVisibility == VISIBLE && editorPreviewPlaying && !ambientRequested && physicalScreenInteractive
+    private fun releaseFaceSound() = faceSoundPlayback.stop()
+    private fun playFaceSound(name: String) {
+        if (!faceSoundEligible()) return
+        val prepared = source ?: return
+        val resolved = watchSoundAssetCandidates(name).firstNotNullOfOrNull { path ->
+            val key = normalizeRelativeAsset(prepared.watchDirectoryKey, path)
+            val asset = key?.let(prepared.exactFiles::get) ?: prepared.exactFiles[path.lowercase(Locale.ROOT)]
+            asset?.takeIf { it.file.canonicalFile.toPath().startsWith(prepared.root.canonicalFile.toPath()) }
+        } ?: return
+        faceSoundPlayback.play(resolved.file)
+    }
+    private var physicalScreenInteractive = true
+    private var screenReceiverRegistered = false
+    private val screenReceiver = object : android.content.BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) {
+            when (intent.action) {
+                Intent.ACTION_SCREEN_OFF -> {
+                    physicalScreenInteractive = false
+                    releaseFaceSound()
+                }
+                Intent.ACTION_SCREEN_ON -> {
+                    val becameBright = !physicalScreenInteractive
+                    physicalScreenInteractive = true
+                    if (becameBright && !ambientRequested) restartTextAnimation(WatchTextAnimationTrigger.BRIGHT)
+                }
+            }
+        }
+    }
+    private fun restartTextAnimation(trigger: WatchTextAnimationTrigger) {
+        textAnimationTrigger = trigger
+        textAnimationStartedAtUptimeMs = SystemClock.uptimeMillis()
+        textAnimationEpochs = textAnimationEpochs.triggered(trigger, textAnimationStartedAtUptimeMs)
+        if (trigger == WatchTextAnimationTrigger.BRIGHT) brightSinceUptimeMs = textAnimationStartedAtUptimeMs
+        cancelTicks()
+        scheduleTicks()
+        requestFullRepaint()
+    }
+    private var ambientMode = false
+    private var ambientRequested = false
+    private var ambientTransition: Runnable? = null
+    private var ambientTransitionDeadlineMs = 0L
+    private var brightSinceUptimeMs = SystemClock.uptimeMillis()
+    private val displayAttributeCache = java.util.IdentityHashMap<WatchmakerLayer, Map<String, String>>()
+    private fun displayAttributes(layer: WatchmakerLayer): Map<String, String> =
+        displayAttributeCache.getOrPut(layer) { watchmakerDisplayAttributes(layer, ambientMode) }
+
+    fun setAmbientMode(ambient: Boolean) {
+        if (disposed || ambientRequested == ambient) return
+        ambientRequested = ambient
+        if (ambient) releaseFaceSound()
+        ambientTransition?.let(::removeCallbacks)
+        ambientTransition = null
+        ambientTransitionDeadlineMs = 0L
+        notifyVideoPlayback()
+        val prepared = source
+        val exitDuration = if (ambient && !ambientMode && faceVisible && textExitAnimationEnabled &&
+            !editorAnimationPlaybackLimited && prepared != null) prepared.definition.layers
+                .filter { it.type.startsWith("text", true) && !it.attributes["anim_out"].isNullOrBlank() }
+                .maxOfOrNull { dynamicNumber(it.attributes["dur_out"], 0.5f, prepared).coerceIn(0f, 2f) * 1000 }
+                ?.toLong() ?: 0L else 0L
+        if (exitDuration > 0L) {
+            setTextExitAnimationActive(true)
+            val task = Runnable {
+                ambientTransition = null
+                if (!disposed && ambientRequested) applyAmbientMode(true)
+            }
+            ambientTransition = task
+            ambientTransitionDeadlineMs = SystemClock.uptimeMillis() + exitDuration
+            postDelayed(task, exitDuration)
+        } else applyAmbientMode(ambient)
+    }
+
+    private fun applyAmbientMode(ambient: Boolean) {
+        ambientTransitionDeadlineMs = 0L
+        ambientMode = ambient
+        displayAttributeCache.clear()
+        frameDataSnapshotAtMs = 0L
+        source?.recycleBakedSegments()
+        if (!ambient) {
+            brightSinceUptimeMs = SystemClock.uptimeMillis()
+            restartTextAnimation(WatchTextAnimationTrigger.BRIGHT)
+        }
+        setTextExitAnimationActive(false)
+        cancelTicks()
+        scheduleTicks()
+        requestFullRepaint()
+        frameGeometryListener?.invoke()
+    }
+
     private var textEntryAnimationEnabled = true
     private var textAnimationStartedAtUptimeMs = SystemClock.uptimeMillis()
+    private var textAnimationTrigger = WatchTextAnimationTrigger.LOAD
+    private var textAnimationEpochs = WatchTextAnimationEpochs()
+    private var borrowsTextAnimationEpochs = false
     private var textExitAnimationEnabled = true
     private var textExitAnimationActive = false
     private var textExitAnimationStartedAtUptimeMs = 0L
@@ -267,7 +362,10 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         frameDataSnapshotAtMs = nowMs
         frameTagResolutionCache.beginFrame(nowMs)
         frameDataSnapshot = runCatching { dataProvider.snapshot(nowMs) }
-            .getOrDefault(WatchDataSnapshot())
+            .getOrDefault(WatchDataSnapshot()).let { snapshot ->
+                snapshot.copy(brightMode = !ambientMode && snapshot.brightMode != false,
+                    millisSinceBright = if (ambientMode) null else SystemClock.uptimeMillis() - brightSinceUptimeMs)
+            }
     }
     /**
      * External-data writes arrive through a process-wide receiver, while this View may be
@@ -382,7 +480,7 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
     private var flattenBakeAssetMiss = false
 
     /** 编辑器正在实时改写某个图层的变换 —— 它可能落在某个烘焙段里。 */
-    private fun editorLiveTransformActive(): Boolean = liveTransformLayerIndex >= 0
+    private fun editorLiveTransformActive(): Boolean = liveTransformLayerIndex >= 0 || liveLayerTransforms.isNotEmpty()
 
     /**
      * 视频图层在 View 空间的最终变换，供宿主喂给 TextureView。
@@ -428,7 +526,7 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         for (scratchIndex in ancestorCount - 1 downTo 0) {
             val ancestorIndex = ancestorIndexScratch[scratchIndex]
             val ancestorLayer = prepared.definition.layers[ancestorIndex]
-            val attributes = ancestorLayer.attributes
+            val attributes = displayAttributes(ancestorLayer)
             alpha *= dynamicNumber(attributes["opacity"], 100f, prepared)
                 .coerceIn(0f, 100f) / 100f
             if (alpha <= 0f || !isDisplayed(attributes["display"], prepared)) return null
@@ -442,7 +540,7 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
                 ),
             )
         }
-        val attrs = layer.attributes
+        val attrs = displayAttributes(layer)
         alpha *= dynamicNumber(attrs["opacity"], 100f, prepared).coerceIn(0f, 100f) / 100f
         if (alpha <= 0f || !isDisplayed(attrs["display"], prepared)) return null
         matrix.preConcat(
@@ -506,6 +604,8 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
     private var liveTransformRotation = 0f
     private var liveTransformScaleX = 1f
     private var liveTransformScaleY = 1f
+    private var liveLayerTransforms = emptyList<WatchmakerLiveLayerTransform>()
+    private var editorPreviewRoundOverride: Boolean? = null
     private val liveTransformHandoff = WatchLiveTransformHandoff()
 
     /**
@@ -522,6 +622,7 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         scaleY: Float,
     ) {
         liveTransformLayerIndex = layerIndex
+        liveLayerTransforms = emptyList()
         liveTransformLayerId = layerId?.takeIf(String::isNotBlank)
         liveTransformX = x
         liveTransformY = y
@@ -529,6 +630,33 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         liveTransformScaleX = scaleX
         liveTransformScaleY = scaleY
         requestFullRepaint()
+    }
+
+    fun setLiveLayerTransforms(transforms: List<WatchmakerLiveLayerTransform>) {
+        liveTransformLayerIndex = -1
+        liveTransformLayerId = null
+        liveLayerTransforms = transforms.toList()
+        requestFullRepaint()
+    }
+
+    fun setEditorPreviewRoundOverride(round: Boolean?) {
+        if (editorPreviewRoundOverride == round) return
+        editorPreviewRoundOverride = round
+        requestFullRepaint()
+    }
+
+    fun resolveEditorLayerTransform(layerIndex: Int): WatchmakerLiveLayerTransform? {
+        val prepared = source ?: return null
+        val layer = prepared.definition.layers.getOrNull(layerIndex) ?: return null
+        val attrs = displayAttributes(layer)
+        val shared = attrs["anim_scale"] ?: attrs["scale"]
+        return WatchmakerLiveLayerTransform(
+            layerIndex, layer.id,
+            dynamicNumber(attrs["x"], 0f, prepared), dynamicNumber(attrs["y"], 0f, prepared),
+            dynamicNumber(attrs["rotation"], 0f, prepared),
+            dynamicNumber(attrs["anim_scale_x"] ?: attrs["scale_x"] ?: shared, 100f, prepared) / 100f,
+            dynamicNumber(attrs["anim_scale_y"] ?: attrs["scale_y"] ?: shared, 100f, prepared) / 100f,
+        )
     }
 
     /** Called when a new pointer gesture takes ownership of the live override. */
@@ -549,7 +677,7 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
      * appear between pointer-up and the committed renderer state.
      */
     fun handoffLiveLayerTransformOnSourceReady(refreshToken: Int) {
-        if (liveTransformLayerIndex == -1) return
+        if (!editorLiveTransformActive()) return
         val key = descriptorKey ?: return
         liveTransformHandoff.arm(key, refreshToken)
         if (
@@ -562,9 +690,10 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
     }
 
     private fun clearLiveLayerTransformInternal(): Boolean {
-        if (liveTransformLayerIndex == -1) return false
+        if (!editorLiveTransformActive()) return false
         liveTransformLayerIndex = -1
         liveTransformLayerId = null
+        liveLayerTransforms = emptyList()
         return true
     }
 
@@ -609,14 +738,17 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         val prepared = source ?: return null
         val layer = prepared.definition.layers.getOrNull(layerIndex) ?: return null
         if (!layer.type.lowercase(Locale.ROOT).contains("text")) return null
-        val raw = layer.attributes["text"].orEmpty()
-            .ifBlank { layer.attributes["value"].orEmpty() }
+        val raw = displayAttributes(layer)["text"].orEmpty()
+            .ifBlank { displayAttributes(layer)["value"].orEmpty() }
         if (raw.isBlank()) return null
         calendar.timeInMillis = System.currentTimeMillis()
         frameDataSnapshot = runCatching { dataProvider.snapshot(calendar.timeInMillis) }
-            .getOrDefault(WatchDataSnapshot())
+            .getOrDefault(WatchDataSnapshot()).let { snapshot ->
+                snapshot.copy(brightMode = !ambientMode && snapshot.brightMode != false,
+                    millisSinceBright = if (ambientMode) null else SystemClock.uptimeMillis() - brightSinceUptimeMs)
+            }
         val resolved = evaluateText(raw, prepared)
-        return when (layer.attributes["transform"].orEmpty().lowercase(Locale.ROOT)) {
+        return when (displayAttributes(layer)["transform"].orEmpty().lowercase(Locale.ROOT)) {
             "uc", "uppercase" -> resolved.uppercase(Locale.getDefault())
             "lc", "lowercase" -> resolved.lowercase(Locale.getDefault())
             else -> resolved
@@ -638,18 +770,21 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         val normalizedType = prepared.normalizedLayerTypes.getOrNull(layerIndex)
             ?: layer.type.lowercase(Locale.ROOT)
         if (normalizedType !in setOf("text", "text_curved", "text_ring")) return null
-        val raw = layer.attributes["text"].orEmpty()
-            .ifBlank { layer.attributes["value"].orEmpty() }
+        val raw = displayAttributes(layer)["text"].orEmpty()
+            .ifBlank { displayAttributes(layer)["value"].orEmpty() }
         if (raw.isBlank()) return null
-        val thumbnailAttributes = if (layer.attributes["text"].isNullOrBlank()) {
-            layer.attributes + ("text" to raw)
+        val thumbnailAttributes = if (displayAttributes(layer)["text"].isNullOrBlank()) {
+            displayAttributes(layer) + ("text" to raw)
         } else {
-            layer.attributes
+            displayAttributes(layer)
         }
 
         calendar.timeInMillis = System.currentTimeMillis()
         frameDataSnapshot = runCatching { dataProvider.snapshot(calendar.timeInMillis) }
-            .getOrDefault(WatchDataSnapshot())
+            .getOrDefault(WatchDataSnapshot()).let { snapshot ->
+                snapshot.copy(brightMode = !ambientMode && snapshot.brightMode != false,
+                    millisSinceBright = if (ambientMode) null else SystemClock.uptimeMillis() - brightSinceUptimeMs)
+            }
 
         // Render once in the canonical design space so even small text retains
         // enough antialiasing detail before it is fitted into the 40dp row tile.
@@ -819,6 +954,7 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         strokeCap = Paint.Cap.BUTT
     }
     private val textPaint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.SUBPIXEL_TEXT_FLAG)
+    private val textShaderPainter = WatchTextShaderPainter()
     private val imagePaint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
     private val sourceTransitionPaint = Paint(Paint.FILTER_BITMAP_FLAG)
     /** 描边通道专用；绝不复用 textPaint/shapePaint，避免污染其 style/strokeWidth。 */
@@ -931,6 +1067,7 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
     internal fun adoptRenderStateFrom(primary: WatchmakerWatchFaceView) {
         if (disposed) return
         val descriptor = primary.boundDescriptor ?: return
+        borrowsTextAnimationEpochs = true
         inheritedLuaRuntime = primary.source?.luaRuntime
         setWatchDataProvider(primary.dataProvider)
         setCanvasSettings(primary.canvasSettings)
@@ -947,6 +1084,28 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
             textExitAnimationEnabled = primary.textExitAnimationEnabled,
         )
         // 播放位置必须对齐，否则各段的序列帧会各播各的。
+        if (ambientMode != primary.ambientMode || ambientRequested != primary.ambientRequested) {
+            ambientTransition?.let(::removeCallbacks)
+            ambientTransition = null
+            ambientRequested = primary.ambientRequested
+            applyAmbientMode(primary.ambientMode)
+            val remaining = primary.ambientTransitionDeadlineMs - SystemClock.uptimeMillis()
+            if (primary.ambientRequested && !primary.ambientMode && remaining > 0L) {
+                ambientTransitionDeadlineMs = primary.ambientTransitionDeadlineMs
+                val task = Runnable {
+                    ambientTransition = null
+                    if (!disposed && ambientRequested) applyAmbientMode(true)
+                }
+                ambientTransition = task
+                postDelayed(task, remaining)
+            }
+        }
+        textAnimationTrigger = primary.textAnimationTrigger
+        textAnimationStartedAtUptimeMs = primary.textAnimationStartedAtUptimeMs
+        textAnimationEpochs = primary.textAnimationEpochs
+        textExitAnimationStartedAtUptimeMs = primary.textExitAnimationStartedAtUptimeMs
+        textExitAnimationActive = primary.textExitAnimationActive
+        brightSinceUptimeMs = primary.brightSinceUptimeMs
         frameStartedAtUptimeMs = primary.frameStartedAtUptimeMs
         editorPreviewPlaying = primary.editorPreviewPlaying
         editorPreviewPausedElapsedMs = primary.editorPreviewPausedElapsedMs
@@ -957,7 +1116,10 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         editorAnimationFrozenElapsedMs = primary.editorAnimationFrozenElapsedMs
         setOverlayRenderFrozen(primary.overlayRenderFrozen)
         overlayFrozenElapsedMs = primary.overlayFrozenElapsedMs
-        if (primary.liveTransformLayerIndex >= 0) {
+        editorPreviewRoundOverride = primary.editorPreviewRoundOverride
+        if (primary.liveLayerTransforms.isNotEmpty()) {
+            setLiveLayerTransforms(primary.liveLayerTransforms)
+        } else if (primary.liveTransformLayerIndex >= 0) {
             setLiveLayerTransform(
                 layerIndex = primary.liveTransformLayerIndex,
                 layerId = primary.liveTransformLayerId,
@@ -967,6 +1129,8 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
                 scaleX = primary.liveTransformScaleX,
                 scaleY = primary.liveTransformScaleY,
             )
+        } else {
+            clearLiveLayerTransformInternal()
         }
     }
 
@@ -991,15 +1155,10 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         require(descriptor.isWatchmaker) { "Watchmaker view requires a standard .watch descriptor" }
         frameTagResolutionCache.clear()
         onRenderReadyCallback = onRenderReady
-        val enteringFace = isFaceVisible && !faceVisible
-        val enablingAnimation = isFaceVisible && textEntryAnimationEnabled && !this.textEntryAnimationEnabled
         this.faceVisible = isFaceVisible
         notifyVideoPlayback()
         this.textEntryAnimationEnabled = textEntryAnimationEnabled
         this.textExitAnimationEnabled = textExitAnimationEnabled
-        if (textEntryAnimationEnabled && (enteringFace || enablingAnimation)) {
-            textAnimationStartedAtUptimeMs = SystemClock.uptimeMillis()
-        }
         this.longPressAction = onLongPress
         this.doubleTapAction = onDoubleTap
         this.tapActionHandler = onTapAction
@@ -1028,9 +1187,7 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
             // 自己的 requestFullRepaint()，不需要这里代劳。
             //
             // 慢桶取值真变了也不会漏：poll() 每拍都无条件比对，变化由它置位。
-            if (enteringFace || enablingAnimation) {
-                requestFullRepaint()
-            } else if (!overlayRenderFrozen) {
+            if (!overlayRenderFrozen) {
                 invalidate()
             }
             if (
@@ -1115,6 +1272,8 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
                     gravityBackdropBlurFrame = null
                     gravityBackdropBlurPrepared = false
                 }
+                displayAttributeCache.clear()
+                if (replacement !== current) releaseFaceSound()
                 source = replacement
                 // 换表盘要重新载入这张表盘自己的配色索引：索引是按 rootCacheKey 存的，
                 // 上一张表盘循环到第 7 档，不该让下一张也从第 7 档开始。
@@ -1123,12 +1282,17 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
                 loadedDescriptorKey = descriptor.stableKey
                 loadedRefreshToken = refreshToken
                 completeLiveTransformHandoffIfReady(descriptor.stableKey, refreshToken)
+                // A genuine source replacement starts a new source timeline.
+                // Borrowed segments already received the primary's two epochs;
+                // their asynchronous parse must not overwrite that shared state.
+                if (replacement !== current && !borrowsTextAnimationEpochs) {
+                    restartTextAnimation(WatchTextAnimationTrigger.LOAD)
+                }
                 if (replacement !== current && previousDescriptorKey != descriptor.stableKey) {
                     // 不同表盘切换：重置 GIF / 帧序列计时，从第0帧开始播。
                     // 同表盘刷新（reloadMode == KEEP_CURRENT_UNTIL_READY）时保留
                     // 旧计时器，GIF 从中断处继续，不出现疯狂闪烁。
                     frameStartedAtUptimeMs = SystemClock.uptimeMillis()
-                    textAnimationStartedAtUptimeMs = SystemClock.uptimeMillis()
                 }
                 scheduleTicks()
                 requestFullRepaint()
@@ -1149,9 +1313,6 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         }
         faceVisible = visible
         notifyVideoPlayback()
-        if (visible && textEntryAnimationEnabled) {
-            textAnimationStartedAtUptimeMs = SystemClock.uptimeMillis()
-        }
         if (visible || textExitAnimationActive) scheduleTicks() else cancelTicks()
         requestFullRepaint()
     }
@@ -1319,7 +1480,8 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
 
     /** Propagates editor playback and real face visibility to video hosts. */
     private fun notifyVideoPlayback() {
-        editorVideoPlaybackListener?.invoke(faceVisible && editorPreviewPlaying)
+        if (!faceSoundEligible()) releaseFaceSound()
+        editorVideoPlaybackListener?.invoke(faceVisible && editorPreviewPlaying && !ambientRequested)
     }
 
     /**
@@ -1350,6 +1512,10 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
             (!editorAnimationPlaybackLimited || editorAnimatedImageLayerIndex == layerIndex)
 
     fun dispose() {
+        unregisterScreenReceiver()
+        ambientTransition?.let(::removeCallbacks)
+        ambientTransition = null
+        releaseFaceSound()
         if (disposed) return
         disposed = true
         externalDataStore.removeListener(externalDataListener)
@@ -1401,12 +1567,37 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
 
     override fun onAttachedToWindow() {
         super.onAttachedToWindow()
+        if (!screenReceiverRegistered && !disposed) {
+            runCatching {
+                androidx.core.content.ContextCompat.registerReceiver(context, screenReceiver,
+                    android.content.IntentFilter().apply {
+                        addAction(Intent.ACTION_SCREEN_OFF)
+                        addAction(Intent.ACTION_SCREEN_ON)
+                    }, androidx.core.content.ContextCompat.RECEIVER_NOT_EXPORTED)
+            }.onSuccess { screenReceiverRegistered = true }
+            val interactive = (context.getSystemService(Context.POWER_SERVICE) as? android.os.PowerManager)?.isInteractive != false
+            if (interactive && !physicalScreenInteractive && !ambientRequested) restartTextAnimation(WatchTextAnimationTrigger.BRIGHT)
+            physicalScreenInteractive = interactive
+        }
         if (!disposed) scheduleTicks()
     }
 
     override fun onDetachedFromWindow() {
+        releaseFaceSound()
+        unregisterScreenReceiver()
         cancelTicks()
         super.onDetachedFromWindow()
+    }
+
+    override fun onWindowVisibilityChanged(visibility: Int) {
+        super.onWindowVisibilityChanged(visibility)
+        if (visibility != VISIBLE) releaseFaceSound()
+    }
+
+    private fun unregisterScreenReceiver() {
+        if (!screenReceiverRegistered) return
+        runCatching { context.unregisterReceiver(screenReceiver) }
+        screenReceiverRegistered = false
     }
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
@@ -1692,7 +1883,7 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         frameCanvasScaleX = transform.scaleX
         frameCanvasScaleY = transform.scaleY
         canvas.clipRect(-extentW / 2f, -extentH / 2f, extentW / 2f, extentH / 2f)
-        if (prepared.definition.shape == WatchFaceShape.ROUND) {
+        if (editorPreviewRoundOverride ?: (prepared.definition.shape == WatchFaceShape.ROUND)) {
             pathScratch.reset()
             // 圆形取内切圆：非方画布上按长边画会把圆裁出画布外。
             pathScratch.addCircle(0f, 0f, min(extentW, extentH) / 2f, Path.Direction.CW)
@@ -1974,7 +2165,7 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
             for (scratchIndex in ancestorCount - 1 downTo 0) {
                 val ancestorIndex = ancestorIndexScratch[scratchIndex]
                 val ancestorLayer = source.definition.layers[ancestorIndex]
-                val attributes = ancestorLayer.attributes
+                val attributes = displayAttributes(ancestorLayer)
                 alpha *= dynamicNumber(attributes["opacity"], 100f, source)
                     .coerceIn(0f, 100f) / 100f
                 if (alpha <= 0f || !isDisplayed(attributes["display"], source)) return
@@ -1993,7 +2184,7 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
                 scaleY *= lastComposedScaleY
             }
             val layer = source.definition.layers[item.layerIndex]
-            val attributes = layer.attributes
+            val attributes = displayAttributes(layer)
             val hasTapAction = !attributes["tap_action"].isNullOrBlank() ||
                 !attributes["action"].isNullOrBlank()
             alpha *= dynamicNumber(attributes["opacity"], 100f, source)
@@ -2058,9 +2249,12 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
             layerId = layerId,
             layerIndex = layerIndex,
         )
-        val baseX = if (live) liveTransformX else dynamicNumber(attrs["x"], 0f, source)
-        val baseY = if (live) liveTransformY else dynamicNumber(attrs["y"], 0f, source)
-        val gyroScale = if (gravityParallaxEnabled) {
+        val batch = liveLayerTransforms.firstOrNull {
+            watchmakerLiveTransformTargetsLayer(it.layerId, it.layerIndex, layerId, layerIndex)
+        }
+        val baseX = batch?.x ?: if (live) liveTransformX else dynamicNumber(attrs["x"], 0f, source)
+        val baseY = batch?.y ?: if (live) liveTransformY else dynamicNumber(attrs["y"], 0f, source)
+        val gyroScale = if (gravityParallaxEnabled && !ambientMode) {
             attrs["gyro"]?.trim()?.takeIf(String::isNotEmpty)?.let {
                 dynamicNumber(it, 0f, source).coerceIn(-32f, 32f)
             } ?: 0f
@@ -2076,14 +2270,14 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
             baseX + gyroscopeY * gyroScale,
             baseY - gyroscopeX * gyroScale,
         )
-        val rotation = if (live) {
+        val rotation = batch?.rotationDegrees ?: if (live) {
             liveTransformRotation
         } else {
             dynamicNumber(attrs["rotation"], 0f, source)
         }
         if (rotation != 0f) into.preRotate(rotation)
         val sharedScale = attrs["anim_scale"] ?: attrs["scale"]
-        val sx = if (live) {
+        val sx = batch?.scaleX ?: if (live) {
             liveTransformScaleX
         } else {
             dynamicNumber(
@@ -2092,7 +2286,7 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
                 source,
             ).coerceIn(-500f, 500f) / 100f
         }
-        val sy = if (live) {
+        val sy = batch?.scaleY ?: if (live) {
             liveTransformScaleY
         } else {
             dynamicNumber(
@@ -2152,7 +2346,7 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         alpha: Float,
         source: PreparedSource,
     ) {
-        val attrs = layer.attributes
+        val attrs = displayAttributes(layer)
         val normalizedType = source.normalizedLayerTypes.getOrNull(layerIndex)
             ?: layer.type.lowercase(Locale.ROOT)
         var animatedAlpha = alpha
@@ -2167,9 +2361,10 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
             if (animation.scale != 1f) canvas.scale(animation.scale, animation.scale)
             if (animation.rotation != 0f) canvas.rotate(animation.rotation)
             animatedAlpha *= animation.alpha
-        } else if (textEntryAnimationEnabled && normalizedType.startsWith("text") &&
+        } else if (!ambientMode && textEntryAnimationEnabled && normalizedType.startsWith("text") &&
             (!attrs["anim_in"].isNullOrBlank() || !attrs["anim_out"].isNullOrBlank())
         ) {
+            val animationEpoch = textAnimationEpochs.epochFor(attrs)
             val animation = watchTextAnimationFrame(
                 animIn = attrs["anim_in"],
                 animOut = attrs["anim_out"],
@@ -2179,9 +2374,8 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
                 durationOffSeconds = dynamicNumber(attrs["dur_off"], 0f, source),
                 delayStartSeconds = dynamicNumber(attrs["delay_start"], 0f, source),
                 repeatCount = dynamicNumber(attrs["repeat_count"], 1f, source).roundToInt(),
-                restartOnLoad = attrs["restart_on_load"].equals("Y", ignoreCase = true) ||
-                    attrs["restart_on_load"].equals("true", ignoreCase = true),
-                elapsedMs = SystemClock.uptimeMillis() - textAnimationStartedAtUptimeMs,
+                restartOnLoad = animationEpoch != null,
+                elapsedMs = animationEpoch?.let { SystemClock.uptimeMillis() - it } ?: 0L,
             )
             if (!animation.visible) return
             canvas.translate(animation.translationX, animation.translationY)
@@ -2725,8 +2919,11 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
                 drawTextShadow(canvas, line, lineStartXs[index], baselines[index], shadow, alpha)
             }
         }
-        lines.forEachIndexed { index, line ->
-            canvas.drawText(line, lineStartXs[index], baselines[index], textPaint)
+        val fillBounds = watchTtfTextInkBounds(textPaint, lines, lineStartXs, baselines)
+        drawTextShaderFill(canvas, attrs, source, fillBounds, textPaint) {
+            lines.forEachIndexed { index, line ->
+                canvas.drawText(line, lineStartXs[index], baselines[index], textPaint)
+            }
         }
     }
 
@@ -2740,6 +2937,17 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
      * 规范里只有 `shape` 与 `rounded` 支持 shader（`progress` 明确不支持），
      * 所以只有那两条绘制路径调用它。
      */
+    private fun drawTextShaderFill(
+        canvas: Canvas,
+        attrs: Map<String, String>,
+        source: PreparedSource,
+        bounds: RectF,
+        maskPaint: Paint,
+        drawMask: () -> Unit,
+    ) = textShaderPainter.draw(canvas, bounds, maskPaint,
+        resolveColor(attrs["color"], Color.WHITE, source),
+        resolveWatchShapeShader(attrs, bounds.width(), bounds.height(), source), drawMask)
+
     private fun resolveWatchShapeShader(
         attrs: Map<String, String>,
         width: Float,
@@ -2984,6 +3192,8 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         // 文字走替换语义，不是图片那套调制：图集只是字形蒙版，图集本身什么颜色
         // 不该影响结果。详见 [textTintFilter] 的 f1.png 黄图集实证。
         imagePaint.colorFilter = textTintFilter(resolveColor(attrs["color"], Color.WHITE, source))
+        val fillBounds = watchBitmapTextInkBounds(font, runs, scale)
+        drawTextShaderFill(canvas, attrs, source, fillBounds, imagePaint) {
         runs.forEach { (line, startX, lineTop) ->
             drawBitmapGlyphRun(
                 canvas = canvas,
@@ -2997,6 +3207,7 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
                 offsetY = 0f,
                 paint = imagePaint,
             )
+        }
         }
         imagePaint.colorFilter = null
     }
@@ -4344,7 +4555,10 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         pathScratch.reset()
         val arc = WatchTextLayout.curveArc(attrs["curve_dir"])
         pathScratch.addArc(-radius, -radius, radius, radius, arc.startDegrees, arc.sweepDegrees)
-        canvas.drawTextOnPath(text, pathScratch, 0f, 0f, textPaint)
+        val extent = radius + textPaint.textSize
+        drawTextShaderFill(canvas, attrs, source, RectF(-extent, -extent, extent, extent), textPaint) {
+            canvas.drawTextOnPath(text, pathScratch, 0f, 0f, textPaint)
+        }
     }
 
     private fun drawTextRing(canvas: Canvas, attrs: Map<String, String>, alpha: Float, source: PreparedSource) {
@@ -4379,6 +4593,8 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         val rotateLabels = attrs["rotated_text"].equals("y", ignoreCase = true)
         val metrics = textPaint.fontMetrics
         val baselineOffset = -(metrics.ascent + metrics.descent) / 2f
+        val fillExtent = radius + textPaint.textSize
+        drawTextShaderFill(canvas, attrs, source, RectF(-fillExtent, -fillExtent, fillExtent, fillExtent), textPaint) {
         items.forEach { item ->
             val label = when (transform) {
                 "uc", "uppercase" -> item.label.uppercase(Locale.getDefault())
@@ -4396,6 +4612,7 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
             } else {
                 canvas.drawText(label, x, y + baselineOffset, textPaint)
             }
+        }
         }
         if (!attrs["tap_action"].isNullOrBlank() || !attrs["action"].isNullOrBlank()) {
             val extent = radius + textPaint.textSize
@@ -4824,7 +5041,7 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         // 首帧就是全命中，渲染线程不必现编译。
         val expressionSources = definition.layers
             .take(MAX_WATCH_LAYER_COUNT)
-            .flatMapTo(LinkedHashSet()) { layer -> layer.attributes.values }
+            .flatMapTo(LinkedHashSet()) { layer -> watchmakerLayerAttributeValues(layer) }
             .also { it += definition.rootAttributes.values }
         val expressionCompileReport = WatchmakerExpressionEvaluator.precompile(
             sources = expressionSources,
@@ -4859,10 +5076,10 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
                 .any { layer ->
                     val type = layer.type.lowercase(Locale.ROOT)
                     watchLayerRequiresFrameTicks(type, layer.attributes) ||
-                        (type == "chart" && layer.attributes.values.any { value ->
+                        (type == "chart" && watchmakerLayerAttributeValues(layer).any { value ->
                             DYNAMIC_TAG_PATTERN.containsMatchIn(value)
                         }) ||
-                        layer.attributes.values.any { value ->
+                        watchmakerLayerAttributeValues(layer).any { value ->
                             WatchmakerTagResolver.requiresFastTicks(value)
                         }
                 },
@@ -5242,7 +5459,7 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
             val layer = prepared.definition.layers.getOrNull(item.layerIndex)
                 ?: return@mapNotNull null
             if (!layer.type.equals("video", ignoreCase = true)) return@mapNotNull null
-            val attrs = layer.attributes
+            val attrs = displayAttributes(layer)
             val path = evaluateText(attrs["path"] ?: attrs["source"] ?: "", prepared)
             val resolved = resolveAsset(path, prepared, conventionalDirectory = "images")
                 ?: resolveAsset(path, prepared, conventionalDirectory = "videos")
@@ -5735,10 +5952,7 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
                 source?.luaRuntime?.needsFrame() == true ||
                 gyroNeedsTicks
         }
-        val delay = when {
-            !needsFastTicks -> 1_000L
-            else -> 33L
-        }
+        val delay = watchmakerTickDelay(ambientMode, needsFastTicks)
         postDelayed(tickRunnable, delay)
     }
 
@@ -5920,24 +6134,13 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         }.getOrDefault(fallback)
     }
 
-    private fun isDisplayed(display: String?, source: PreparedSource): Boolean {
-        val value = display?.trim().orEmpty()
-        source.luaRuntime?.evaluateFaceBoolean(value) { tag ->
-            resolveFrameTagWithoutLua(tag, source)
-        }?.let { return it }
-        return when {
-            value.isBlank() -> true
-            value.equals("y", true) || value.equals("yes", true) || value.equals("true", true) -> true
-            value.equals("n", true) || value.equals("no", true) || value.equals("false", true) -> false
-            value.equals("b", true) || value.equals("bd", true) -> true
-            value.equals("a", true) || value.equals("ad", true) || value.equals("d", true) -> false
-            else -> WatchmakerExpressionEvaluator.evaluateBoolean(
-                value,
-                false,
-                source.expressionScope,
-            ) { tag -> resolveFrameTag(tag, source) }
+    private fun isDisplayed(display: String?, source: PreparedSource): Boolean =
+        watchmakerDisplayVisible(display, ambientMode) { value ->
+            source.luaRuntime?.evaluateFaceBoolean(value) { tag -> resolveFrameTagWithoutLua(tag, source) }
+                ?: WatchmakerExpressionEvaluator.evaluateBoolean(value, false, source.expressionScope) {
+                    tag -> resolveFrameTag(tag, source)
+                }
         }
-    }
 
     private fun dynamicNumber(value: String?, fallback: Float, source: PreparedSource): Float {
         val raw = value.orEmpty()
@@ -6159,6 +6362,10 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
     }
 
     private fun routeTapAction(action: WatchTapAction, rawAction: String = "") {
+        if (action is WatchTapAction.PlaySound) {
+            if (!ambientRequested) playFaceSound(action.name)
+            return
+        }
         if (action is WatchTapAction.Script) {
             val prepared = source
             val runtime = prepared?.luaRuntime
@@ -6301,6 +6508,7 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
             // 上面那句 `if (action is ColorSwitch)` 已经处理掉了，这里只是让 when 穷尽。
             is WatchTapAction.ColorSwitch -> null
             is WatchTapAction.Script -> null
+            is WatchTapAction.PlaySound -> null
             is WatchTapAction.AppLaunch -> {
                 val act = action.activityClass
                 if (act != null) {
@@ -6607,7 +6815,7 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
                 // 依赖不明的属性（编译不过 / 查不到键）一律当不可烘：见
                 // [WatchExpressionCompileReport.tagDependenciesOf] 里两种空集的区别。
                 var dependenciesKnown = true
-                for (value in layer.attributes.values) {
+                for (value in watchmakerLayerAttributeValues(layer)) {
                     val dependencies = expressionCompileReport.tagDependenciesOf(value)
                     if (dependencies == null) {
                         dependenciesKnown = false
@@ -6622,7 +6830,7 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
                         item = item,
                         profile = profile,
                         hasFaceScriptDependency = luaRuntime?.let { runtime ->
-                            layer.attributes.values.any(runtime::referencesFaceState)
+                            watchmakerLayerAttributeValues(layer).any(runtime::referencesFaceState)
                         } == true,
                     )
                 slowBuckets.add(profile.slowBuckets)
@@ -7128,12 +7336,14 @@ fun WatchmakerWatchFaceHost(
     textEntryAnimationEnabled: Boolean = true,
     textExitAnimationEnabled: Boolean = true,
     textExitAnimationActive: Boolean = false,
+    ambientMode: Boolean = false,
     overlayTransitionActive: Boolean = false,
     modifier: Modifier = Modifier,
 ) {
     val ownedDataProvider = rememberWatchmakerWatchDataProvider(
         active = dataProvider == null && isFaceVisible,
         weatherSource = weatherSource,
+        ambientMode = ambientMode,
     )
     val resolvedDataProvider = dataProvider ?: ownedDataProvider
     // 圆屏判定只能来自这里（用户可在设置里覆盖系统上报值），且必须在
@@ -7162,7 +7372,7 @@ fun WatchmakerWatchFaceHost(
                 textEntryAnimationEnabled = textEntryAnimationEnabled,
                 textExitAnimationEnabled = textExitAnimationEnabled,
             )
-            view.setTextExitAnimationActive(textExitAnimationActive)
+            stage.setAmbientMode(ambientMode)
             stage.setOverlayTransitionActive(overlayTransitionActive)
             stage.setRoundClip(roundScreen)
         },

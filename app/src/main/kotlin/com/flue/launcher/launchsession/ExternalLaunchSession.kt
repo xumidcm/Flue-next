@@ -354,6 +354,12 @@ class ExternalLaunchSessionTracker(
         }
     }
 
+    /** A launcher-owned ambient return must not replay an external-app return session. */
+    @Synchronized
+    fun finishWithoutReturnAnimation() {
+        state = ExternalLaunchState.Idle
+    }
+
     private fun ExternalLaunchState.LaunchDispatched.withEvidence(
         evidence: ForegroundPackageEvidence,
     ): ExternalLaunchState.LaunchDispatched {

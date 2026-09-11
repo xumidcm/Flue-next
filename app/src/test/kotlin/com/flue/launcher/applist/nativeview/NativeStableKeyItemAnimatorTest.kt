@@ -36,9 +36,57 @@ import org.robolectric.annotation.Config
 @Config(sdk = [27], manifest = Config.NONE)
 class NativeStableKeyItemAnimatorTest {
 
+    @Test
+    fun `a no-op diff finishes an interrupted move`() {
+        val animator = NativeStableKeyItemAnimator()
+        val item = holder()
+        startMove(animator, item, 0, 100)
+        animator.runPendingAnimations()
+        assertFalse(animator.animatePersistence(item, info(100), info(100)))
+        assertEquals(0f, item.itemView.translationY, 0.001f)
+        assertFalse(animator.isRunning)
+        idle(1_000L)
+    }
+
+    @Test
+    fun `non animated removal releases the recycler holder immediately`() {
+        val animator = NativeStableKeyItemAnimator()
+        val item = attachedHolder(animator)
+        item.setIsRecyclable(false)
+        assertFalse(animator.animateDisappearance(item, info(0), null))
+        assertEquals("Finished removal must release RecyclerView ownership", true, item.isRecyclable)
+    }
+
+    @Test
+    fun `non animated appearance releases the recycler holder immediately`() {
+        val animator = NativeStableKeyItemAnimator()
+        val item = attachedHolder(animator)
+        item.setIsRecyclable(false)
+        assertFalse(animator.animateAppearance(item, null, info(0)))
+        assertEquals(true, item.isRecyclable)
+    }
+
     private class TestHolder(view: View) : RecyclerView.ViewHolder(view)
 
     private fun holder(): TestHolder = TestHolder(View(RuntimeEnvironment.getApplication()))
+
+    private fun attachedHolder(animator: NativeStableKeyItemAnimator): RecyclerView.ViewHolder {
+        val context = RuntimeEnvironment.getApplication()
+        val recycler = RecyclerView(context).apply {
+            layoutManager = androidx.recyclerview.widget.LinearLayoutManager(context)
+            itemAnimator = animator
+            adapter = object : RecyclerView.Adapter<TestHolder>() {
+                override fun getItemCount() = 1
+                override fun onCreateViewHolder(parent: android.view.ViewGroup, viewType: Int) =
+                    TestHolder(View(context).apply { layoutParams = RecyclerView.LayoutParams(100, 100) })
+                override fun onBindViewHolder(holder: TestHolder, position: Int) = Unit
+            }
+        }
+        val exact = View.MeasureSpec.makeMeasureSpec(100, View.MeasureSpec.EXACTLY)
+        recycler.measure(exact, exact)
+        recycler.layout(0, 0, 100, 100)
+        return requireNotNull(recycler.findViewHolderForAdapterPosition(0))
+    }
 
     private fun info(top: Int): RecyclerView.ItemAnimator.ItemHolderInfo =
         RecyclerView.ItemAnimator.ItemHolderInfo().apply {

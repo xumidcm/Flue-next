@@ -28,6 +28,14 @@ import org.robolectric.annotation.Config
 @Config(sdk = [27], manifest = Config.NONE)
 class FlueLayoutProfileTest {
     @Test
+    fun `flow old and imported profiles disable spacing compression only for flow`() {
+        assertFalse(FlueLayoutProfiles.Flow.edgeSpacingCompressionEnabled)
+        assertFalse(FlueLayoutProfiles.Flow.copy(edgeSpacingCompressionEnabled = true).sanitized().edgeSpacingCompressionEnabled)
+        assertTrue(FlueLayoutProfiles.Grid.copy(edgeSpacingCompressionEnabled = true).sanitized().edgeSpacingCompressionEnabled)
+        val oldJson = FlueLayoutProfileJson.encodeProfile(FlueLayoutProfiles.Flow.copy(edgeSpacingCompressionEnabled = true))
+        assertFalse(FlueLayoutProfileJson.decodeProfile(oldJson).edgeSpacingCompressionEnabled)
+    }
+    @Test
     fun `every layout mode has a built-in profile bound to itself`() {
         assertEquals(LayoutMode.entries.size, FlueLayoutProfiles.builtIns.size)
         LayoutMode.entries.forEach { mode ->

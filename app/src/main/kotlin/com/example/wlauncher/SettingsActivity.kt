@@ -255,6 +255,10 @@ import com.flue.launcher.ui.settings.WatchTapActionAppPickerDialog
 import com.flue.launcher.ui.settings.WatchTapActionBindingCard
 import com.flue.launcher.ui.settings.WatchTapActionCatalog
 import com.flue.launcher.ui.settings.WatchTapActionDefinition
+import com.flue.launcher.ui.settings.DebugTapState
+import com.flue.launcher.diagnostics.DiagnosticsSettingsSection
+import com.flue.launcher.diagnostics.DiagnosticsInformationSection
+import com.flue.launcher.aod.AodSettingsSection
 import com.flue.launcher.ui.store.clearFlueWebViewData
 import com.flue.launcher.watchface.store.MAX_WEB_ZOOM_PERCENT
 import com.flue.launcher.watchface.store.MIN_WEB_ZOOM_PERCENT
@@ -352,6 +356,7 @@ enum class SettingsDestination {
     BACKUP_IMPORT,
     LANGUAGE,
     ABOUT,
+    DEBUG,
     DONATE
 }
 
@@ -528,6 +533,7 @@ private fun SettingsRootScreen(
     var weatherCityCandidates by remember { mutableStateOf<List<WatchWeatherLocation>>(emptyList()) }
     var weatherCitySearching by remember { mutableStateOf(false) }
     var weatherCitySearchError by remember { mutableStateOf<String?>(null) }
+    var debugTapState by remember { mutableStateOf(DebugTapState()) }
     var internalFileBrowserRequest by remember { mutableStateOf<InternalFileBrowserRequest?>(null) }
     val rawWatchFaces by vm.availableWatchFaces.collectAsStateWithLifecycle()
     val selectedWatchFaceId by vm.selectedWatchFaceId.collectAsStateWithLifecycle()
@@ -1009,6 +1015,9 @@ private fun SettingsRootScreen(
     }
 
     var destination by remember { mutableStateOf(launchConfig.initialDestination) }
+    LaunchedEffect(destination) {
+        if (destination != SettingsDestination.ABOUT) debugTapState = DebugTapState()
+    }
     // 背景预览卡的底图。**只在背景页才真的解码**：不在那一页时喂一份默认配置（纯色档 →
     // 图源为 null），于是进任何别的设置页都不会白解一张全屏位图出来。
     val appListBackgroundPreviewPainting = rememberAppListBackgroundPainting(
@@ -1597,6 +1606,7 @@ private fun SettingsRootScreen(
                 }
                 if (settingsSearchQuery.isNotBlank()) {
                     val searchResults = searchSettingsEntries(settingsSearchQuery, searchIndex)
+                        .filterNot { layoutMode == LayoutMode.Flow && it.itemKey == "app_list_edge_spacing_compression" }
                     if (searchResults.isEmpty()) {
                         item("search_empty") {
                             Text(
@@ -2468,20 +2478,7 @@ private fun SettingsRootScreen(
                     )
                 }
             }
-            // 应用列表背景放在表盘分支下：四档里有一档就是「跟随表盘」。
-            item("app_list_background_entry") {
-                SettingsCategoryCard(
-                    title = stringResource(R.string.settings_app_list_background),
-                    subtitle = appListBackgroundModeLabel(appListBackground.effectiveMode),
-                    onClick = { navigateTo(SettingsDestination.APP_LIST_BACKGROUND) },
-                    scale = itemFisheye(
-                        listState,
-                        "app_list_background_entry",
-                        screenCenterY,
-                        screenHeightPx,
-                    ),
-                )
-            }
+
         }
 
             SettingsDestination.TAP_ACTION_CATEGORIES -> SettingsPageScaffold(
@@ -2905,6 +2902,19 @@ private fun SettingsRootScreen(
             item("display_header") {
                 SectionTitle(stringResource(R.string.settings_display_header), itemFisheye(listState, "display_header", screenCenterY, screenHeightPx))
             }
+            item("app_list_background_entry") {
+                SettingsCategoryCard(
+                    title = stringResource(R.string.settings_app_list_background),
+                    subtitle = appListBackgroundModeLabel(appListBackground.effectiveMode),
+                    onClick = { navigateTo(SettingsDestination.APP_LIST_BACKGROUND) },
+                    scale = itemFisheye(
+                        listState,
+                        "app_list_background_entry",
+                        screenCenterY,
+                        screenHeightPx,
+                    ),
+                )
+            }
             item("display_size_menu") {
                 SettingsCategoryCard(
                     title = stringResource(R.string.settings_display_fit),
@@ -2912,6 +2922,9 @@ private fun SettingsRootScreen(
                     onClick = { navigateTo(SettingsDestination.DISPLAY_SIZE) },
                     scale = itemFisheye(listState, "display_size_menu", screenCenterY, screenHeightPx)
                 )
+            }
+            item("aod_settings") {
+                AodSettingsSection()
             }
             if (!flueScreenRound) {
                 item("overlay_mask_corner_radius") {
@@ -3278,6 +3291,7 @@ private fun SettingsRootScreen(
                         groupPosition = position,
                     )
                 }
+                if (layoutMode != LayoutMode.Flow) {
                 row("app_list_edge_spacing_compression") { position ->
                     SettingsSwitchRow(
                         title = stringResource(R.string.settings_edge_spacing),
@@ -3288,6 +3302,7 @@ private fun SettingsRootScreen(
                         scale = itemFisheye(listState, "app_list_edge_spacing_compression", screenCenterY, screenHeightPx),
                         groupPosition = position,
                     )
+                }
                 }
                 row("app_list_fisheye_range_rows") { position ->
                     SettingsSliderRow(
@@ -4843,12 +4858,22 @@ private fun SettingsRootScreen(
                 item("about_card") {
                     AboutCard(
                         onDonateClick = { navigateTo(SettingsDestination.DONATE) },
-                        // 版本号点击不再触发任何历史格式导入入口。
-                        onVersionClick = {},
+                        onVersionClick = {
+                            val next = debugTapState.tap(SystemClock.elapsedRealtime())
+                            debugTapState = next
+                            if (next.openDebug) navigateTo(SettingsDestination.DEBUG)
+                        },
                         scale = itemFisheye(listState, "about_card", screenCenterY, screenHeightPx)
                     )
                 }
             }
+            SettingsDestination.DEBUG -> DebugPage(
+                vm = vm,
+                weatherRepository = weatherRepository,
+                watchCatalogRepository = watchCatalogRepository,
+                onBack = { handleBack() },
+                onCrash = { error("Flue debug crash") },
+            )
             SettingsDestination.DONATE -> SettingsPageScaffold(
                 title = stringResource(R.string.settings_donate_title),
                 onBack = { handleBack() },
@@ -6626,6 +6651,77 @@ private fun AboutCard(
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun DebugPage(
+    vm: LauncherViewModel,
+    weatherRepository: WatchWeatherRepository,
+    watchCatalogRepository: WatchStoreRepository,
+    onBack: () -> Unit,
+    onCrash: () -> Unit,
+) {
+    val scope = rememberCoroutineScope()
+    val context = LocalContext.current
+    var cacheStatus by remember { mutableStateOf(context.getString(R.string.diagnostics_cache_idle)) }
+    SettingsPageScaffold(
+        title = stringResource(R.string.diagnostics_title),
+        onBack = onBack,
+        headerTime = "",
+        initialFirstVisibleItemIndex = 0,
+        initialFirstVisibleItemScrollOffset = 0,
+        onScrollChanged = { _, _ -> },
+    ) { listState, screenCenterY, screenHeightPx, _ ->
+        flueSettingsGroup {
+            row("debug_crash") { position ->
+                ActionCard(
+                    title = stringResource(R.string.diagnostics_crash),
+                    subtitle = stringResource(R.string.diagnostics_crash_description),
+                    onClick = onCrash,
+                    scale = itemFisheye(listState, "debug_crash", screenCenterY, screenHeightPx),
+                    groupPosition = position,
+                )
+            }
+            row("debug_missing_watchface") { position ->
+                ActionCard(
+                    title = stringResource(R.string.diagnostics_missing_face),
+                    subtitle = stringResource(R.string.diagnostics_missing_face_description),
+                    onClick = vm::selectMissingWatchFaceForDebug,
+                    scale = itemFisheye(listState, "debug_missing_watchface", screenCenterY, screenHeightPx),
+                    groupPosition = position,
+                )
+            }
+            row("debug_restore_watchface") { position ->
+                ActionCard(
+                    title = stringResource(R.string.diagnostics_restore_face),
+                    subtitle = stringResource(R.string.diagnostics_restore_face_description),
+                    onClick = { vm.fallbackToBuiltIn("debug restore") },
+                    scale = itemFisheye(listState, "debug_restore_watchface", screenCenterY, screenHeightPx),
+                    groupPosition = position,
+                )
+            }
+            row("debug_refresh_cache") { position ->
+                ActionCard(
+                    title = stringResource(R.string.diagnostics_refresh_cache),
+                    subtitle = cacheStatus,
+                    onClick = {
+                        scope.launch {
+                            cacheStatus = runCatching {
+                                val removed = watchCatalogRepository.clearPreviewCache()
+                                vm.refreshWatchFaces(force = true)
+                                weatherRepository.requestRefresh()
+                                context.getString(R.string.diagnostics_cache_refreshed, removed)
+                            }.getOrElse { context.getString(R.string.diagnostics_cache_failed) }
+                        }
+                    },
+                    scale = itemFisheye(listState, "debug_refresh_cache", screenCenterY, screenHeightPx),
+                    groupPosition = position,
+                )
+            }
+        }
+        item("debug_performance") { DiagnosticsSettingsSection(vm) }
+        item("debug_information") { DiagnosticsInformationSection(vm) }
     }
 }
 

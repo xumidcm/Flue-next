@@ -52,6 +52,9 @@ internal fun watchMotionSensorTypes(hasGyroscope: Boolean): List<Int> = buildLis
 internal fun watchHeartRateValue(hasPermission: Boolean, value: Int?): Int? =
     value?.takeIf { hasPermission }
 
+internal fun watchSensorActiveInMode(sensorType: Int, ambientMode: Boolean): Boolean =
+    !ambientMode || sensorType == Sensor.TYPE_STEP_COUNTER
+
 /**
  * 位置权限的单一口径：谁要坐标，就从这里问、从这里申请。
  *
@@ -150,6 +153,15 @@ internal class AndroidWatchDataProvider(
         sensorManager?.getDefaultSensor(Sensor.TYPE_ROTATION_VECTOR) != null
     private val stepPreferences = appContext.getSharedPreferences(STEP_PREFERENCES, Context.MODE_PRIVATE)
     private val stepLock = Any()
+    private var ambientMode = false
+    fun setAmbientMode(ambient: Boolean) {
+        if (ambientMode == ambient) return
+        val restart = started
+        if (restart) stop()
+        ambientMode = ambient
+        if (!ambient) brightSinceElapsedMs = SystemClock.elapsedRealtime()
+        if (restart) start()
+    }
     private var started = false
     private var batteryReceiverRegistered = false
     private var connectivityReceiverRegistered = false
@@ -204,7 +216,7 @@ internal class AndroidWatchDataProvider(
     private val screenReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             when (intent?.action) {
-                Intent.ACTION_SCREEN_ON -> brightSinceElapsedMs = SystemClock.elapsedRealtime()
+                Intent.ACTION_SCREEN_ON -> if (!ambientMode) { brightSinceElapsedMs = SystemClock.elapsedRealtime() }
                 Intent.ACTION_SCREEN_OFF -> brightSinceElapsedMs = null
             }
         }
@@ -290,9 +302,10 @@ internal class AndroidWatchDataProvider(
         } else {
             steps = null
         }
-        if (hasHeartRatePermission(appContext)) {
+        if (!ambientMode && hasHeartRatePermission(appContext)) {
             registerSensor(Sensor.TYPE_HEART_RATE)
         }
+        if (ambientMode) return
         watchMotionSensorTypes(hasGyroscopeSensor).forEach(::registerSensor)
         // 罗盘：ROTATION_VECTOR 单个传感器就够且更稳；没有它才退回磁力计，
         // 与加速度计一起做姿态融合（加速度计上面已经在监听了）。
@@ -398,10 +411,10 @@ internal class AndroidWatchDataProvider(
             lowPowerMode = slow.lowPowerMode,
             darkMode = slow.darkMode,
             lastRebootText = lastRebootText(nowEpochMs),
-            brightMode = powerManager?.isInteractive,
+            brightMode = !ambientMode && powerManager?.isInteractive != false,
             // 启动器托管的表盘没有真正的息屏低位模式，所以恒为 false 而不是「不知道」。
             dimLowBitOnly = false,
-            millisSinceBright = brightSinceElapsedMs?.let { SystemClock.elapsedRealtime() - it },
+            millisSinceBright = if (ambientMode) null else brightSinceElapsedMs?.let { SystemClock.elapsedRealtime() - it },
             compassHeadingDegrees = compassHeading,
             latitude = slow.latitude,
             longitude = slow.longitude,
@@ -610,7 +623,7 @@ internal class AndroidWatchDataProvider(
         refreshBluetoothState()
         (weatherSource as? WatchWeatherRepository)?.requestRefresh()
             ?: runCatching { weatherSource.snapshot(System.currentTimeMillis()) }
-        if (hasHeartRatePermission(appContext)) {
+        if (!ambientMode && hasHeartRatePermission(appContext)) {
             // 很多手表的心率传感器只在（重新）注册监听时才开始一次新的测量，
             // 所以点按心率组件时重新武装传感器来触发刷新。这也覆盖了
             // “先启动、后授权”的场景：授权后的第一次点按会把传感器接上。
@@ -738,6 +751,7 @@ internal class AndroidWatchDataProvider(
     }
 
     private fun registerSensor(type: Int) {
+        if (!watchSensorActiveInMode(type, ambientMode)) return
         val sensor = sensorManager?.getDefaultSensor(type) ?: return
         runCatching {
             sensorManager.registerListener(this, sensor, SensorManager.SENSOR_DELAY_NORMAL)
@@ -854,6 +868,7 @@ fun rememberWatchmakerWatchDataProvider(
     active: Boolean,
     weatherSource: WatchWeatherSource? = null,
     permissionRevision: Any? = null,
+    ambientMode: Boolean = false,
 ): WatchDataProvider {
     val context = LocalContext.current.applicationContext
     // Keep the nullable argument as an injection seam. When no caller owns a
@@ -867,7 +882,8 @@ fun rememberWatchmakerWatchDataProvider(
     val provider = remember(context, resolvedWeatherSource) {
         AndroidWatchDataProvider(context, resolvedWeatherSource)
     }
-    DisposableEffect(provider, active, permissionRevision) {
+    DisposableEffect(provider, active, permissionRevision, ambientMode) {
+        provider.setAmbientMode(ambientMode)
         if (active) provider.start() else provider.stop()
         onDispose(provider::stop)
     }

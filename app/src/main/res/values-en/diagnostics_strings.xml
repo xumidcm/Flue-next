@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="diagnostics_title">Debug</string>
+    <string name="diagnostics_crash">Trigger a crash</string>
+    <string name="diagnostics_crash_description">Test the crash page and log collection</string>
+    <string name="diagnostics_missing_face">Select an empty watch face</string>
+    <string name="diagnostics_missing_face_description">Test the five-second loading fallback</string>
+    <string name="diagnostics_restore_face">Restore the default watch face</string>
+    <string name="diagnostics_restore_face_description">Clear the empty watch face test state</string>
+    <string name="diagnostics_refresh_cache">Refresh debug caches</string>
+    <string name="diagnostics_cache_idle">Not run</string>
+    <string name="diagnostics_cache_refreshed">Refreshed; cleared %1$d previews</string>
+    <string name="diagnostics_cache_failed">Refresh failed. Please try again.</string>
+    <string name="diagnostics_performance_title">Performance overlay</string>
+    <string name="diagnostics_performance_description">Only shown on Flue pages; all options start off. Counts rendered frames, so an idle page may show 0 FPS. Drawing the overlay is included in the measurement.</string>
+    <string name="diagnostics_fps">FPS and frame duration</string>
+    <string name="diagnostics_memory">Process memory</string>
+    <string name="diagnostics_threads">Process thread count</string>
+    <string name="diagnostics_recording_description">Records all three metrics once per second for up to five minutes. Sampling pauses in the background while the timer continues. Produces a ZIP with CSV and system/configuration JSON. Overlay switches remain unchanged.</string>
+    <string name="diagnostics_recording_idle">No recording yet</string>
+    <string name="diagnostics_recording_preparing">Preparing recording…</string>
+    <string name="diagnostics_recording_active">Recording: %1$d / %2$d seconds</string>
+    <string name="diagnostics_recording_finishing">Preparing export…</string>
+    <string name="diagnostics_recording_ready">Recording is ready to export</string>
+    <string name="diagnostics_recording_auto_ready">Five minutes reached; export is ready</string>
+    <string name="diagnostics_start_recording">Start recording</string>
+    <string name="diagnostics_stop_recording">Stop and prepare ZIP</string>
+    <string name="diagnostics_export">Export performance ZIP</string>
+    <string name="diagnostics_recording_failed">Recording failed. Check available storage and try again.</string>
+    <string name="diagnostics_export_failed">Export failed. Check the file and available storage, then try again.</string>
+    <string name="diagnostics_recovery_failed">Previous recording could not be recovered. You can start a new recording.</string>
+    <string name="diagnostics_no_share_handler">No app can receive ZIP files</string>
+    <string name="diagnostics_overlay_waiting">Sampling…</string>
+    <string name="diagnostics_overlay_fps">FPS %1$.1f · %2$.1f ms</string>
+    <string name="diagnostics_overlay_jank">Jank %1$.1f%% · Max %2$.1f ms</string>
+    <string name="diagnostics_overlay_memory">PSS %1$s MB</string>
+    <string name="diagnostics_overlay_threads">Threads %1$s</string>
+    <string name="diagnostics_information_title">System and Flue information</string>
+    <string name="diagnostics_information_privacy">Includes app version, device, screen, permission states, and watch face, layout, animation, blur, widget and AOD configuration. Only diagnostic allowlist fields are collected; no credentials, location or widget content.</string>
+    <string name="diagnostics_information_failed">Could not read information. Please refresh.</string>
+    <string name="diagnostics_show_information">Show full information</string>
+    <string name="diagnostics_hide_information">Hide full information</string>
+    <string name="diagnostics_copy_information">Copy all information</string>
+    <string name="diagnostics_refresh_information">Refresh information</string>
+    <string name="diagnostics_information_copied">Diagnostic information copied</string>
+    <string name="diagnostics_copy_failed">Copy failed. Please try again.</string>
+</resources>

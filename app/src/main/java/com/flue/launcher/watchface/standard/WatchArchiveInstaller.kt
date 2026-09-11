@@ -390,7 +390,11 @@ class WatchArchiveInstaller(
     override fun prepare(source: File, installRoot: File): InstalledWatchArchive =
         install(source, installRoot)
 
-    fun install(archive: File, installRoot: File): InstalledWatchArchive {
+    fun install(
+        archive: File,
+        installRoot: File,
+        forceNewInstall: Boolean = false,
+    ): InstalledWatchArchive {
         val manifest = validator.inspect(archive)
         // mkdirs() returns false when another installer won the race and
         // created the root between exists() and mkdirs(). Only reject when
@@ -407,10 +411,14 @@ class WatchArchiveInstaller(
                 "Watch archive install root is not a directory",
             )
         }
-        val stableId = "watch_${manifest.archiveSha256.take(32)}"
+        val baseStableId = "watch_${manifest.archiveSha256.take(32)}"
+        val stableId = if (!forceNewInstall) baseStableId
+        else "${baseStableId}_${UUID.randomUUID().toString().replace("-", "").take(12)}"
         val target = File(installRoot, stableId)
         return WatchPackageTransactionMutex.withTarget(target) {
-            if (target.exists()) return@withTarget loadExisting(target, stableId, manifest.archiveSha256)
+            if (!forceNewInstall && target.exists()) {
+                return@withTarget loadExisting(target, stableId, manifest.archiveSha256)
+            }
 
             val staging = File(installRoot, ".install-${UUID.randomUUID()}")
             if (!staging.mkdirs()) {

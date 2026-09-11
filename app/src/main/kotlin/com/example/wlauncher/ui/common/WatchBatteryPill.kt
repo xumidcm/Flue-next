@@ -51,7 +51,7 @@ val DefaultBatteryPillHeight = 17.dp
 private val BatteryFillInset = 2.dp
 
 /** 外壳圆角占高度的比例；内圆角由它减去内缩量推出，保证同心。 */
-private const val ShellCornerRatio = 0.3f
+private const val ShellCornerRatio = 0.4f
 
 /**
  * 圆角矩形电池图标：描边外壳 + 半透明填充 + 正极凸起，剩余电量数字
@@ -134,9 +134,9 @@ fun WatchBatteryPill(
                     text = "$clamped",
                     fontSize = (height.value * 0.58f).sp,
                     lineHeight = (height.value * 0.58f).sp,
-                    fontWeight = FontWeight.Bold,
+                    fontWeight = FontWeight.ExtraBold,
                     // 半透明数字居中在图标内（半透明填充垫底，两种主题下都可读）。
-                    color = style.titleColor.copy(alpha = 0.62f),
+                    color = style.titleColor.copy(alpha = 0.92f),
                     style = BatteryLabelStyle,
                     modifier = Modifier.align(Alignment.Center),
                 )

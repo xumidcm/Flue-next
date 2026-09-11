@@ -1,9 +1,11 @@
 package com.flue.launcher.ui.home
 
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.app.NotificationManager
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Canvas as AndroidCanvas
@@ -207,6 +209,43 @@ private data class ChargingSnapshot(
     val speedWatts: Float? = null
 )
 
+internal enum class WatchFaceStatusIndicator {
+    NONE,
+    NOTIFICATION,
+    DO_NOT_DISTURB,
+    CHARGING,
+}
+
+internal fun watchFaceStatusIndicator(
+    charging: Boolean,
+    doNotDisturb: Boolean,
+    hasNotifications: Boolean,
+): WatchFaceStatusIndicator = when {
+    charging -> WatchFaceStatusIndicator.CHARGING
+    doNotDisturb -> WatchFaceStatusIndicator.DO_NOT_DISTURB
+    hasNotifications -> WatchFaceStatusIndicator.NOTIFICATION
+    else -> WatchFaceStatusIndicator.NONE
+}
+
+internal data class MoonGlyphProfile(
+    val topTipX: Float,
+    val topTipY: Float,
+    val rightTipX: Float,
+    val rightTipY: Float,
+    val leftBulgeX: Float,
+    val bottomBulgeY: Float,
+)
+
+internal fun doNotDisturbMoonProfile(): MoonGlyphProfile = MoonGlyphProfile(
+    topTipX = 0.44f,
+    topTipY = 0.08f,
+    rightTipX = 1.00f,
+    rightTipY = 0.49f,
+    leftBulgeX = 0.11f,
+    bottomBulgeY = 0.98f,
+)
+
+
 @Composable
 fun WatchFaceStatusIndicatorOverlay(
     showStatusIndicators: Boolean,
@@ -223,6 +262,7 @@ fun WatchFaceStatusIndicatorOverlay(
 
 @Composable
 fun WatchFaceLayer(
+    ambientMode: Boolean = false,
     watchFaceId: String = BUILT_IN_WATCHFACE_ID,
     photoPath: String? = null,
     videoPath: String? = null,
@@ -245,7 +285,7 @@ fun WatchFaceLayer(
         watchFaceId = watchFaceId,
         photoPath = photoPath,
         videoPath = videoPath,
-        isFaceVisible = isFaceVisible,
+        isFaceVisible = isFaceVisible && !ambientMode,
         uiStyle = uiStyle,
         photoOptions = photoOptions,
         videoOptions = videoOptions,
@@ -623,20 +663,47 @@ private fun WatchFaceStatusIndicators(
     hasNotifications: Boolean,
     modifier: Modifier = Modifier
 ) {
-    if (!chargingSnapshot.charging && !hasNotifications) return
+    val doNotDisturb by com.flue.launcher.status.DoNotDisturbState.enabled.collectAsStateWithLifecycle()
+
+    // Priority is deliberate: charging remains visible above every other state;
+    // DND suppresses notification dots but does not hide the charging affordance.
+    val indicator = watchFaceStatusIndicator(chargingSnapshot.charging, doNotDisturb, hasNotifications)
+    if (indicator == WatchFaceStatusIndicator.NONE) return
     Box(
         modifier = modifier,
-        contentAlignment = Alignment.Center
+        contentAlignment = Alignment.Center,
     ) {
-        if (chargingSnapshot.charging) {
-            ChargingBoltGlyph()
-        } else if (hasNotifications) {
-            Box(
+        when (indicator) {
+            WatchFaceStatusIndicator.NONE -> Unit
+            WatchFaceStatusIndicator.CHARGING -> ChargingBoltGlyph()
+            WatchFaceStatusIndicator.DO_NOT_DISTURB -> DoNotDisturbMoonGlyph()
+            WatchFaceStatusIndicator.NOTIFICATION -> Box(
                 modifier = Modifier
                     .size(9.dp)
                     .background(Color(0xFFFF3B30), CircleShape)
             )
         }
+    }
+}
+
+@Composable
+private fun DoNotDisturbMoonGlyph(modifier: Modifier = Modifier) {
+    Canvas(modifier = modifier.size(18.dp)) {
+        val w = size.width
+        val h = size.height
+        val profile = doNotDisturbMoonProfile()
+        val moon = Path().apply {
+            moveTo(w * profile.topTipX, h * profile.topTipY)
+            cubicTo(w * 0.28f, h * 0.12f, w * 0.14f, h * 0.28f, w * profile.leftBulgeX, h * 0.48f)
+            cubicTo(w * 0.07f, h * 0.69f, w * 0.22f, h * 0.91f, w * 0.45f, h * profile.bottomBulgeY)
+            cubicTo(w * 0.68f, h * 1.03f, w * 0.90f, h * 0.88f, w * 0.98f, h * 0.67f)
+            cubicTo(w * 1.02f, h * 0.56f, w * 1.03f, h * profile.rightTipY, w * profile.rightTipX, h * profile.rightTipY)
+            cubicTo(w * 0.84f, h * 0.58f, w * 0.68f, h * 0.56f, w * 0.57f, h * 0.47f)
+            cubicTo(w * 0.47f, h * 0.38f, w * 0.46f, h * 0.22f, w * 0.55f, h * 0.08f)
+            cubicTo(w * 0.57f, h * 0.04f, w * 0.50f, h * 0.06f, w * profile.topTipX, h * profile.topTipY)
+            close()
+        }
+        drawPath(moon, Color(0xFFAF7CFF))
     }
 }
 

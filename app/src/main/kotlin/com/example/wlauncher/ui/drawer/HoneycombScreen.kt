@@ -98,7 +98,7 @@ import kotlin.math.sqrt
 
 private const val HONEYCOMB_MENU_TRIGGER_MS = 620L
 private const val HONEYCOMB_MENU_DRAG_START_DP = 20f
-private const val HONEYCOMB_FOLDER_HOVER_MS = 700L
+private const val HONEYCOMB_FOLDER_HOVER_MS = 400L
 private const val HONEYCOMB_FOLDER_HOVER_MAX_SPEED_DP_PER_MS = 0.55f
 private const val HONEYCOMB_PRESS_DURATION_MS = 200
 private const val HONEYCOMB_AUTO_SCROLL_EDGE_DP = 96f
@@ -665,31 +665,10 @@ fun HoneycombScreen(
                                 dragVisualPointer = null
                                 dragApp = null
                                 glidePressedKey = null
-                                if (droppedApp != null && releaseVisualPointer != null && targetSlot != null) {
-                                    settlingApp = droppedApp
-                                    settlingKey = droppedApp.componentKey
-                                    scope.launch {
-                                        settlingX.snapTo(releaseVisualPointer.x.coerceIn(iconSizePx * 0.5f, screenWidthPx - iconSizePx * 0.5f))
-                                        settlingY.snapTo(releaseVisualPointer.y.coerceIn(iconSizePx * 0.5f, screenHeightPx - iconSizePx * 0.5f))
-                                        launch {
-                                            settlingX.animateTo(screenCenterX + targetSlot.x, tween(durationMillis = 120))
-                                        }
-                                        launch {
-                                            settlingY.animateTo(
-                                                (screenCenterY + targetSlot.y + releaseScroll).coerceIn(
-                                                    iconSizePx * 0.5f,
-                                                    screenHeightPx - iconSizePx * 0.5f
-                                                ),
-                                                tween(durationMillis = 120)
-                                            )
-                                        }
-                                        delay(180)
-                                        settlingApp = null
-                                        settlingKey = null
-                                        settlingX.snapTo(0f)
-                                        settlingY.snapTo(0f)
-                                    }
-                                }
+                                // 重排提交后立即释放拖动浮层，不再播放归位回弹；
+                                // 目标槽位由列表本身接管，避免与邻居预览动画打架。
+                                settlingApp = null
+                                settlingKey = null
                                 onReorder(reorderCommand)
                             } else {
                                 dragFromIndex = null

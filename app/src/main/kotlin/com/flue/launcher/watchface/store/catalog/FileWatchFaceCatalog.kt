@@ -94,10 +94,21 @@ class FileWatchFaceCatalog(
      * again; reconciliation will retain the installed face as a local legacy item.
      */
     fun detachEditedMarketInstall(launcherId: String): WatchFaceCatalogSnapshot = mutate { current ->
-        current.filterNot { record ->
-            record.source is WatchFaceInstallSource.Market &&
-                (record.activeLauncherId.equals(launcherId, ignoreCase = true) ||
+        current.map { record ->
+            val market = record.source as? WatchFaceInstallSource.Market
+            if (market == null ||
+                !(record.activeLauncherId.equals(launcherId, ignoreCase = true) ||
                     record.legacyIds.any { it.equals(launcherId, ignoreCase = true) })
+            ) {
+                record
+            } else {
+                record.copy(
+                    logicalId = WatchFaceLogicalIds.local(launcherId),
+                    source = WatchFaceInstallSource.LocalImport(
+                        sourceLabel = "market:${market.remoteId}",
+                    ),
+                )
+            }
         }
     }
 
