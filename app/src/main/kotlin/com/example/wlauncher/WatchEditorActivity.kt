@@ -2403,11 +2403,14 @@ private fun WatchEditorScreen(
     val deviceViewport = remember(context.resources.displayMetrics) {
         context.resources.displayMetrics.let { WatchEditorViewport(it.widthPixels.coerceAtLeast(1), it.heightPixels.coerceAtLeast(1)) }
     }
-    var previewViewport by remember { mutableStateOf(deviceViewport) }
+    // WatchMaker's authored coordinate space is square. A physical device is an optional preview
+    // target, not the editor default; otherwise a phone-shaped host distorts the outer canvas as
+    // soon as the editor opens.
+    var previewViewport by remember { mutableStateOf(WatchEditorViewport(512, 512)) }
     var previewRoundOverride by remember { mutableStateOf<Boolean?>(null) }
     var showViewportDialog by remember { mutableStateOf(false) }
     if (showViewportDialog) EditorPreviewViewportDialog(
-        currentSize = previewViewport, deviceSize = deviceViewport, roundOverride = previewRoundOverride,
+        currentSize = previewViewport, roundOverride = previewRoundOverride,
         onApply = { size, round -> previewViewport = size; previewRoundOverride = round; showViewportDialog = false },
         onDismiss = { showViewportDialog = false },
     )
@@ -2678,12 +2681,6 @@ private fun WatchEditorScreen(
                     ) {
                         IconButton(onClick = onBack, modifier = Modifier.size(36.dp)) {
                             Icon(MiuixIcons.Back, contentDescription = stringResource(R.string.watch_editor_back))
-                        }
-                        TextButton(onClick = { showViewportDialog = true }, enabled = !transformCommitInFlight && transformPreview == null && batchTransformPreview.isEmpty()) {
-                            Text(stringResource(R.string.watch_editor_preview_viewport))
-                        }
-                        TextButton(onClick = onToggleAmbient, enabled = !transformCommitInFlight && transformPreview == null && batchTransformPreview.isEmpty()) {
-                            Text(stringResource(if (previewAmbient) R.string.watch_editor_preview_ambient else R.string.watch_editor_preview_bright))
                         }
                         IconButton(
                             onClick = { previewPlaying = !previewPlaying },
@@ -3321,6 +3318,33 @@ private fun WatchEditorScreen(
                                 rawShape = snapshot.rootAttributes["shape"],
                                 enabled = busyMessage == null,
                                 onUpdateShape = onUpdateShape,
+                            )
+                        }
+                    }
+                    item("watch_preview_settings") {
+                        Box(
+                            modifier = Modifier.chordScaleItem(
+                                listState = watchListState,
+                                key = "watch_preview_settings",
+                                screenCenterY = chordCenterY,
+                                viewportWidth = chordViewportWidth,
+                                enabled = editorFisheyeEnabled,
+                                listTopInViewport = watchListTopInViewport,
+                            ),
+                        ) {
+                            EditorPreviewSettingsCard(
+                                previewViewport = previewViewport,
+                                deviceViewport = deviceViewport,
+                                ambient = previewAmbient,
+                                enabled = busyMessage == null &&
+                                    !transformCommitInFlight &&
+                                    transformPreview == null &&
+                                    batchTransformPreview.isEmpty(),
+                                onSelectViewport = { previewViewport = it },
+                                onEditCustom = { showViewportDialog = true },
+                                onSelectAmbient = { nextAmbient ->
+                                    if (nextAmbient != previewAmbient) onToggleAmbient()
+                                },
                             )
                         }
                     }
@@ -5958,6 +5982,131 @@ private fun EditorWatchShapeCard(
                     color = style.secondaryTextColor,
                 )
             }
+        }
+    }
+}
+
+/**
+ * Preview-only viewport and display-mode controls. They live beside the watch-level shape because
+ * all three affect what the author sees, while none of them should consume scarce toolbar width.
+ */
+@Composable
+private fun EditorPreviewSettingsCard(
+    previewViewport: WatchEditorViewport,
+    deviceViewport: WatchEditorViewport,
+    ambient: Boolean,
+    enabled: Boolean,
+    onSelectViewport: (WatchEditorViewport) -> Unit,
+    onEditCustom: () -> Unit,
+    onSelectAmbient: (Boolean) -> Unit,
+) {
+    val style = LauncherTheme.style
+    val nativeViewport = remember { WatchEditorViewport(512, 512) }
+    val viewportOptions = remember(deviceViewport) {
+        listOf(
+            nativeViewport,
+            deviceViewport,
+            WatchEditorViewport(480, 480),
+            WatchEditorViewport(320, 386),
+            WatchEditorViewport(368, 448),
+            WatchEditorViewport(410, 502),
+        ).distinct()
+    }
+    val usesPreset = previewViewport in viewportOptions
+    Surface(
+        color = MaterialTheme.colorScheme.surfaceVariant,
+        shape = style.compactShape,
+    ) {
+        Column(
+            modifier = Modifier.fillMaxWidth().padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Text(
+                stringResource(R.string.watch_editor_preview_viewport),
+                color = style.titleColor,
+                fontWeight = FontWeight.SemiBold,
+            )
+            Text(
+                previewViewport.label,
+                style = MaterialTheme.typography.bodySmall,
+                color = style.secondaryTextColor,
+            )
+            Row(
+                modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                viewportOptions.forEach { viewport ->
+                    val label = if (viewport == deviceViewport && viewport != nativeViewport) {
+                        stringResource(R.string.watch_editor_preview_current_device) + " · " + viewport.label
+                    } else {
+                        viewport.label
+                    }
+                    EditorPreviewChoiceButton(
+                        label = label,
+                        selected = previewViewport == viewport,
+                        enabled = enabled,
+                        onClick = { onSelectViewport(viewport) },
+                    )
+                }
+                EditorPreviewChoiceButton(
+                    label = if (usesPreset) {
+                        stringResource(R.string.watch_editor_preview_custom)
+                    } else {
+                        stringResource(R.string.watch_editor_preview_custom) + " · " + previewViewport.label
+                    },
+                    selected = !usesPreset,
+                    enabled = enabled,
+                    onClick = onEditCustom,
+                )
+            }
+            Text(
+                stringResource(R.string.watch_editor_preview_only),
+                style = MaterialTheme.typography.labelSmall,
+                color = style.secondaryTextColor,
+            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                EditorPreviewChoiceButton(
+                    label = stringResource(R.string.watch_editor_preview_bright),
+                    selected = !ambient,
+                    enabled = enabled,
+                    modifier = Modifier.weight(1f),
+                    onClick = { onSelectAmbient(false) },
+                )
+                EditorPreviewChoiceButton(
+                    label = stringResource(R.string.watch_editor_preview_ambient),
+                    selected = ambient,
+                    enabled = enabled,
+                    modifier = Modifier.weight(1f),
+                    onClick = { onSelectAmbient(true) },
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun EditorPreviewChoiceButton(
+    label: String,
+    selected: Boolean,
+    enabled: Boolean,
+    modifier: Modifier = Modifier,
+    onClick: () -> Unit,
+) {
+    if (selected) {
+        FlueButton(onClick = onClick, enabled = enabled, modifier = modifier) {
+            Text(label, maxLines = 1)
+        }
+    } else {
+        FlueOutlinedButton(
+            onClick = onClick,
+            enabled = enabled,
+            modifier = modifier,
+            contentColor = LauncherTheme.style.bodyColor,
+        ) {
+            Text(label, maxLines = 1)
         }
     }
 }

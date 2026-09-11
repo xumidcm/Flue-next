@@ -44,12 +44,24 @@ fun DiagnosticsSettingsSection(vm: LauncherViewModel) {
         modifier = Modifier.fillMaxWidth().background(style.cardColor, style.cardShape).padding(14.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        Text(stringResource(R.string.diagnostics_performance_title), style = MaterialTheme.typography.titleMedium)
-        Text(stringResource(R.string.diagnostics_performance_description), style = MaterialTheme.typography.bodySmall)
+        Text(
+            stringResource(R.string.diagnostics_performance_title),
+            color = style.titleColor,
+            style = MaterialTheme.typography.titleMedium,
+        )
+        Text(
+            stringResource(R.string.diagnostics_performance_description),
+            color = style.secondaryTextColor,
+            style = MaterialTheme.typography.bodySmall,
+        )
         DiagnosticsSwitch(stringResource(R.string.diagnostics_fps), config.fps, DiagnosticsController::setFps)
         DiagnosticsSwitch(stringResource(R.string.diagnostics_memory), config.memory, DiagnosticsController::setMemory)
         DiagnosticsSwitch(stringResource(R.string.diagnostics_threads), config.threads, DiagnosticsController::setThreads)
-        Text(stringResource(R.string.diagnostics_recording_description), style = MaterialTheme.typography.bodySmall)
+        Text(
+            stringResource(R.string.diagnostics_recording_description),
+            color = style.secondaryTextColor,
+            style = MaterialTheme.typography.bodySmall,
+        )
         val status = when (recording.phase) {
             RecordingPhase.IDLE -> stringResource(R.string.diagnostics_recording_idle)
             RecordingPhase.STARTING -> stringResource(R.string.diagnostics_recording_preparing)
@@ -58,18 +70,21 @@ fun DiagnosticsSettingsSection(vm: LauncherViewModel) {
             RecordingPhase.READY -> stringResource(if (recording.completedAutomatically) R.string.diagnostics_recording_auto_ready else R.string.diagnostics_recording_ready)
             RecordingPhase.ERROR -> stringResource(R.string.diagnostics_recording_failed)
         }
-        Text(status, style = MaterialTheme.typography.bodyMedium)
+        Text(status, color = style.bodyColor, style = MaterialTheme.typography.bodyMedium)
         recording.errorRes?.let { Text(stringResource(it), color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
         TextButton(
             onClick = { if (recording.phase == RecordingPhase.RECORDING) DiagnosticsController.stopRecording() else DiagnosticsController.startRecording(context, diagnosticsConfiguration(vm)) },
             enabled = recording.phase != RecordingPhase.STARTING && recording.phase != RecordingPhase.FINISHING,
             modifier = Modifier.fillMaxWidth(),
         ) {
-            Text(stringResource(if (recording.phase == RecordingPhase.RECORDING) R.string.diagnostics_stop_recording else R.string.diagnostics_start_recording))
+            Text(
+                stringResource(if (recording.phase == RecordingPhase.RECORDING) R.string.diagnostics_stop_recording else R.string.diagnostics_start_recording),
+                color = style.accentColor,
+            )
         }
         if (recording.archive != null) {
             TextButton(onClick = { DiagnosticsController.shareArchive(context) }, modifier = Modifier.fillMaxWidth()) {
-                Text(stringResource(R.string.diagnostics_export))
+                Text(stringResource(R.string.diagnostics_export), color = style.accentColor)
             }
         }
     }
@@ -77,12 +92,18 @@ fun DiagnosticsSettingsSection(vm: LauncherViewModel) {
 
 @Composable
 private fun DiagnosticsSwitch(title: String, checked: Boolean, toggle: (Boolean) -> Unit) {
+    val style = LauncherTheme.style
     Row(
         modifier = Modifier.fillMaxWidth().clickable { toggle(!checked) }.padding(vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        Text(title, modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
+        Text(
+            title,
+            modifier = Modifier.weight(1f),
+            color = style.bodyColor,
+            style = MaterialTheme.typography.bodyMedium,
+        )
         FlueSwitch(checked = checked, onCheckedChange = toggle)
     }
 }
@@ -109,14 +130,25 @@ fun DiagnosticsInformationSection(vm: LauncherViewModel) {
         modifier = Modifier.fillMaxWidth().background(style.cardColor, style.cardShape).padding(14.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        Text(stringResource(R.string.diagnostics_information_title), style = MaterialTheme.typography.titleMedium)
-        Text(stringResource(R.string.diagnostics_information_privacy), style = MaterialTheme.typography.bodySmall)
+        Text(
+            stringResource(R.string.diagnostics_information_title),
+            color = style.titleColor,
+            style = MaterialTheme.typography.titleMedium,
+        )
+        Text(
+            stringResource(R.string.diagnostics_information_privacy),
+            color = style.secondaryTextColor,
+            style = MaterialTheme.typography.bodySmall,
+        )
         if (failed) Text(stringResource(R.string.diagnostics_information_failed), color = MaterialTheme.colorScheme.error)
         if (expanded && info != null) SelectionContainer {
-            Text(info.orEmpty(), style = MaterialTheme.typography.bodySmall)
+            Text(info.orEmpty(), color = style.bodyColor, style = MaterialTheme.typography.bodySmall)
         }
         TextButton(onClick = { expanded = !expanded }, enabled = info != null, modifier = Modifier.fillMaxWidth()) {
-            Text(stringResource(if (expanded) R.string.diagnostics_hide_information else R.string.diagnostics_show_information))
+            Text(
+                stringResource(if (expanded) R.string.diagnostics_hide_information else R.string.diagnostics_show_information),
+                color = style.accentColor,
+            )
         }
         TextButton(onClick = {
             val report = info ?: return@TextButton
@@ -127,10 +159,10 @@ fun DiagnosticsInformationSection(vm: LauncherViewModel) {
                 Toast.makeText(context, R.string.diagnostics_copy_failed, Toast.LENGTH_SHORT).show()
             }
         }, enabled = info != null, modifier = Modifier.fillMaxWidth()) {
-            Text(stringResource(R.string.diagnostics_copy_information))
+            Text(stringResource(R.string.diagnostics_copy_information), color = style.accentColor)
         }
         TextButton(onClick = { refresh++ }, modifier = Modifier.fillMaxWidth()) {
-            Text(stringResource(R.string.diagnostics_refresh_information))
+            Text(stringResource(R.string.diagnostics_refresh_information), color = style.accentColor)
         }
     }
 }

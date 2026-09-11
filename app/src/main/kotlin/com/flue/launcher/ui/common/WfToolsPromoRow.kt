@@ -28,7 +28,7 @@ import com.flue.launcher.R
 import com.flue.launcher.ui.theme.LauncherTheme
 
 /** WFTools 仓库地址。站外仓库，明确走系统浏览器而不是内置 WebView。 */
-const val WF_TOOLS_URL = "https://gitlab.com/ailife8881/wftools"
+const val WF_TOOLS_URL = "https://gitlab.com/ailife8881/wftools/-/releases"
 const val WATCH_DEFINITION_URL = "https://gitlab.com/ailife8881/watchmaker-definition"
 
 /**

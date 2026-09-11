@@ -1,14 +1,15 @@
 package com.flue.launcher.watchface.editor
 
 import android.media.MediaPlayer
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -30,13 +31,15 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.flue.launcher.R
 import com.flue.launcher.ui.style.FlueAlertDialog
+import com.flue.launcher.ui.style.FlueButton
+import com.flue.launcher.ui.style.FlueOutlinedButton
+import com.flue.launcher.ui.style.FlueTextField
 import java.io.File
 
 /** Preview settings are deliberately separate from the Watch document. */
 @Composable
 fun EditorPreviewViewportDialog(
     currentSize: WatchEditorViewport,
-    deviceSize: WatchEditorViewport,
     roundOverride: Boolean?,
     onApply: (WatchEditorViewport, Boolean?) -> Unit,
     onDismiss: () -> Unit,
@@ -48,24 +51,40 @@ fun EditorPreviewViewportDialog(
         height.toIntOrNull()?.let { it > 0 } == true
     FlueAlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text(stringResource(R.string.watch_editor_preview_viewport)) },
+        title = { Text(stringResource(R.string.watch_editor_preview_custom)) },
         text = {
             Column(Modifier.heightIn(max = 320.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text(stringResource(R.string.watch_editor_preview_only), style = MaterialTheme.typography.bodySmall)
-                OutlinedButton(onClick = { width = deviceSize.width.toString(); height = deviceSize.height.toString() }) {
-                    Text(stringResource(R.string.watch_editor_preview_current_device) + " · " + deviceSize.label)
-                }
-                listOf(480 to 480, 320 to 386, 368 to 448, 410 to 502).forEach { (w, h) ->
-                    OutlinedButton(onClick = { width = w.toString(); height = h.toString() }) { Text("$w × $h") }
-                }
-                Text(stringResource(R.string.watch_editor_preview_custom))
-                OutlinedTextField(width, { width = it }, label = { Text(stringResource(R.string.watch_editor_preview_width)) },
-                    singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number), modifier = Modifier.fillMaxWidth())
-                OutlinedTextField(height, { height = it }, label = { Text(stringResource(R.string.watch_editor_preview_height)) },
-                    singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number), modifier = Modifier.fillMaxWidth())
+                FlueTextField(
+                    value = width,
+                    onValueChange = { width = it },
+                    label = stringResource(R.string.watch_editor_preview_width),
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                FlueTextField(
+                    value = height,
+                    onValueChange = { height = it },
+                    label = stringResource(R.string.watch_editor_preview_height),
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    modifier = Modifier.fillMaxWidth(),
+                )
                 if (!valid) Text(stringResource(R.string.watch_editor_preview_invalid_size), color = MaterialTheme.colorScheme.error)
-                listOf(null to R.string.watch_editor_preview_follow_shape, true to R.string.watch_editor_preview_round, false to R.string.watch_editor_preview_rectangle).forEach { (value, label) ->
-                    FilterChip(selected = round == value, onClick = { round = value }, label = { Text(stringResource(label)) })
+                Row(
+                    modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    listOf(null to R.string.watch_editor_preview_follow_shape, true to R.string.watch_editor_preview_round, false to R.string.watch_editor_preview_rectangle).forEach { (value, label) ->
+                        if (round == value) {
+                            FlueButton(onClick = { round = value }) {
+                                Text(stringResource(label))
+                            }
+                        } else {
+                            FlueOutlinedButton(onClick = { round = value }) {
+                                Text(stringResource(label))
+                            }
+                        }
+                    }
                 }
             }
         },

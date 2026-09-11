@@ -1072,14 +1072,12 @@ fun WidgetPageLayer(
     val widgetHostOwner = remember { Any() }
     val refreshLifecycle = androidx.lifecycle.compose.LocalLifecycleOwner.current
     val refreshScope = rememberCoroutineScope()
-    var refreshFailed by remember { mutableStateOf(false) }
-    fun refreshProviders(force: Boolean = false) {
+    fun refreshProviders() {
         refreshScope.launch {
-            val listening = runCatching { repositories.widgetHostLifecycle.acquire(widgetHostOwner) }.isSuccess
-            val dispatched = withContext(kotlinx.coroutines.Dispatchers.IO) {
-                repositories.widgetRefreshCoordinator.refresh(widgetCards.map { it.widget }, force)
+            runCatching { repositories.widgetHostLifecycle.acquire(widgetHostOwner) }
+            withContext(kotlinx.coroutines.Dispatchers.IO) {
+                repositories.widgetRefreshCoordinator.refresh(widgetCards.map { it.widget })
             }
-            refreshFailed = !listening || !dispatched
         }
     }
     DisposableEffect(active, refreshLifecycle, widgetCards) {
@@ -1375,12 +1373,6 @@ fun WidgetPageLayer(
             .clip(flueOverlayMaskShape(overlayMaskCornerRadiusDp))
             .background(launcherStyle.screenBackground.copy(alpha = 0.62f))
     ) {
-        if (refreshFailed) {
-            androidx.compose.material3.TextButton(
-                onClick = { refreshProviders(force = true) },
-                modifier = Modifier.align(Alignment.TopCenter).zIndex(20f),
-            ) { Text(stringResource(R.string.widget_refresh_retry)) }
-        }
         val leftSafeInset = maxWidth * (leftSafeInsetPercent.coerceIn(0, 50) / 100f)
         val availableWidth = maxWidth - leftSafeInset
         val contentWidth = availableWidth * SIDE_SCREEN_CONTENT_WIDTH_RATIO
@@ -1867,11 +1859,6 @@ fun WidgetPageLayer(
                                 enabled = widgetCards.isNotEmpty(),
                             )
                             WidgetPageChip(
-                                label = stringResource(R.string.widget_refresh),
-                                onClick = { refreshProviders(force = true) },
-                                enabled = widgetCards.isNotEmpty(),
-                            )
-                            WidgetPageChip(
                                 label = stringResource(R.string.widget_add),
                                 onClick = {
                                     editMode = false
@@ -1900,11 +1887,6 @@ fun WidgetPageLayer(
                                     if (editMode) R.string.widget_done else R.string.widget_edit,
                                 ),
                                 onClick = { editMode = !editMode },
-                                enabled = widgetCards.isNotEmpty(),
-                            )
-                            WidgetPageChip(
-                                label = stringResource(R.string.widget_refresh),
-                                onClick = { refreshProviders(force = true) },
                                 enabled = widgetCards.isNotEmpty(),
                             )
                             WidgetPageChip(
