@@ -20,11 +20,14 @@ pr-body.md
 /.claude/settings.local.json
 /.claude/*.bak-before-*
 /.codex/
+/.codex_preview/
+/.zcode/
 /.kotlin/
 /.playwright-mcp/
 
 # Local diagnostics and one-off build output
 /*.log
+/output/playwright/
 /round-preview-*.png
 /honeycomb_current_backup.kt
 /honeycomb_diff.txt
