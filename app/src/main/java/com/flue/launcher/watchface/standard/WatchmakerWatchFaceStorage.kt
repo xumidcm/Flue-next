@@ -27,7 +27,12 @@ object WatchmakerWatchFaceStorage {
 
     fun rootDirectory(context: Context): File =
         File(context.filesDir, ROOT_DIRECTORY).apply {
-            if ((!exists() && !mkdirs()) || !isDirectory) {
+            // mkdirs() may return false when another import/scan wins the
+            // creation race. Re-check the filesystem before treating that as
+            // an install failure; otherwise the first startup can fail even
+            // though the directory is already usable.
+            if (!exists()) mkdirs()
+            if (!isDirectory) {
                 throw WatchArchiveException(
                     WatchArchiveFailureReason.INSTALL_FAILED,
                     "无法创建 .watch 表盘目录",

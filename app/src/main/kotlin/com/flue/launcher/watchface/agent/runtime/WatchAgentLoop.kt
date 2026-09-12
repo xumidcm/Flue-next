@@ -242,7 +242,7 @@ class WatchAgentLoop(
     }
 
     companion object {
-        const val DEFAULT_MAX_TURNS = 16
+        const val DEFAULT_MAX_TURNS = 50
     }
 
     private fun imageResult(result: WatchAgentToolResult): com.flue.launcher.watchface.agent.provider.AgentRequestImage? = when (val value = result.content) {
