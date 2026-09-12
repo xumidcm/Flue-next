@@ -207,13 +207,15 @@ private fun AgentSurfaceContent(viewModel: WatchAgentViewModel, messages: List<A
                 }
             }
         }
-        androidx.compose.animation.AnimatedVisibility(visible = !nearBottom && displayItems.isNotEmpty()) {
+        androidx.compose.animation.AnimatedVisibility(
+            visible = !nearBottom && displayItems.isNotEmpty(),
+            enter = androidx.compose.animation.slideInVertically { it } + androidx.compose.animation.fadeIn(),
+            exit = androidx.compose.animation.slideOutVertically { it } + androidx.compose.animation.fadeOut(),
+        ) {
             Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp), horizontalArrangement = Arrangement.Center) {
-                FlueSurface(shape = RoundedCornerShape(12.dp), color = LauncherTheme.style.topBarChipColor, border = null) {
-                    TextButton(onClick = { scope.launch { scrollToEnd(animated = true) } }) {
-                        Icon(Icons.Default.ArrowDownward, null, Modifier.size(16.dp))
-                        Text(stringResource(R.string.agent_back_to_bottom), Modifier.padding(start = 6.dp))
-                    }
+                TextButton(onClick = { scope.launch { scrollToEnd(animated = true) } }) {
+                    Icon(Icons.Default.ArrowDownward, null, Modifier.size(16.dp))
+                    Text(stringResource(R.string.agent_back_to_bottom), Modifier.padding(start = 6.dp))
                 }
             }
         }
