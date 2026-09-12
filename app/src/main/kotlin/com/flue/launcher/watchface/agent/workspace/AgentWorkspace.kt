@@ -16,6 +16,9 @@ data class RootfsState(
     val archiveSha256: String? = null,
     val bashAvailable: Boolean = false,
     val pythonAvailable: Boolean = false,
+    val aptAvailable: Boolean = false,
+    val yumAvailable: Boolean = false,
+    val pipAvailable: Boolean = false,
 )
 
 data class WorkspaceQuota(
@@ -75,4 +78,7 @@ data class WorkspaceCapability(
     val bashAvailable: Boolean,
     val pythonAvailable: Boolean,
     val reason: CapabilityReason,
+    val aptAvailable: Boolean = false,
+    val yumAvailable: Boolean = false,
+    val pipAvailable: Boolean = false,
 )

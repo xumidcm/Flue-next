@@ -3,6 +3,8 @@
     <string name="agent_title">AI Watch Face Assistant</string>
     <string name="agent_settings_title">Agent settings</string>
     <string name="agent_settings_intro">Provider, key, workspace, image, and search policies are saved for the active provider. Keys only enter Android Keystore.</string>
+    <string name="agent_enabled">Enable Agent</string>
+    <string name="agent_enabled_summary">When off, the editor shows only Layers, Properties, and Watch.</string>
     <string name="agent_overview_provider">Provider and model</string>
     <string name="agent_overview_provider_summary">Manage service URL, protocol, key, model, and context window.</string>
     <string name="agent_overview_features">Images and search</string>

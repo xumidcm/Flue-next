@@ -11,7 +11,7 @@ class WorkspacePermissionSettingsTest {
         val permissions = WorkspacePermissionSettings()
 
         assertEquals(BashApprovalMode.EACH_COMMAND, permissions.approvalMode)
-        assertFalse(permissions.networkAllowed)
+        assertTrue(permissions.networkAllowed)
         assertTrue(permissions.readAllowed)
         assertTrue(permissions.writeAllowed)
         assertFalse(permissions.attachmentImportAllowed)

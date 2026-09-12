@@ -161,6 +161,9 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.zIndex
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.core.content.ContextCompat
 import kotlinx.coroutines.delay
 import top.yukonga.miuix.kmp.icon.MiuixIcons
@@ -221,6 +224,8 @@ import com.flue.launcher.watchface.editor.WatchEditorSelectionBox
 import com.flue.launcher.watchface.editor.WatchEditorSession
 import com.flue.launcher.watchface.editor.watchXmlAssetPath
 import com.flue.launcher.watchface.agent.runtime.WatchAgentViewModel
+import com.flue.launcher.watchface.agent.storage.AgentFeatureSettingsStore
+import com.flue.launcher.watchface.agent.workspace.WorkspaceManager
 import com.flue.launcher.watchface.agent.tools.WatchAgentDisplayMode
 import com.flue.launcher.watchface.agent.tools.WatchAgentPreviewMode
 import com.flue.launcher.watchface.agent.tools.WatchAgentPreviewResult
@@ -1683,11 +1688,14 @@ private fun WatchEditorRoute(
                 Box(modifier = Modifier.fillMaxSize()) {
                     val agentViewModel: WatchAgentViewModel = viewModel()
                     val agentScope = active.logicalId ?: "draft:${active.draftDirectory.name}"
+                    val agentWorkspaceManager = remember(context) {
+                        WorkspaceManager(File(context.filesDir, "agent-runtime").toPath())
+                    }
                     LaunchedEffect(agentScope) { agentViewModel.onEditorEntered(agentScope) }
                     DisposableEffect(Unit) {
                         onDispose { agentViewModel.onEditorExited() }
                     }
-                    val agentToolHost = remember(active, previewRenderer, previewAmbient) {
+                    val agentToolHost = remember(active, previewRenderer, previewAmbient, agentWorkspaceManager, agentScope) {
                         WatchEditorSessionAgentToolHost(
                             session = active,
                             nativePreview = previewRenderer?.let { renderer ->
@@ -1738,6 +1746,8 @@ private fun WatchEditorRoute(
                                     )
                                 }
                             },
+                            workspaceManager = agentWorkspaceManager,
+                            watchScope = agentScope,
                             onDocumentMutated = {
                                 scope.launch {
                                     val next = withContext(Dispatchers.IO) {
@@ -2475,11 +2485,32 @@ private fun WatchEditorScreen(
     var panel by rememberSaveable { mutableStateOf(WatchEditorPanel.LAYERS) }
     var previousEditorPanel by rememberSaveable { mutableStateOf(WatchEditorPanel.LAYERS) }
     val agentState by agentViewModel.state.collectAsStateWithLifecycle()
+    val context = LocalContext.current
+    val lifecycleOwner = LocalLifecycleOwner.current
+    val agentFeatureStore = remember(context) { AgentFeatureSettingsStore(context) }
+    var agentEnabled by remember { mutableStateOf(agentFeatureStore.load().enabled) }
+    DisposableEffect(lifecycleOwner, agentFeatureStore) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) agentEnabled = agentFeatureStore.load().enabled
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+    val visiblePanels = remember(agentEnabled) {
+        if (agentEnabled) WatchEditorPanel.entries else WatchEditorPanel.entries.filter { it != WatchEditorPanel.AGENT }
+    }
     // 三档布局：上箭头=画布铺满全屏，下箭头=图层/属性/表盘面板铺满全屏，
     // 中间态为分屏。用一个动画化的高度比例驱动，绝不整树替换——以前
     // previewFullscreen 的提前 return 会把 AndroidView 销毁重建，进出全屏
     // 表盘要整个重载一遍。
     var editorLayout by rememberSaveable { mutableStateOf(WatchEditorLayout.SPLIT) }
+    LaunchedEffect(agentEnabled) {
+        if (!agentEnabled && panel == WatchEditorPanel.AGENT) {
+            agentViewModel.minimize()
+            panel = previousEditorPanel
+            editorLayout = WatchEditorLayout.SPLIT
+        }
+    }
     val previewFullscreen = editorLayout == WatchEditorLayout.CANVAS_FULL
     // 预览播放开关：一次点击同时控制序列帧、视频与重力景深。默认暂停，
     // 进编辑器先看到表盘的默认正视角，也避免一进来就 30fps 解码。
@@ -2490,11 +2521,12 @@ private fun WatchEditorScreen(
     val layerListState = rememberLazyListState()
     val propertiesListState = rememberLazyListState()
     val watchListState = rememberLazyListState()
+    val agentListState = rememberLazyListState()
     val panelListState: LazyListState = when (panel) {
         WatchEditorPanel.LAYERS -> layerListState
         WatchEditorPanel.PROPERTIES -> propertiesListState
         WatchEditorPanel.WATCH -> watchListState
-        WatchEditorPanel.AGENT -> rememberLazyListState()
+        WatchEditorPanel.AGENT -> agentListState
     }
     val selectedBlockOrders = remember(snapshot.layers, selectedLayerKeys) {
         val block = watchEditorLayerSelectionBlock(snapshot.layers, selectedLayerKeys)
@@ -2502,7 +2534,6 @@ private fun WatchEditorScreen(
     }
     var collapsedLayerKeys by rememberSaveable { mutableStateOf<Set<String>>(emptySet()) }
     var scrollToLayerRequest by remember { mutableStateOf<Pair<Int, String>?>(null) }
-    val context = LocalContext.current
     val deviceViewport = remember(context.resources.displayMetrics) {
         context.resources.displayMetrics.let { WatchEditorViewport(it.widthPixels.coerceAtLeast(1), it.heightPixels.coerceAtLeast(1)) }
     }
@@ -2950,10 +2981,10 @@ private fun WatchEditorScreen(
                 exit = shrinkVertically(shrinkTowards = Alignment.Top) + fadeOut(),
             ) {
                 TabRow(
-                    selectedTabIndex = panel.ordinal,
+                    selectedTabIndex = visiblePanels.indexOf(panel).coerceAtLeast(0),
                     modifier = Modifier.padding(horizontal = if (isRound) 26.dp else 0.dp),
                 ) {
-                    WatchEditorPanel.entries.forEach { candidate ->
+                    visiblePanels.forEach { candidate ->
                         Tab(
                             selected = panel == candidate,
                             modifier = Modifier,

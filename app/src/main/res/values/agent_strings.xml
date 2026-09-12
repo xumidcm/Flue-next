@@ -3,6 +3,8 @@
     <string name="agent_title">AI 表盘助手</string>
     <string name="agent_settings_title">Agent 设置</string>
     <string name="agent_settings_intro">Provider、密钥、工作区和图片/搜索策略会按活动 Provider 保存。密钥仅进入 Android Keystore。</string>
+    <string name="agent_enabled">启用 Agent</string>
+    <string name="agent_enabled_summary">关闭后编辑器恢复为图层、属性和表盘三个面板。</string>
     <string name="agent_overview_provider">Provider 与模型</string>
     <string name="agent_overview_provider_summary">管理服务地址、协议、密钥、模型与上下文窗口。</string>
     <string name="agent_overview_features">图片与搜索</string>

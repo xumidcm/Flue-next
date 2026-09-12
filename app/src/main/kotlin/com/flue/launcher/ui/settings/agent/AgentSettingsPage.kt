@@ -129,6 +129,7 @@ fun AgentSettingsPage(onBack: () -> Unit) {
     var showTavilyKey by remember { mutableStateOf(false) }
     var workspaceSearchEnabled by rememberSaveable { mutableStateOf(featureInitial.workspaceSearchEnabled) }
     var copyAttachments by rememberSaveable { mutableStateOf(featureInitial.copyAttachmentsIntoWorkspace) }
+    var agentEnabled by rememberSaveable { mutableStateOf(featureInitial.enabled) }
 
     var workspaces by remember { mutableStateOf<List<AgentWorkspace>>(emptyList()) }
     var workspaceName by rememberSaveable { mutableStateOf("") }
@@ -357,6 +358,16 @@ fun AgentSettingsPage(onBack: () -> Unit) {
             AgentSettingsDestination.OVERVIEW -> {
                 item("agent_overview_ai") {
                     AgentSettingsGroup {
+                        AgentSettingsEntry(
+                            title = stringResource(R.string.agent_enabled),
+                            subtitle = stringResource(R.string.agent_enabled_summary),
+                            onClick = {
+                                agentEnabled = !agentEnabled
+                                featureStore.saveEnabled(agentEnabled)
+                            },
+                            leading = { SettingsIcon(MiuixIcons.Sparkle, MiuixIcons.Sparkle) },
+                            trailing = { FlueSwitch(agentEnabled, { value -> agentEnabled = value; featureStore.saveEnabled(value) }) },
+                        )
                         AgentSettingsEntry(
                             title = stringResource(R.string.agent_overview_provider),
                             subtitle = stringResource(R.string.agent_overview_provider_summary),

@@ -153,6 +153,18 @@ class AgentProviderStorageAndClientTest {
     }
 
     @Test
+    fun `agent feature is enabled by default and can be toggled independently`() {
+        val secrets = InMemoryAiSecretStore()
+        val store = AgentFeatureSettingsStore(context, secrets)
+
+        assertTrue(store.load().enabled)
+        assertTrue(store.saveEnabled(false))
+        assertFalse(store.load().enabled)
+        assertTrue(store.saveEnabled(true))
+        assertTrue(store.load().enabled)
+    }
+
+    @Test
     fun `client sends auth and converts non streaming response`() = runBlocking {
         var captured: AgentHttpRequest? = null
         val transport = AgentHttpTransport { request, _ ->

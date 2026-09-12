@@ -14,6 +14,10 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.shrinkVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ExpandLess
@@ -284,7 +288,11 @@ internal fun AgentThoughtChain(
                     modifier = Modifier.size(18.dp),
                 )
             }
-            if (expanded) {
+            AnimatedVisibility(
+                visible = expanded,
+                enter = expandVertically() + fadeIn(),
+                exit = shrinkVertically() + fadeOut(),
+            ) {
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -292,7 +300,8 @@ internal fun AgentThoughtChain(
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                     content = content,
                 )
-            } else if (collapsedPreview != null) {
+            }
+            if (!expanded && collapsedPreview != null) {
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()

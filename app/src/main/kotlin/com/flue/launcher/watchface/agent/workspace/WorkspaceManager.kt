@@ -3,6 +3,7 @@ package com.flue.launcher.watchface.agent.workspace
 import java.io.IOException
 import java.nio.file.AtomicMoveNotSupportedException
 import java.nio.file.Files
+import java.nio.file.LinkOption
 import java.nio.file.Path
 import java.nio.file.StandardCopyOption
 import java.util.Comparator
@@ -173,6 +174,9 @@ class WorkspaceManager private constructor(
             bashAvailable = rootfsInstalled && workspace.rootfs.bashAvailable,
             pythonAvailable = rootfsInstalled && workspace.rootfs.pythonAvailable,
             reason = reason,
+            aptAvailable = rootfsInstalled && workspace.rootfs.aptAvailable,
+            yumAvailable = rootfsInstalled && workspace.rootfs.yumAvailable,
+            pipAvailable = rootfsInstalled && workspace.rootfs.pipAvailable,
         )
     }
 
@@ -182,6 +186,9 @@ class WorkspaceManager private constructor(
         workspaceId: String,
         bashAvailable: Boolean,
         pythonAvailable: Boolean,
+        aptAvailable: Boolean = false,
+        yumAvailable: Boolean = false,
+        pipAvailable: Boolean = false,
         architecture: String? = null,
         version: String? = null,
         archiveSha256: String? = null,
@@ -195,6 +202,9 @@ class WorkspaceManager private constructor(
                 archiveSha256 = archiveSha256,
                 bashAvailable = bashAvailable,
                 pythonAvailable = pythonAvailable,
+                aptAvailable = aptAvailable,
+                yumAvailable = yumAvailable,
+                pipAvailable = pipAvailable,
             ),
         )
         writeMetadata(updated)
@@ -212,6 +222,9 @@ class WorkspaceManager private constructor(
         stagingRootfs: Path,
         bashAvailable: Boolean,
         pythonAvailable: Boolean,
+        aptAvailable: Boolean = false,
+        yumAvailable: Boolean = false,
+        pipAvailable: Boolean = false,
         architecture: String,
         version: String,
         archiveSha256: String,
@@ -243,6 +256,9 @@ class WorkspaceManager private constructor(
                     archiveSha256 = archiveSha256,
                     bashAvailable = bashAvailable,
                     pythonAvailable = pythonAvailable,
+                    aptAvailable = aptAvailable,
+                    yumAvailable = yumAvailable,
+                    pipAvailable = pipAvailable,
                 ),
             )
             writeMetadata(updated)
@@ -368,14 +384,83 @@ class WorkspaceManager private constructor(
     fun faceMirrorDirectory(workspaceId: String): Path? =
         get(workspaceId)?.paths?.face?.also { Files.createDirectories(it) }
 
-    /** Atomically refreshes the face mirror documents used by Bash tooling. */
+    data class FaceMirrorSnapshot(
+        val watchXml: String,
+        val globalScript: String,
+        val resources: List<String>,
+    )
+
+    /** Atomically refreshes the face mirror documents and resources used by Bash tooling. */
     @Synchronized
-    fun syncFaceMirror(workspaceId: String, watchXml: String, globalScript: String): Boolean {
+    fun syncFaceMirror(
+        workspaceId: String,
+        watchXml: String,
+        globalScript: String,
+        resources: Map<String, ByteArray> = emptyMap(),
+    ): Boolean {
         val face = faceMirrorDirectory(workspaceId) ?: return false
+        require(watchXml.toByteArray(Charsets.UTF_8).size <= MAX_FACE_MIRROR_FILE_BYTES) {
+            "watch.xml exceeds mirror file limit"
+        }
+        require(globalScript.toByteArray(Charsets.UTF_8).size <= MAX_FACE_MIRROR_FILE_BYTES) {
+            "script.txt exceeds mirror file limit"
+        }
         writeAtomically(face.resolve("watch.xml"), watchXml)
         val scripts = face.resolve("scripts"); Files.createDirectories(scripts)
         writeAtomically(scripts.resolve("script.txt"), globalScript)
+        val keep = resources.keys.map { WorkspacePathPolicy.sanitizeRelative(it) }.toSet()
+        Files.walk(face).use { stream ->
+            stream.filter { path ->
+                path != face && Files.isRegularFile(path, LinkOption.NOFOLLOW_LINKS)
+            }.forEach { path ->
+                val relative = face.relativize(path).toString().replace('\\', '/')
+                if (relative != "watch.xml" && relative != "scripts/script.txt" && relative !in keep) {
+                    Files.deleteIfExists(path)
+                }
+            }
+        }
+        resources.forEach { (relativePath, bytes) ->
+            val clean = WorkspacePathPolicy.sanitizeRelative(relativePath)
+            require(FACE_RESOURCE_PREFIXES.any { clean.startsWith(it) }) {
+                "Face resource path is not allowed: $relativePath"
+            }
+            require(bytes.size <= MAX_FACE_MIRROR_FILE_BYTES) { "Face resource exceeds mirror file limit: $relativePath" }
+            val target = WorkspacePathPolicy.resolveInside(face, clean)
+            Files.createDirectories(target.parent)
+            writeAtomically(target, bytes)
+        }
+        refreshQuota(workspaceId)
         return true
+    }
+
+    @Synchronized
+    fun readFaceMirror(workspaceId: String): FaceMirrorSnapshot? {
+        val face = faceMirrorDirectory(workspaceId) ?: return null
+        val xml = face.resolve("watch.xml")
+        val script = face.resolve("scripts/script.txt")
+        val watchXml = if (Files.isRegularFile(xml, LinkOption.NOFOLLOW_LINKS)) String(Files.readAllBytes(xml), Charsets.UTF_8) else ""
+        val globalScript = if (Files.isRegularFile(script, LinkOption.NOFOLLOW_LINKS)) String(Files.readAllBytes(script), Charsets.UTF_8) else ""
+        val resources = mutableListOf<String>()
+        Files.walk(face).use { stream ->
+            stream.filter { it != face && Files.isRegularFile(it, LinkOption.NOFOLLOW_LINKS) }
+                .forEach { path ->
+                    val relative = face.relativize(path).toString().replace('\\', '/')
+                    if (relative != "watch.xml" && relative != "scripts/script.txt") resources += relative
+                }
+        }
+        return FaceMirrorSnapshot(watchXml, globalScript, resources.sorted())
+    }
+
+    /** Resolves only explicitly managed workspace directories for Bash/import tools. */
+    @Synchronized
+    fun resolveWorkspaceFile(workspaceId: String, relativePath: String): Path? {
+        val workspace = get(workspaceId) ?: return null
+        val clean = WorkspacePathPolicy.sanitizeRelative(relativePath)
+        val rootName = clean.substringBefore('/')
+        if (rootName !in ALLOWED_WORKSPACE_MOUNTS) throw WorkspacePathViolation("Workspace mount is not allowed: $rootName")
+        val target = WorkspacePathPolicy.resolveInside(workspace.paths.root, clean)
+        if (Files.isSymbolicLink(target)) throw WorkspacePathViolation("Symbolic links are not allowed")
+        return target
     }
 
     /** Imports an archive into a new UUID after validating every entry as a relative path. */
@@ -447,6 +532,9 @@ class WorkspaceManager private constructor(
             "archiveSha256" to workspace.rootfs.archiveSha256,
             "bashAvailable" to workspace.rootfs.bashAvailable,
             "pythonAvailable" to workspace.rootfs.pythonAvailable,
+            "aptAvailable" to workspace.rootfs.aptAvailable,
+            "yumAvailable" to workspace.rootfs.yumAvailable,
+            "pipAvailable" to workspace.rootfs.pipAvailable,
         )
         val json = mapOf(
             "id" to workspace.id,
@@ -475,6 +563,9 @@ class WorkspaceManager private constructor(
                 archiveSha256 = rootfs?.string("archiveSha256"),
                 bashAvailable = rootfs?.bool("bashAvailable") ?: false,
                 pythonAvailable = rootfs?.bool("pythonAvailable") ?: false,
+                aptAvailable = rootfs?.bool("aptAvailable") ?: false,
+                yumAvailable = rootfs?.bool("yumAvailable") ?: false,
+                pipAvailable = rootfs?.bool("pipAvailable") ?: false,
             ),
             quota = WorkspaceQuota(
                 limitBytes = json.long("quotaLimitBytes") ?: defaultQuotaBytes,
@@ -508,9 +599,13 @@ class WorkspaceManager private constructor(
     }
 
     private fun writeAtomically(target: Path, content: String) {
+        writeAtomically(target, content.toByteArray(Charsets.UTF_8))
+    }
+
+    private fun writeAtomically(target: Path, bytes: ByteArray) {
         Files.createDirectories(target.parent)
         val staging = target.resolveSibling(".${target.fileName}.tmp-${UUID.randomUUID()}")
-        Files.write(staging, content.toByteArray(Charsets.UTF_8))
+        Files.write(staging, bytes)
         moveAtomically(staging, target)
     }
 
@@ -534,5 +629,8 @@ class WorkspaceManager private constructor(
     companion object {
         /** Workspaces are storage-managed; the app no longer imposes an artificial quota. */
         const val DEFAULT_QUOTA_BYTES: Long = Long.MAX_VALUE
+        private const val MAX_FACE_MIRROR_FILE_BYTES: Int = 20 * 1024 * 1024
+        private val FACE_RESOURCE_PREFIXES = listOf("images/", "fonts/", "fonts_bm/")
+        private val ALLOWED_WORKSPACE_MOUNTS = setOf("workspace", "generated", "previews", "home", "face")
     }
 }

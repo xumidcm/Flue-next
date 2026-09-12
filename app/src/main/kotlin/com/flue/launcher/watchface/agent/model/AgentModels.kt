@@ -81,6 +81,7 @@ data class WatchAgentUiState(
     val surface: AgentSurface = AgentSurface.SPLIT,
     val inputDraft: String = "",
     val expandedToolIds: Set<String> = emptySet(),
+    val expandedToolDetailIds: Set<String> = emptySet(),
     val showHistory: Boolean = false,
     val showSettings: Boolean = false,
     val isGenerating: Boolean = false,
@@ -95,6 +96,14 @@ data class WatchAgentUiState(
     fun enterFullscreen(): WatchAgentUiState = copy(surface = AgentSurface.FULLSCREEN)
 
     fun exitFullscreen(): WatchAgentUiState = copy(surface = AgentSurface.SPLIT)
+
+    fun toggleTool(toolId: String): WatchAgentUiState = copy(
+        expandedToolIds = if (toolId in expandedToolIds) expandedToolIds - toolId else expandedToolIds + toolId,
+    )
+
+    fun toggleToolDetails(toolId: String): WatchAgentUiState = copy(
+        expandedToolDetailIds = if (toolId in expandedToolDetailIds) expandedToolDetailIds - toolId else expandedToolDetailIds + toolId,
+    )
 
     companion object {
         fun initial(watchScope: String): WatchAgentUiState = WatchAgentUiState(watchScope = watchScope)

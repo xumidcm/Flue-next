@@ -8,6 +8,21 @@ import org.junit.Assert.assertNotEquals
 import org.junit.Test
 
 class WatchAgentModelsTest {
+
+    @Test
+    fun `tool and detail expansion are independent per call`() {
+        var state = WatchAgentUiState.initial("watch")
+        state = state.toggleTool("call-a")
+        state = state.toggleToolDetails("call-a")
+        state = state.toggleTool("call-b")
+
+        assertEquals(setOf("call-a", "call-b"), state.expandedToolIds)
+        assertEquals(setOf("call-a"), state.expandedToolDetailIds)
+
+        state = state.toggleTool("call-a")
+        assertEquals(setOf("call-b"), state.expandedToolIds)
+        assertEquals(setOf("call-a"), state.expandedToolDetailIds)
+    }
     @Test
     fun `new editor entry creates a fresh conversation while history remains scoped`() {
         val first = AgentConversation.new("face-a", now = 10L)

@@ -70,6 +70,9 @@ data class RootfsInstallProgress(
 data class RootfsSelfCheck(
     val bashAvailable: Boolean,
     val pythonAvailable: Boolean,
+    val aptAvailable: Boolean = false,
+    val yumAvailable: Boolean = false,
+    val pipAvailable: Boolean = false,
     val failure: RootfsSelfCheckFailure? = null,
 )
 
@@ -120,7 +123,7 @@ object RootfsCatalog {
                 archiveSizeBytes = 29_936_675L,
                 expandedSizeBytes = 512L * 1024L * 1024L,
                 signature = "apk-pinned:ubuntu-sha256sums",
-                requiredPaths = setOf("/bin/bash"),
+                requiredPaths = setOf("/bin/bash", "/usr/bin/apt-get", "/usr/bin/pip3"),
             ),
             format = RootfsArchiveFormat.TAR_GZ,
         )
@@ -135,6 +138,9 @@ class RootfsInstaller(
         RootfsSelfCheck(
             bashAvailable = Files.isRegularFile(linux.resolve("bin/bash"), LinkOption.NOFOLLOW_LINKS),
             pythonAvailable = Files.isRegularFile(linux.resolve("usr/bin/python3"), LinkOption.NOFOLLOW_LINKS),
+            aptAvailable = Files.isRegularFile(linux.resolve("usr/bin/apt-get"), LinkOption.NOFOLLOW_LINKS),
+            yumAvailable = Files.isRegularFile(linux.resolve("usr/bin/yum"), LinkOption.NOFOLLOW_LINKS),
+            pipAvailable = Files.isRegularFile(linux.resolve("usr/bin/pip3"), LinkOption.NOFOLLOW_LINKS),
         )
     },
 ) {
@@ -198,6 +204,9 @@ class RootfsInstaller(
                 stagingRootfs = staging,
                 bashAvailable = true,
                 pythonAvailable = check.pythonAvailable,
+                aptAvailable = check.aptAvailable,
+                yumAvailable = check.yumAvailable,
+                pipAvailable = check.pipAvailable,
                 architecture = manifest.architecture,
                 version = manifest.version,
                 archiveSha256 = manifest.archiveSha256.lowercase(),

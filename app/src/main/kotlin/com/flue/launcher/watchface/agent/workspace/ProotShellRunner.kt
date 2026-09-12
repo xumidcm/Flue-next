@@ -37,6 +37,7 @@ data class ProcessGroupSpec(
     val rootfs: Path,
     val home: Path,
     val workingDirectory: Path,
+    val faceMirrorDirectory: Path? = null,
     val command: String,
     val timeoutSeconds: Long,
     val maxOutputBytes: Long,
@@ -91,11 +92,19 @@ fun androidProotCommand(
     add("/workspace")
     add("-b")
     add("${spec.workingDirectory}:/workspace")
+    spec.faceMirrorDirectory?.let { face ->
+        add("-b")
+        add("$face:/workspace/face")
+    }
     add("-b")
     add("${spec.home}:/root")
     kernelFsMounts.forEach { kernelPath ->
         add("-b")
         add(kernelPath)
+    }
+    if (networkAllowed && Files.isRegularFile(Paths.get("/etc/resolv.conf"))) {
+        add("-b")
+        add("/etc/resolv.conf:/etc/resolv.conf")
     }
     add("/usr/bin/env")
     add("-i")
@@ -138,8 +147,9 @@ class AndroidRootfsSelfChecker(
                     home = home,
                     workingDirectory = working,
                     command = "test -x /bin/bash && command -v bash >/dev/null || exit 120; " +
-                        "if command -v python3 >/dev/null; then printf 'FLUE_PYTHON=1\\n'; " +
-                        "else printf 'FLUE_PYTHON=0\\n'; fi",
+                        "for tool in python3 apt-get yum pip3; do " +
+                        "if command -v \"${'$'}tool\" >/dev/null 2>&1; then printf 'FLUE_%s=1\\n' \"${'$'}(printf '%s' \"${'$'}tool\" | tr '[:lower:]-' '[:upper:]_')\"; " +
+                        "else printf 'FLUE_%s=0\\n' \"${'$'}(printf '%s' \"${'$'}tool\" | tr '[:lower:]-' '[:upper:]_')\"; fi; done",
                     timeoutSeconds = 20L,
                     maxOutputBytes = 16L * 1024L,
                 ),
@@ -163,6 +173,9 @@ class AndroidRootfsSelfChecker(
         return RootfsSelfCheck(
             bashAvailable = true,
             pythonAvailable = result.stdout.contains("FLUE_PYTHON=1"),
+            aptAvailable = result.stdout.contains("FLUE_APT_GET=1"),
+            yumAvailable = result.stdout.contains("FLUE_YUM=1"),
+            pipAvailable = result.stdout.contains("FLUE_PIP3=1"),
         )
     }
 
@@ -333,6 +346,7 @@ class SafeProotShellRunner(
                     rootfs = workspace.paths.linux,
                     home = workspace.paths.home,
                     workingDirectory = workspace.paths.workspace,
+                    faceMirrorDirectory = workspace.paths.face,
                     command = request.command,
                     timeoutSeconds = request.timeoutSeconds,
                     maxOutputBytes = request.maxOutputBytes,

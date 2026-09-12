@@ -356,8 +356,11 @@ class WatchAgentViewModel(application: Application) : AndroidViewModel(applicati
     fun toggleSettings(show: Boolean) { _state.update { it.copy(showSettings = show, showHistory = false) } }
 
     fun toggleTool(toolId: String) = _state.update {
-        val next = if (toolId in it.expandedToolIds) it.expandedToolIds - toolId else it.expandedToolIds + toolId
-        it.copy(expandedToolIds = next)
+        it.toggleTool(toolId)
+    }
+
+    fun toggleToolDetails(toolId: String) = _state.update {
+        it.toggleToolDetails(toolId)
     }
 
     fun selectConversation(id: String) {
@@ -482,7 +485,8 @@ class WatchAgentViewModel(application: Application) : AndroidViewModel(applicati
                         } }
                     val workspaceId = workspaceManager.bindingFor(generation.watchScope)?.workspaceId.orEmpty()
                     val capability = workspaceManager.capability(workspaceId)
-                    val capabilityPrompt = "\n\n本轮运行时能力状态：工作区=${if (workspaceId.isBlank()) "未绑定" else "已绑定"}；Rootfs=${if (capability.rootfsInstalled) "已安装" else "未安装"}；Bash=${if (capability.bashAvailable) "已安装且可调用" else "不可调用（请如实说明原因）"}；Python=${if (capability.pythonAvailable) "已安装且可调用" else "不可用"}。用户明确要求 run_bash 时，若 Bash 已安装必须直接调用。"
+                    val permissions = permissionStore.load()
+                    val capabilityPrompt = "\n\n本轮运行时能力状态：工作区=${if (workspaceId.isBlank()) "未绑定" else "已绑定"}；Rootfs=${if (capability.rootfsInstalled) "已安装" else "未安装"}；Bash=${if (capability.bashAvailable) "已安装且可调用" else "不可调用（请如实说明原因）"}；Python=${if (capability.pythonAvailable) "已安装且可调用" else "不可用"}；apt-get=${if (capability.aptAvailable) "可用" else "不可用"}；yum=${if (capability.yumAvailable) "可用" else "不可用"}；pip3=${if (capability.pipAvailable) "可用" else "不可用"}；网络=${if (permissions.networkAllowed) "已允许" else "已关闭"}。用户明确要求 run_bash 时，若 Bash 已安装必须直接调用。"
                     val requestMessages = listOf(
                         AgentRequestMessage(AgentMessageRole.SYSTEM, WatchAgentPrompt.baseline + capabilityPrompt),
                     ) + history

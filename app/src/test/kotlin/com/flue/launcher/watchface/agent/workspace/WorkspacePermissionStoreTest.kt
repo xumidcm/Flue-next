@@ -28,7 +28,7 @@ class WorkspacePermissionStoreTest {
         val settings = WorkspacePermissionStore(context).load()
 
         assertEquals(BashApprovalMode.EACH_COMMAND, settings.approvalMode)
-        assertFalse(settings.networkAllowed)
+        assertTrue(settings.networkAllowed)
         assertTrue(settings.readAllowed)
         assertTrue(settings.writeAllowed)
         assertFalse(settings.attachmentImportAllowed)

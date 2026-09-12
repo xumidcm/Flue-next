@@ -7,6 +7,9 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -128,11 +131,12 @@ private fun AgentSurfaceContent(viewModel: WatchAgentViewModel, messages: List<A
     // was already pinned to the bottom should follow streaming output; a reader
     // who is looking at older messages must stay at that position.
     LaunchedEffect(state.isGenerating) {
-        if (state.isGenerating) followOutput = nearBottom
+        if (state.isGenerating) followOutput = true
+        // Legacy contract: if (state.isGenerating) followOutput = nearBottom
     }
     LaunchedEffect(listState, state.activeConversationId) {
         snapshotFlow { listState.isScrollInProgress to nearBottom }.collect { (scrolling, atBottom) ->
-            if (scrolling) followOutput = atBottom
+            if (scrolling && !atBottom) followOutput = false
         }
     }
     suspend fun scrollToEnd(animated: Boolean) {
@@ -196,8 +200,10 @@ private fun AgentSurfaceContent(viewModel: WatchAgentViewModel, messages: List<A
                                 generationStatus = state.generationStatus,
                                 inputTokens = state.inputTokens,
                                 outputTokens = state.outputTokens,
-                                expanded = item.expansionKey in state.expandedToolIds,
-                                onToggleThoughtChain = { viewModel.toggleTool(item.expansionKey) },
+                                expandedToolIds = state.expandedToolIds,
+                                expandedToolDetailIds = state.expandedToolDetailIds,
+                                onToggleTool = viewModel::toggleTool,
+                                onToggleToolDetails = viewModel::toggleToolDetails,
                                 onCopy = { copyToClipboard(context, it) },
                                 onRetry = {
                                     val firstIndex = messages.indexOfFirst { message -> message.id == item.messages.first().id }
@@ -283,8 +289,8 @@ private fun AgentMessageCard(message: AgentMessage, actionsEnabled: Boolean, onC
         -> AgentAssistantTurn(
             messages = listOf(message),
             actionsEnabled = actionsEnabled,
-            expanded = expanded,
-            onToggleThoughtChain = onToggleTool,
+            expandedToolIds = if (expanded) setOf(message.id) else emptySet(),
+            onToggleTool = { onToggleTool() },
             onCopy = onCopy,
             onRetry = onRetry,
         )
@@ -339,8 +345,10 @@ private fun AgentAssistantTurn(
     generationStatus: AgentGenerationStatus? = null,
     inputTokens: Long? = null,
     outputTokens: Long? = null,
-    expanded: Boolean,
-    onToggleThoughtChain: () -> Unit,
+    expandedToolIds: Set<String> = emptySet(),
+    expandedToolDetailIds: Set<String> = emptySet(),
+    onToggleTool: (String) -> Unit = {},
+    onToggleToolDetails: (String) -> Unit = {},
     onCopy: (String) -> Unit,
     onRetry: () -> Unit,
 ) {
@@ -382,29 +390,44 @@ private fun AgentAssistantTurn(
         // Render the provider timeline in arrival order: reasoning/text first,
         // then the tool result, then the next model output.
         val toolResults = messages.filter { agentMessageLayout(it) == AgentMessageLayout.TOOL_STEP }
-        val consumedResults = remember(messages) { mutableSetOf<String>() }
+        val consumedResults = mutableSetOf<String>()
         val finalAssistantId = messages.lastOrNull { it.role == AgentMessageRole.ASSISTANT && agentMessageLayout(it) == AgentMessageLayout.ASSISTANT_FLOW }?.id
         // message.toolCalls.forEach remains paired by the ordered thought chain.
         thoughtSteps.forEach { _ -> }
         messages.forEach { message ->
             message.reasoningContent?.takeIf(String::isNotBlank)?.let { reasoning ->
-                if (expanded) Text(reasoning, style = MaterialTheme.typography.bodySmall, color = LauncherTheme.style.secondaryTextColor)
+                AgentReasoningStep(AgentThoughtStep.Reasoning(message, reasoning), showDetails = true)
             }
             if (agentMessageLayout(message) == AgentMessageLayout.ASSISTANT_FLOW && message.content.isNotBlank()) {
                 AgentTextMessageContent(
                     message, actionsEnabled, onCopy, {}, onRetry, outputTokens,
-                    showActions = message.id == finalAssistantId && message.status != AgentMessageStatus.STREAMING,
+                    showActions = message.id == finalAssistantId && message.status == AgentMessageStatus.COMPLETE,
                 )
             }
             if (message.toolCalls.isNotEmpty()) {
-                val paired = message.toolCalls.map { call ->
-                    AgentThoughtStep.Tool(call, toolResults.firstOrNull { it.toolCallId == call.id && consumedResults.add(it.id) })
+                message.toolCalls.forEach { call ->
+                    val result = toolResults.firstOrNull { it.id !in consumedResults && it.toolCallId == call.id }
+                    result?.let { consumedResults += it.id }
+                    AgentToolInvocationStep(
+                        call = call,
+                        result = result,
+                        showDetails = call.id in expandedToolIds,
+                        detailsExpanded = call.id in expandedToolDetailIds,
+                        onToggle = { onToggleTool(call.id) },
+                        onToggleDetails = { onToggleToolDetails(call.id) },
+                    )
                 }
-                AgentToolGroup(paired, expanded, onToggleThoughtChain, onCopy)
             }
             if (agentMessageLayout(message) == AgentMessageLayout.TOOL_STEP && message.id !in consumedResults) {
                 consumedResults += message.id
-                AgentThoughtStepContent(AgentThoughtStep.Tool(null, message), expanded, onCopy, onToggleThoughtChain)
+                val toolId = message.toolCallId ?: message.id
+                AgentToolResultStep(
+                    result = message,
+                    showDetails = toolId in expandedToolIds,
+                    detailsExpanded = toolId in expandedToolDetailIds,
+                    onToggle = { onToggleTool(toolId) },
+                    onToggleDetails = { onToggleToolDetails(toolId) },
+                )
             }
         }
     }
@@ -438,7 +461,7 @@ private fun AgentToolGroup(
         }
         if (expanded) {
             steps.forEach { step ->
-                AgentToolStepContent(step.call?.name, step.result, true, onCopy, {})
+                AgentToolStepContent(step.call?.name, step.result, true, false, {}, {}, step.call)
             }
         }
     }
@@ -456,9 +479,9 @@ private fun AgentThoughtStepContent(
         is AgentThoughtStep.Tool -> {
             val call = step.call
             if (call != null) {
-                AgentToolInvocationStep(call, step.result, showDetails, onCopy, onToggle)
+                AgentToolInvocationStep(call, step.result, showDetails, false, onToggle)
             } else {
-                AgentToolResultStep(requireNotNull(step.result), showDetails, onCopy, onToggle)
+                AgentToolResultStep(requireNotNull(step.result), showDetails, false, onToggle)
             }
         }
     }
@@ -489,20 +512,22 @@ private fun AgentToolInvocationStep(
     call: AgentToolCallRecord,
     result: AgentMessage?,
     showDetails: Boolean,
-    onCopy: (String) -> Unit,
+    detailsExpanded: Boolean = false,
     onToggle: () -> Unit,
+    onToggleDetails: () -> Unit = {},
 ) {
-    AgentToolStepContent(call.name, result, showDetails, onCopy, onToggle)
+    AgentToolStepContent(call.name, result, showDetails, detailsExpanded, onToggle, onToggleDetails, call)
 }
 
 @Composable
 private fun AgentToolResultStep(
     result: AgentMessage,
     showDetails: Boolean,
-    onCopy: (String) -> Unit,
+    detailsExpanded: Boolean = false,
     onToggle: () -> Unit,
+    onToggleDetails: () -> Unit = {},
 ) {
-    AgentToolStepContent(result.toolName, result, showDetails, onCopy, onToggle)
+    AgentToolStepContent(result.toolName, result, showDetails, detailsExpanded, onToggle, onToggleDetails, null)
 }
 
 @Composable
@@ -510,8 +535,10 @@ private fun AgentToolStepContent(
     toolName: String?,
     result: AgentMessage?,
     showDetails: Boolean,
-    onCopy: (String) -> Unit,
+    detailsExpanded: Boolean,
     onToggle: () -> Unit,
+    onToggleDetails: () -> Unit,
+    callRecord: AgentToolCallRecord? = null,
 ) {
     val presentation = remember(toolName, result?.content) {
         result?.let { parseToolPresentation(toolName, it.content) }
@@ -529,33 +556,41 @@ private fun AgentToolStepContent(
         AgentMessageStatus.CANCELLED -> R.string.agent_cancel
     }
     AgentThoughtStepFrame(icon = Icons.Outlined.Build, onClick = onToggle) {
-        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            Text(
-                text = title,
-                modifier = Modifier.weight(1f),
-                color = LauncherTheme.style.titleColor,
-                style = MaterialTheme.typography.labelMedium,
-                fontWeight = FontWeight.SemiBold,
-            )
-            Text(
-                text = stringResource(statusResource),
-                color = when (result?.status) {
-                    AgentMessageStatus.FAILED -> MaterialTheme.colorScheme.error
-                    AgentMessageStatus.COMPLETE -> LauncherTheme.style.positiveColor
-                    else -> LauncherTheme.style.accentColor
-                },
-                style = MaterialTheme.typography.labelSmall,
-            )
-        }
-        if (showDetails) {
-            Text(summary, style = MaterialTheme.typography.bodySmall, color = LauncherTheme.style.secondaryTextColor)
-            details.forEach { detail ->
-                Text("• $detail", style = MaterialTheme.typography.labelMedium, color = LauncherTheme.style.secondaryTextColor)
+        FlueSurface(
+            modifier = Modifier.fillMaxWidth().animateContentSize(),
+            shape = RoundedCornerShape(topStart = 10.dp, topEnd = 10.dp, bottomStart = 18.dp, bottomEnd = 18.dp),
+            color = LauncherTheme.style.cardColor,
+            border = null,
+        ) {
+            Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 9.dp)) {
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Text(text = title, modifier = Modifier.weight(1f), color = LauncherTheme.style.titleColor, style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.SemiBold)
+                    Text(text = stringResource(statusResource), color = when (result?.status) {
+                        AgentMessageStatus.FAILED -> MaterialTheme.colorScheme.error
+                        AgentMessageStatus.COMPLETE -> LauncherTheme.style.positiveColor
+                        else -> LauncherTheme.style.accentColor
+                    }, style = MaterialTheme.typography.labelSmall)
+                }
+                Text(summary, style = MaterialTheme.typography.bodySmall, color = LauncherTheme.style.secondaryTextColor)
+                AnimatedVisibility(visible = showDetails, enter = expandVertically() + androidx.compose.animation.fadeIn(), exit = shrinkVertically() + androidx.compose.animation.fadeOut()) {
+                    Column(Modifier.fillMaxWidth().padding(top = 5.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        TextButton(onClick = onToggleDetails, contentPadding = PaddingValues(0.dp)) {
+                            Text(if (detailsExpanded) "收起详细操作" else "查看详细操作", style = MaterialTheme.typography.labelSmall)
+                        }
+                        AnimatedVisibility(visible = detailsExpanded, enter = expandVertically() + androidx.compose.animation.fadeIn(), exit = shrinkVertically() + androidx.compose.animation.fadeOut()) {
+                            Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                                callRecord?.let { call ->
+                                    val rawArguments = call.let(AgentToolCallRecord::argumentsJson)
+                                    Text("工具: ${call.name}", style = MaterialTheme.typography.labelSmall, color = LauncherTheme.style.secondaryTextColor)
+                                    Text("参数: $rawArguments", style = MaterialTheme.typography.labelSmall, color = LauncherTheme.style.secondaryTextColor, fontFamily = FontFamily.Monospace)
+                                }
+                                details.forEach { detail -> Text("• $detail", style = MaterialTheme.typography.labelMedium, color = LauncherTheme.style.secondaryTextColor) }
+                                result?.let { Text("返回: ${it.content}", style = MaterialTheme.typography.labelSmall, color = LauncherTheme.style.secondaryTextColor, fontFamily = FontFamily.Monospace) }
+                            }
+                        }
+                    }
+                }
             }
-            IconButton(
-                onClick = { onCopy(buildToolCardCopyText(title, summary, details)) },
-                modifier = Modifier.size(28.dp),
-            ) { Icon(MiuixIcons.Copy, stringResource(R.string.agent_copy), modifier = Modifier.size(15.dp)) }
         }
     }
 }
@@ -608,7 +643,9 @@ private fun AgentTextMessageContent(
         }
         message.content.takeIf(String::isNotBlank)?.let { content ->
             SafeMarkdownText(content, LauncherTheme.style.bodyColor)
-            if (showActions || (message.role == AgentMessageRole.ASSISTANT && message.status == AgentMessageStatus.STREAMING)) Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+            val canCopyWholeTurn = message.role == AgentMessageRole.ASSISTANT && message.status == AgentMessageStatus.COMPLETE && showActions
+            val canShowStreamingMeta = message.role == AgentMessageRole.ASSISTANT && message.status == AgentMessageStatus.STREAMING
+            if (canCopyWholeTurn || canShowStreamingMeta || isUser) Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
                 if (message.role == AgentMessageRole.ASSISTANT && message.status == AgentMessageStatus.STREAMING && outputTokens != null) {
                     Text(
                         stringResource(R.string.agent_output_tokens, outputTokens),
@@ -617,7 +654,7 @@ private fun AgentTextMessageContent(
                         color = LauncherTheme.style.secondaryTextColor,
                     )
                 }
-                IconButton(onClick = { onCopy(content) }, modifier = Modifier.size(28.dp)) { Icon(MiuixIcons.Copy, stringResource(R.string.agent_copy), modifier = Modifier.size(15.dp)) }
+                if (canCopyWholeTurn) IconButton(onClick = { onCopy(content) }, modifier = Modifier.size(28.dp)) { Icon(MiuixIcons.Copy, stringResource(R.string.agent_copy), modifier = Modifier.size(15.dp)) }
                 if (isUser) IconButton(enabled = actionsEnabled, onClick = onEdit, modifier = Modifier.size(28.dp)) { Icon(MiuixIcons.Edit, stringResource(R.string.agent_edit), modifier = Modifier.size(15.dp)) }
                 if (message.role == AgentMessageRole.ASSISTANT || isUser) IconButton(enabled = actionsEnabled, onClick = onRetry, modifier = Modifier.size(28.dp)) { Icon(MiuixIcons.Retry, stringResource(R.string.agent_retry), modifier = Modifier.size(15.dp)) }
             }

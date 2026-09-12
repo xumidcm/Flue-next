@@ -3,6 +3,8 @@
     <string name="agent_title">AI 文字盤アシスタント</string>
     <string name="agent_settings_title">Agent 設定</string>
     <string name="agent_settings_intro">Provider、キー、ワークスペース、画像・検索設定は有効な Provider ごとに保存されます。キーは Android Keystore のみに保存されます。</string>
+    <string name="agent_enabled">Agent を有効化</string>
+    <string name="agent_enabled_summary">オフにするとエディターはレイヤー、プロパティ、文字盤の3パネルに戻ります。</string>
     <string name="agent_overview_provider">Provider とモデル</string>
     <string name="agent_overview_provider_summary">サービス URL、プロトコル、キー、モデル、コンテキストを管理します。</string>
     <string name="agent_overview_features">画像と検索</string>

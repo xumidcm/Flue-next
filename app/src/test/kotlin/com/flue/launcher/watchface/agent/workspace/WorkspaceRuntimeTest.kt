@@ -332,6 +332,46 @@ class WorkspaceRuntimeTest {
     }
 
     @Test
+    fun `android proot command binds the current face mirror and reports network`() {
+        val workspace = manager.create("terminal")
+        val nativeDir = root.resolve("native")
+        Files.createDirectories(nativeDir)
+        val spec = ProcessGroupSpec(
+            runId = "run-face",
+            workspaceId = workspace.id,
+            rootfs = workspace.paths.linux,
+            home = workspace.paths.home,
+            workingDirectory = workspace.paths.workspace,
+            faceMirrorDirectory = workspace.paths.face,
+            command = "printf ok",
+            timeoutSeconds = 60,
+            maxOutputBytes = 1024,
+        )
+
+        val command = androidProotCommand(spec, nativeDir, networkAllowed = true, kernelFsMounts = emptyList())
+
+        assertTrue(command.windowed(2).contains(listOf("-b", "${workspace.paths.face}:/workspace/face")))
+        assertTrue(command.contains("FLUE_NETWORK_ALLOWED=1"))
+    }
+
+    @Test
+    fun `face mirror sync read and path policy are revision safe`() {
+        val workspace = manager.create("mirror")
+        assertTrue(manager.syncFaceMirror(workspace.id, "<watch/>", "print('ok')", mapOf("images/hero.png" to byteArrayOf(1, 2))))
+        val snapshot = manager.readFaceMirror(workspace.id) ?: error("mirror missing")
+        assertEquals("<watch/>", snapshot.watchXml)
+        assertEquals("print('ok')", snapshot.globalScript)
+        assertEquals(listOf("images/hero.png"), snapshot.resources)
+        assertTrue(Files.isRegularFile(manager.resolveWorkspaceFile(workspace.id, "face/images/hero.png")))
+        try {
+            manager.resolveWorkspaceFile(workspace.id, "../other/secret")
+            fail("path traversal must be rejected")
+        } catch (_: WorkspacePathViolation) {
+            // expected
+        }
+    }
+
+    @Test
     fun `android rootfs self checker preserves actionable proot failure without secrets`() {
         var capturedSpec: ProcessGroupSpec? = null
         val fakeRunner = CancellableProcessGroupRunner { spec ->

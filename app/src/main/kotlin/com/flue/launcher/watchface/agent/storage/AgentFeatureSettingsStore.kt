@@ -3,6 +3,7 @@ package com.flue.launcher.watchface.agent.storage
 import android.content.Context
 
 data class AgentFeatureSettings(
+    val enabled: Boolean = true,
     val imageBaseUrl: String = "",
     val imageModelId: String = "",
     val imageSize: String = "1024x1024",
@@ -25,6 +26,7 @@ class AgentFeatureSettingsStore(
     private val preferences = context.applicationContext.getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
 
     fun load(): AgentFeatureSettings = AgentFeatureSettings(
+        enabled = preferences.getBoolean("enabled", true),
         imageBaseUrl = preferences.getString("imageBaseUrl", "").orEmpty(),
         imageModelId = preferences.getString("imageModelId", "").orEmpty(),
         imageSize = preferences.getString("imageSize", "1024x1024").orEmpty().ifBlank { "1024x1024" },
@@ -41,6 +43,7 @@ class AgentFeatureSettingsStore(
 
     fun save(settings: AgentFeatureSettings, imageApiKey: String? = null, tavilyApiKey: String? = null): Boolean {
         preferences.edit()
+            .putBoolean("enabled", settings.enabled)
             .putString("imageBaseUrl", settings.imageBaseUrl)
             .putString("imageModelId", settings.imageModelId)
             .putString("imageSize", settings.imageSize)
@@ -58,6 +61,8 @@ class AgentFeatureSettingsStore(
         val searchSaved = tavilyApiKey?.let { secrets.write(TAVILY_SECRET_ID, it) } ?: true
         return imageSaved && searchSaved
     }
+
+    fun saveEnabled(enabled: Boolean): Boolean = preferences.edit().putBoolean("enabled", enabled).commit()
 
     fun imageApiKey(): String? = secrets.read(IMAGE_SECRET_ID)
     fun tavilyApiKey(): String? = secrets.read(TAVILY_SECRET_ID)
