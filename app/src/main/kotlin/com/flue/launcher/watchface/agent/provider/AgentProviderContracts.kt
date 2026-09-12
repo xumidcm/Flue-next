@@ -66,7 +66,7 @@ object AgentRequestBuilder {
     private fun chatCompletions(profile: AiProviderProfile, request: AgentProviderRequest): String = AgentJsonWriter.objectValue(
         buildMap {
             put("model", profile.modelId.orEmpty()); put("stream", request.stream)
-            put("max_tokens", request.maxOutputTokens ?: profile.maxOutputTokens)
+            (request.maxOutputTokens ?: profile.maxOutputTokens)?.let { put("max_tokens", it) }
             profile.reasoningEffort?.let { put("reasoning_effort", it) }
             put("messages", request.messages.map(::chatMessage))
             if (request.tools.isNotEmpty()) put("tools", request.tools.map { tool ->
@@ -80,7 +80,7 @@ object AgentRequestBuilder {
 
     private fun responses(profile: AiProviderProfile, request: AgentProviderRequest): String = AgentJsonWriter.objectValue(buildMap {
         put("model", profile.modelId.orEmpty()); put("stream", request.stream)
-        put("max_output_tokens", request.maxOutputTokens ?: profile.maxOutputTokens)
+        put("max_output_tokens", request.maxOutputTokens ?: profile.maxOutputTokens ?: 8_192)
         profile.reasoningEffort?.let { put("reasoning", mapOf("effort" to it)) }
         request.messages.firstOrNull { it.role == AgentMessageRole.SYSTEM }?.let { put("instructions", it.content) }
         put("input", request.messages.filterNot { it.role == AgentMessageRole.SYSTEM }.flatMap { message ->
@@ -104,7 +104,7 @@ object AgentRequestBuilder {
 
     private fun claudeMessages(profile: AiProviderProfile, request: AgentProviderRequest): String = AgentJsonWriter.objectValue(buildMap {
         put("model", profile.modelId.orEmpty()); put("stream", request.stream)
-        put("max_tokens", request.maxOutputTokens ?: profile.maxOutputTokens)
+        put("max_tokens", request.maxOutputTokens ?: profile.maxOutputTokens ?: 8_192)
         profile.reasoningEffort?.let { effort ->
             if (effort == "none") put("thinking", mapOf("type" to "disabled"))
             else {
@@ -113,7 +113,7 @@ object AgentRequestBuilder {
                     put("thinking", mapOf("type" to "adaptive"))
                     put("output_config", mapOf("effort" to effort))
                 } else {
-                    val outputLimit = request.maxOutputTokens ?: profile.maxOutputTokens
+                    val outputLimit = request.maxOutputTokens ?: profile.maxOutputTokens ?: 8_192
                     require(outputLimit > 1024) { "Claude 扩展思考需要输出上限大于 1024" }
                     val budget = when (effort) { "low" -> 1024; "medium" -> 4096; else -> 8192 }.coerceAtMost(outputLimit - 1)
                     put("thinking", mapOf("type" to "enabled", "budget_tokens" to budget))

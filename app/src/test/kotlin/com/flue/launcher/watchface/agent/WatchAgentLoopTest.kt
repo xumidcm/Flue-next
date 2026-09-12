@@ -16,6 +16,26 @@ import org.junit.Test
 
 class WatchAgentLoopTest {
     @Test
+    fun `duplicate logical calls are presented and executed once`() = runBlocking {
+        val host = InMemoryWatchAgentToolHost("<Watch/>")
+        var turn = 0
+        var presented = 0
+        val executor = AgentCompletionExecutor { _, _ ->
+            if (turn++ == 0) completion(
+                AgentStreamEvent.ToolCallDelta(id = "first", name = "inspect_face", jsonDelta = "{}", slot = 0),
+                AgentStreamEvent.ToolCallDelta(id = "second", name = "inspect_face", jsonDelta = "{}", slot = 1),
+            ) else AgentCompletion("完成", listOf(AgentStreamEvent.TextDelta("完成")))
+        }
+
+        WatchAgentLoop(executor, WatchAgentToolRunner(host)).run(
+            listOf(AgentRequestMessage(AgentMessageRole.USER, "检查")),
+            onAssistantToolTurn = { _, calls -> presented = calls.size },
+        )
+
+        assertEquals(1, presented)
+    }
+
+    @Test
     fun `tool loop reads then edits the active watch document`() = runBlocking {
         val host = InMemoryWatchAgentToolHost("<Watch name=\"Before\"/>")
         val requests = mutableListOf<AgentProviderRequest>()

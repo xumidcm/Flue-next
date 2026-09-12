@@ -81,7 +81,7 @@
     <string name="agent_create_workspace">新建</string>
     <string name="agent_workspace_created">工作区已创建</string>
     <string name="agent_workspace_create_failed">工作区创建失败：%1$s</string>
-    <string name="agent_workspace_usage">已用 %1$s / %2$s</string>
+    <string name="agent_workspace_usage">已用 %1$s</string>
     <string name="agent_workspace_bound">已绑定表盘</string>
     <string name="agent_workspace_detail">工作区详情</string>
     <string name="agent_terminal_title">工作区终端</string>
@@ -167,11 +167,12 @@
     <string name="agent_rename_conversation">重命名会话</string>
     <string name="agent_input_tokens">输入 %1$d tokens</string>
     <string name="agent_output_tokens">输出 %1$d tokens</string>
+    <string name="agent_total_tokens">总计 %1$d tokens</string>
     <string name="agent_pending_next">已排队下一轮</string>
     <string name="agent_pending_preview">下一轮：%1$s</string>
     <string name="agent_cancel_pending">取消排队</string>
-    <string name="agent_status_thinking">正在思考</string>
-    <string name="agent_status_calling_tool">正在调用工具</string>
+    <string name="agent_status_thinking">思考中</string>
+    <string name="agent_status_calling_tool">工具调用</string>
     <string name="agent_status_processing_preview">正在处理预览</string>
     <string name="agent_status_follow_up">正在处理下一轮提示</string>
     <string name="agent_reasoning_active">正在思考…</string>
@@ -193,6 +194,7 @@
     <string name="agent_tool_name_preview">生成原生预览</string>
     <string name="agent_tool_name_edit">精确编辑文档</string>
     <string name="agent_tool_name_write">写入表盘文档</string>
+    <string name="agent_tool_name_bash">运行 Bash</string>
     <string name="agent_tool_name_generic">处理表盘</string>
     <string name="agent_tool_initialization_failed">工具初始化失败；会话与已完成结果已保留，可以重试。</string>
     <string name="agent_tool_failed_summary">工具执行失败</string>
@@ -204,6 +206,9 @@
     <string name="agent_tool_document_read">已读取 %1$s · revision %2$d</string>
     <string name="agent_tool_document_updated">已更新 %1$s · revision %2$d</string>
     <string name="agent_tool_search_summary">找到 %1$d 条相关知识</string>
+    <string name="agent_tool_bash_summary">命令：%1$s\n输出：%2$s</string>
+    <string name="agent_tool_bash_exit_code">退出码：%1$d</string>
+    <string name="agent_tool_bash_truncated">输出超过限制，已截断</string>
     <string name="agent_tool_result_ready">结果已就绪 · revision %1$d</string>
     <string name="agent_tool_unreadable_summary">工具结果暂时无法整理</string>
     <string name="agent_tool_retry_detail">可以重试本轮操作，已有会话内容不会丢失</string>

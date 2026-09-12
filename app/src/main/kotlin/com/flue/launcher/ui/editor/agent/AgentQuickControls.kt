@@ -1,6 +1,8 @@
 package com.flue.launcher.ui.editor.agent
 
 import androidx.compose.foundation.clickable
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.runtime.key
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.*
@@ -34,16 +36,19 @@ internal fun AgentQuickControls(viewModel: WatchAgentViewModel) {
         AgentChoiceChip(stringResource(R.string.agent_reasoning_depth) + " · " + reasoningLabel(choices.profile?.reasoningEffort)) { picker = "reasoning" }
         AgentChoiceChip(selectedWorkspace?.displayName ?: stringResource(R.string.agent_choose_workspace)) { picker = "workspace"; viewModel.refreshChoices() }
     }
-    if (picker != null) FlueAlertDialog(
+    val pickerType = picker
+    if (pickerType != null) FlueAlertDialog(
         onDismissRequest = { picker = null },
         scrollableContent = false,
-        title = stringResource(when (picker) { "model" -> R.string.agent_models; "reasoning" -> R.string.agent_reasoning_depth; else -> R.string.agent_choose_workspace }),
+        title = stringResource(when (pickerType) { "model" -> R.string.agent_models; "reasoning" -> R.string.agent_reasoning_depth; else -> R.string.agent_choose_workspace }),
         confirmText = stringResource(R.string.agent_close), onConfirm = { picker = null },
         content = {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            key(pickerType) {
+                AnimatedVisibility(visible = pickerType != null) {
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 if (choices.loading) LinearProgressIndicator(Modifier.fillMaxWidth())
                 choices.error?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
-                when (picker) {
+                when (pickerType) {
                     "model" -> {
                         FlueTextField(modelSearch, { modelSearch = it }, Modifier.fillMaxWidth(), placeholder = stringResource(R.string.agent_search_models))
                         LazyColumn(Modifier.fillMaxWidth().weight(1f, fill = false).heightIn(max = 300.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -69,6 +74,8 @@ internal fun AgentQuickControls(viewModel: WatchAgentViewModel) {
                         FlueTextField(workspaceName, { workspaceName = it }, Modifier.fillMaxWidth(), label = stringResource(R.string.agent_workspace_name))
                         FlueButton(onClick = { viewModel.createWorkspace(workspaceName); workspaceName = "" }, enabled = workspaceName.isNotBlank() && !state.isGenerating, modifier = Modifier.fillMaxWidth()) { Text(stringResource(R.string.agent_create_workspace)) }
                         if (state.isGenerating) Text(stringResource(R.string.agent_workspace_after_stop), style = MaterialTheme.typography.bodySmall)
+                    }
+                }
                     }
                 }
             }

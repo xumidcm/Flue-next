@@ -171,6 +171,36 @@ class WorkspaceRuntimeTest {
     }
 
     @Test
+    fun `workspace directory listing enters folders and deletion refreshes quota`() {
+        val workspace = manager.create("文件", quotaBytes = 1_024L)
+        Files.createDirectories(workspace.paths.workspace.resolve("src"))
+        Files.write(workspace.paths.workspace.resolve("src/main.kt"), "hello".toByteArray())
+        Files.write(workspace.paths.workspace.resolve("readme.md"), "readme".toByteArray())
+
+        val rootEntries = manager.listDirectory(workspace.id)
+        assertEquals(listOf("src", "readme.md"), rootEntries.map { it.name })
+        assertTrue(rootEntries.first().isDirectory)
+        assertEquals("src/main.kt", manager.listDirectory(workspace.id, "workspace/src").single().relativePath)
+        assertTrue(manager.deleteWorkspaceEntry(workspace.id, "workspace/src/main.kt"))
+        assertFalse(Files.exists(workspace.paths.workspace.resolve("src/main.kt")))
+        assertTrue((manager.get(workspace.id)?.quota?.usedBytes ?: 0L) >= 6L)
+    }
+
+    @Test
+    fun `workspace deletion rejects protected and escaping paths`() {
+        val workspace = manager.create("保护", quotaBytes = 1_024L)
+        Files.write(workspace.paths.workspace.resolve("safe.txt"), byteArrayOf(1))
+        listOf("linux", "workspace", "../workspace/safe.txt").forEach { path ->
+            try {
+                manager.deleteWorkspaceEntry(workspace.id, path)
+                fail("Expected rejection for $path")
+            } catch (_: IllegalArgumentException) {
+                // expected
+            }
+        }
+    }
+
+    @Test
     fun `rootfs manifest verifier checks sha signature and abi`() {
         val archive = root.resolve("rootfs.tar.gz")
         Files.write(archive, "rootfs".toByteArray())

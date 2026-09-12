@@ -13,15 +13,16 @@ class WatchAgentToolRunner(
     private val workspaceImages: AgentWorkspaceImageTools? = null,
     private val shellRunner: ProotShellRunner? = null,
     private val workspaceId: String = "",
+    private val workspaceIdProvider: () -> String = { workspaceId },
 ) {
     val promptVersion: String get() = WatchAgentPrompt.promptVersion
     val toolSchemaVersion: String get() = WatchAgentToolContracts.schemaVersion
     val toolContracts: List<WatchAgentToolContract>
         get() {
             val permissions = currentPermissions()
-            return WatchAgentToolContracts.all.filter { permissions.allows(it.access) &&
+            return (WatchAgentToolContracts.all + WatchAgentToolContracts.mirror).filter { permissions.allows(it.access) &&
                 (workspaceImages != null || it.name !in setOf(WatchAgentToolName.LIST_WORKSPACE_FILES, WatchAgentToolName.READ_IMAGE)) &&
-                (shellRunner != null || it.name != WatchAgentToolName.RUN_BASH) }
+                (shellRunner?.capability(workspaceIdProvider())?.bashAvailable == true || it.name != WatchAgentToolName.RUN_BASH) }
         }
 
     private val scheduler = WatchAgentToolScheduler(::executeOne, maxParallel)
@@ -58,14 +59,48 @@ class WatchAgentToolRunner(
                 requireNotNull(workspaceImages) { "未绑定工作区图片工具" }.readImage(call.requiredString("path")))
             WatchAgentToolName.RUN_BASH -> {
                 val runner = requireNotNull(shellRunner) { "工作区 Bash 尚未初始化" }
+                val command = call.requiredString("command")
                 val result = runner.run(ShellCommandRequest(
-                    workspaceId = workspaceId,
-                    command = call.requiredString("command"),
+                    workspaceId = workspaceIdProvider(),
+                    command = command,
                     timeoutSeconds = (call.arguments["timeout_seconds"] as? Number)?.toLong() ?: 30L,
                     maxOutputBytes = 256 * 1024,
                 ))
-                success(call, host.currentRevision, result)
+                when (result) {
+                    is com.flue.launcher.watchface.agent.workspace.ShellRunResult.RootfsNotInstalled ->
+                        failure(call, "rootfs_not_installed", "工作区 ${result.workspaceId} 的 Rootfs 未完成安装或状态尚未刷新")
+                    is com.flue.launcher.watchface.agent.workspace.ShellRunResult.WorkspaceNotFound ->
+                        failure(call, "workspace_not_found", "工作区 ${result.workspaceId} 不存在或未绑定当前表盘")
+                    is com.flue.launcher.watchface.agent.workspace.ShellRunResult.RuntimeUnavailable ->
+                        failure(call, "runtime_unavailable", "工作区 ${result.workspaceId} 的 Bash 运行时不可用，请检查 Rootfs 自检和 Proot native 文件")
+                    is com.flue.launcher.watchface.agent.workspace.ShellRunResult.Completed ->
+                        success(call, host.currentRevision, mapOf(
+                            "command" to command,
+                            "stdout" to result.stdout,
+                            "exit_code" to result.exitCode,
+                            "truncated" to result.truncated,
+                            "run_id" to result.runId,
+                        ))
+                    is com.flue.launcher.watchface.agent.workspace.ShellRunResult.DryRun ->
+                        success(call, host.currentRevision, mapOf(
+                            "command" to command,
+                            "stdout" to "",
+                            "dry_run" to true,
+                            "working_directory" to result.workingDirectory.toString(),
+                        ))
+                    else -> success(call, host.currentRevision, mapOf(
+                        "command" to command,
+                        "stdout" to result.toString(),
+                    ))
+                }
             }
+            WatchAgentToolName.SYNC_FACE_MIRROR -> success(call, host.currentRevision, host.syncFaceMirror())
+            WatchAgentToolName.VALIDATE_FACE_MIRROR -> success(call, host.currentRevision, host.validateFaceMirror())
+            WatchAgentToolName.COMMIT_FACE_MIRROR -> {
+                val revision = call.requiredRevision(); checkExpectedRevision(revision)
+                success(call, host.currentRevision, host.commitFaceMirror(revision))
+            }
+            WatchAgentToolName.IMPORT_FACE_RESOURCE -> success(call, host.currentRevision, host.importFaceResource(call.requiredString("path")))
             WatchAgentToolName.INSPECT_FACE -> {
                 val result = host.inspectFace(WatchAgentInspectFaceRequest(call.optionalRevision()))
                 success(call, result.revision, result)

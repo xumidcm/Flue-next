@@ -15,6 +15,10 @@ enum class WatchAgentToolName(
     LIST_WORKSPACE_FILES("list_workspace_files", WatchAgentToolAccess.READ_ONLY),
     READ_IMAGE("read_image", WatchAgentToolAccess.READ_ONLY),
     RUN_BASH("run_bash", WatchAgentToolAccess.WRITE),
+    SYNC_FACE_MIRROR("sync_face_mirror", WatchAgentToolAccess.WRITE),
+    VALIDATE_FACE_MIRROR("validate_face_mirror", WatchAgentToolAccess.READ_ONLY),
+    COMMIT_FACE_MIRROR("commit_face_mirror", WatchAgentToolAccess.WRITE),
+    IMPORT_FACE_RESOURCE("import_face_resource", WatchAgentToolAccess.WRITE),
     ;
 
     val isReadOnly: Boolean get() = access == WatchAgentToolAccess.READ_ONLY
@@ -101,6 +105,12 @@ object WatchAgentToolContracts {
                 WatchAgentToolParameter("expected_revision", "integer", required = true),
             ),
         ),
+    )
+    val mirror: List<WatchAgentToolContract> = listOf(
+        WatchAgentToolContract(WatchAgentToolName.SYNC_FACE_MIRROR, "同步当前表盘到绑定工作区 face/ 镜像。"),
+        WatchAgentToolContract(WatchAgentToolName.VALIDATE_FACE_MIRROR, "校验 face/ 镜像。"),
+        WatchAgentToolContract(WatchAgentToolName.COMMIT_FACE_MIRROR, "按 expected_revision 提交 face/ 镜像回当前表盘。", listOf(WatchAgentToolParameter("expected_revision", "integer", true))),
+        WatchAgentToolContract(WatchAgentToolName.IMPORT_FACE_RESOURCE, "导入工作区表盘资源。", listOf(WatchAgentToolParameter("path", "string", true))),
     )
 
     fun find(name: String): WatchAgentToolContract? =

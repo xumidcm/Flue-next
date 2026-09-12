@@ -29,6 +29,8 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.res.stringResource
+import com.flue.launcher.R
 import com.flue.launcher.ui.settings.miuix.MiuixIcons
 import com.flue.launcher.ui.style.FlueSurface
 import com.flue.launcher.ui.style.FlueTextField
@@ -89,6 +91,7 @@ private fun agentChromeMetrics(): AgentChromeMetrics = when (LauncherTheme.style
 @Composable
 internal fun AgentTopBar(
     title: String,
+    totalTokens: Long? = null,
     fullscreen: Boolean,
     expandRestoreDescription: String,
     settingsDescription: String,
@@ -134,6 +137,9 @@ internal fun AgentTopBar(
             maxLines = 1,
             overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
         )
+        totalTokens?.let {
+            Text(stringResource(R.string.agent_total_tokens, it), color = style.topBarTextColor, style = MaterialTheme.typography.labelSmall, maxLines = 1)
+        }
         AgentChromeIconButton(
             icon = MiuixIcons.Close,
             contentDescription = closeDescription,

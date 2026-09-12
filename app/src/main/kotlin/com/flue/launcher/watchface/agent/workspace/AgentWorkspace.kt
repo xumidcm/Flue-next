@@ -42,6 +42,8 @@ data class FaceWorkspaceBinding(
 
 data class WorkspacePaths(val root: Path) {
     val linux: Path get() = root.resolve("linux")
+    /** Mirror of the bound face documents, isolated from the general workspace. */
+    val face: Path get() = root.resolve("face")
     val home: Path get() = root.resolve("home")
     val workspace: Path get() = root.resolve("workspace")
     val generated: Path get() = root.resolve("generated")

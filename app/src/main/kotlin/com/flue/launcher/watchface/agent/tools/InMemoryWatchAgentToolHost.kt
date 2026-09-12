@@ -84,6 +84,7 @@ class InMemoryWatchAgentToolHost(
                 error.message ?: "watch.xml 无法解析",
             )
         }
+        validateGlobalScript(globalScript)?.let { diagnostics += it }
         PATH_PATTERN.findAll(watchXml).forEach { match ->
             val raw = match.groupValues[2]
             raw.split('`').forEach { segment ->

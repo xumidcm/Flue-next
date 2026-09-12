@@ -136,7 +136,7 @@ class ProviderSettingsStore(
             modelId = json.optString("modelId").takeIf { it.isNotBlank() },
             reasoningEffort = json.optString("reasoningEffort").takeIf { it.isNotBlank() },
             contextWindowOverride = json.optLong("contextWindowOverride").takeIf { it > 0L },
-            maxOutputTokens = json.optInt("maxOutputTokens", 8_192).coerceAtLeast(1),
+            maxOutputTokens = json.optInt("maxOutputTokens", 0).takeIf { it > 0 },
             customHeaderNames = buildMap {
                 headerNames.forEach { headerName ->
                     put(

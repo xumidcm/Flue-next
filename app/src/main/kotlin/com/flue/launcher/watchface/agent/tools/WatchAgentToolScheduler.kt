@@ -36,6 +36,12 @@ class WatchAgentToolScheduler(
             lastResults = emptyList()
             return emptyList()
         }
+        // Providers may repeat a completed tool call while merging streamed
+        // deltas. Execute each logical call once so a duplicate cannot leave
+        // a second UI row waiting forever for a result.
+        val uniqueCalls = calls.distinctBy { call ->
+            call.id.takeIf(String::isNotBlank) ?: "${call.name}:${call.arguments}"
+        }
         val results = ArrayList<WatchAgentToolResult>(calls.size)
         val reads = ArrayList<WatchAgentToolCall>()
 
@@ -45,7 +51,7 @@ class WatchAgentToolScheduler(
             reads.clear()
         }
 
-        calls.forEach { call ->
+        uniqueCalls.forEach { call ->
             currentCoroutineContext().ensureActive()
             // Native preview owns a main-thread renderer and bitmap lifecycle;
             // never run it in the parallel read pool or alongside another read.

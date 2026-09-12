@@ -3,6 +3,11 @@ package com.flue.launcher.watchface.agent
 import com.flue.launcher.watchface.agent.tools.*
 import com.flue.launcher.watchface.agent.prompt.WatchAgentPrompt
 import com.flue.launcher.watchface.agent.workspace.WorkspacePermissionSettings
+import com.flue.launcher.watchface.agent.workspace.ProotShellRunner
+import com.flue.launcher.watchface.agent.workspace.ShellCommandRequest
+import com.flue.launcher.watchface.agent.workspace.ShellRunResult
+import com.flue.launcher.watchface.agent.workspace.WorkspaceCapability
+import com.flue.launcher.watchface.agent.workspace.CapabilityReason
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -12,6 +17,57 @@ import kotlinx.coroutines.runBlocking
 
 class WatchAgentToolContractsTest {
     @Test
+    fun `runner only exposes bash when bound workspace capability is ready`() {
+        val host = RecordingToolHost()
+        val unavailable = object : ProotShellRunner {
+            override fun run(request: ShellCommandRequest) = ShellRunResult.RuntimeUnavailable(request.workspaceId)
+            override fun cancel(runId: String) = false
+            override fun capability(workspaceId: String) = WorkspaceCapability(workspaceId, false, false, false, CapabilityReason.ROOTFS_NOT_INSTALLED)
+        }
+        val runner = WatchAgentToolRunner(host, shellRunner = unavailable, workspaceId = "w")
+        assertTrue(runner.toolContracts.none { it.name == WatchAgentToolName.RUN_BASH })
+    }
+
+    @Test
+    fun `bash tool result keeps command output and exit code for the conversation summary`() = runBlocking {
+        val shell = object : ProotShellRunner {
+            override fun run(request: ShellCommandRequest) =
+                ShellRunResult.Completed("run-1", 0, "hello from bash", false)
+
+            override fun cancel(runId: String) = false
+
+            override fun capability(workspaceId: String) =
+                WorkspaceCapability(workspaceId, true, true, true, CapabilityReason.READY)
+        }
+        val runner = WatchAgentToolRunner(
+            host = RecordingToolHost(),
+            shellRunner = shell,
+            workspaceId = "workspace-1",
+        )
+
+        val result = runner.execute(
+            WatchAgentToolCall("bash-1", "run_bash", mapOf("command" to "printf 'hello from bash'")),
+        )
+        val content = result.content as Map<*, *>
+
+        assertEquals("printf 'hello from bash'", content["command"])
+        assertEquals("hello from bash", content["stdout"])
+        assertEquals(0, content["exit_code"])
+    }
+
+    @Test
+    fun `scheduler suppresses duplicate tool calls in one batch`() = runBlocking {
+        var executions = 0
+        val scheduler = WatchAgentToolScheduler(WatchAgentToolExecutor {
+            executions += 1
+            WatchAgentToolResult(it.id, it.name, 1L, content = "ok")
+        })
+        val call = WatchAgentToolCall("same", "inspect_face")
+        val results = scheduler.execute(listOf(call, call))
+        assertEquals(1, executions)
+        assertEquals(listOf("same"), results.map { it.callId })
+    }
+    @Test
     fun `schema exposes document and workspace image tools with writes marked as barriers`() {
         val contracts = WatchAgentToolContracts.all
 
@@ -19,6 +75,7 @@ class WatchAgentToolContractsTest {
             listOf(
                 "list_workspace_files",
                 "read_image",
+                "run_bash",
                 "inspect_face",
                 "read_document",
                 "search_knowledge",
@@ -30,7 +87,7 @@ class WatchAgentToolContractsTest {
             contracts.map { it.name.wireName },
         )
         assertEquals(
-            setOf("edit_document", "write_document"),
+            setOf("edit_document", "write_document", "run_bash"),
             contracts.filter { it.access == WatchAgentToolAccess.WRITE }.map { it.name.wireName }.toSet(),
         )
         assertTrue(WatchAgentToolName.INSPECT_FACE.isReadOnly)

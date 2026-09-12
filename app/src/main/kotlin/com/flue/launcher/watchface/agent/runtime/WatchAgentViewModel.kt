@@ -148,7 +148,7 @@ class WatchAgentViewModel(application: Application) : AndroidViewModel(applicati
             networkAllowed = { permissionStore.load().networkAllowed },
         ),
         permissionProvider = permissionStore::load,
-        approvalStrategy = BashApprovalStrategy { BashApproval.REQUIRE_CONFIRMATION },
+        approvalStrategy = BashApprovalStrategy { BashApproval.ALLOW },
       )
     }
     private val _state = MutableStateFlow(WatchAgentUiState.initial(""))
@@ -255,14 +255,14 @@ class WatchAgentViewModel(application: Application) : AndroidViewModel(applicati
             try {
                 val completion = providerClient.send(profile.copy(reasoningEffort = null), apiKey,
                     AgentProviderRequest(messages = listOf(
-                        AgentRequestMessage(AgentMessageRole.SYSTEM, "你是会话标题生成器。根据对话主题生成唯一一行标题。严格输出：仅标题正文；不加引号、Markdown、编号、前缀、解释或标点结尾；使用用户主要语言；中文最多12个汉字，其他语言最多48个字符。标题要概括用户正在解决的事情，而不是复述回答。"),
+                        AgentRequestMessage(AgentMessageRole.SYSTEM, "你是会话标题生成器。根据对话主题生成唯一一行标题。严格只输出标题正文，不加引号、Markdown、编号、前缀、解释或结尾标点；使用用户主要语言；中文最多6个汉字，其他语言最多24个字符。标题概括用户正在解决的事情。"),
                         AgentRequestMessage(AgentMessageRole.USER, "用户：${prompt.take(1500)}\n助手：${answer.take(1500)}"),
                     ), maxOutputTokens = 512))
                 val title = completion.text.lineSequence().firstOrNull().orEmpty()
                     .replace(Regex("""^[\s\"'“”‘’`#：:、-]+|[\s\"'“”‘’`。.!！?？]+$"""), "")
                     .trim()
                     .takeIf { it.isNotBlank() }
-                if (title != null) repository.applyGeneratedTitle(conversation.id, title.take(48))
+                if (title != null) repository.applyGeneratedTitle(conversation.id, title)
                 if (_state.value.watchScope == conversation.watchScope) _conversations.value = repository.listConversations(conversation.watchScope)
             } catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
             catch (_: Exception) { /* Keep the first-message title; retry after a later successful turn. */ }
@@ -480,8 +480,11 @@ class WatchAgentViewModel(application: Application) : AndroidViewModel(applicati
                                 },
                             )
                         } }
+                    val workspaceId = workspaceManager.bindingFor(generation.watchScope)?.workspaceId.orEmpty()
+                    val capability = workspaceManager.capability(workspaceId)
+                    val capabilityPrompt = "\n\n本轮运行时能力状态：工作区=${if (workspaceId.isBlank()) "未绑定" else "已绑定"}；Rootfs=${if (capability.rootfsInstalled) "已安装" else "未安装"}；Bash=${if (capability.bashAvailable) "已安装且可调用" else "不可调用（请如实说明原因）"}；Python=${if (capability.pythonAvailable) "已安装且可调用" else "不可用"}。用户明确要求 run_bash 时，若 Bash 已安装必须直接调用。"
                     val requestMessages = listOf(
-                        AgentRequestMessage(AgentMessageRole.SYSTEM, WatchAgentPrompt.baseline),
+                        AgentRequestMessage(AgentMessageRole.SYSTEM, WatchAgentPrompt.baseline + capabilityPrompt),
                     ) + history
                     val loop = WatchAgentLoop(
                         acceptsImages = acceptsImages,
@@ -499,6 +502,9 @@ class WatchAgentViewModel(application: Application) : AndroidViewModel(applicati
                             workspaceImages = com.flue.launcher.watchface.agent.tools.AgentWorkspaceImageTools(workspaceManager, generation.watchScope),
                             shellRunner = shellRunner,
                             workspaceId = workspaceManager.bindingFor(generation.watchScope)?.workspaceId.orEmpty(),
+                            workspaceIdProvider = {
+                                workspaceManager.bindingFor(generation.watchScope)?.workspaceId.orEmpty()
+                            },
                         ),
                     )
                     encodeToolResult = loop::encodeToolResult

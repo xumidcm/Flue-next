@@ -2831,7 +2831,10 @@ private fun WatchEditorScreen(
                             )
                         }
                         IconButton(
-                            onClick = { previewPlaying = !previewPlaying },
+                            onClick = {
+                                if (!previewPlaying) onSelectLayer(null)
+                                previewPlaying = !previewPlaying
+                            },
                             modifier = Modifier.size(36.dp),
                         ) {
                             Icon(
@@ -4524,8 +4527,10 @@ private fun WatchEditorPreview(
             )
         }
         // Direct-manipulation surface: hit the layer under the finger, drag it,
-        // grab a selection-frame handle, or tap to select / deselect.
-        Box(
+        // grab a selection-frame handle, or tap to select / deselect. During
+        // playback the native renderer must receive the gesture so its
+        // WatchMaker tap target dispatch behaves like WFTools action mode.
+        if (!previewPlaying) Box(
             modifier = Modifier
                 .fillMaxSize()
                 .pointerInput(Unit) {
@@ -4880,6 +4885,7 @@ private fun WatchEditorPreview(
         // it vanished here, scaling/rotation would still look like a one-frame
         // snap even though the native layer pixels no longer roll back.
         if (
+            !previewPlaying &&
             (enabled || transformPreview != null || batchTransformPreview.isNotEmpty()) &&
             selectedGeometryIndex >= 0 &&
             canvasSize.width > 0

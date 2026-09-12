@@ -14,7 +14,7 @@ data class AiProviderProfile(
     val modelListUrlOverride: String? = null,
     val modelId: String? = null,
     val contextWindowOverride: Long? = null,
-    val maxOutputTokens: Int = 8_192,
+    val maxOutputTokens: Int? = null,
     val customHeaderNames: Map<String, String> = emptyMap(),
     val parallelToolCalls: ParallelToolCallMode = ParallelToolCallMode.UNKNOWN,
     /** Optional request User-Agent. Kept in provider metadata, never in the secret store. */

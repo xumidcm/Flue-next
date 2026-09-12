@@ -6,6 +6,7 @@ import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -60,6 +61,7 @@ import com.flue.launcher.watchface.agent.workspace.WorkspacePermissionStore
 import java.io.File
 import java.io.IOException
 import java.nio.file.Files
+import java.nio.file.Path
 import java.util.UUID
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -100,7 +102,9 @@ internal fun AgentWorkspaceDetailPage(
     }
     var displayName by remember(workspace.id, workspace.displayName) { mutableStateOf(workspace.displayName) }
     var confirmDelete by remember(workspace.id) { mutableStateOf(false) }
-    var files by remember(workspace.id) { mutableStateOf<List<String>>(emptyList()) }
+    var currentDirectory by remember(workspace.id) { mutableStateOf("workspace") }
+    var files by remember(workspace.id) { mutableStateOf<List<WorkspaceManager.DirectoryEntry>>(emptyList()) }
+    var fileToDelete by remember(workspace.id) { mutableStateOf<WorkspaceManager.DirectoryEntry?>(null) }
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val abi = remember {
@@ -183,16 +187,23 @@ internal fun AgentWorkspaceDetailPage(
             )
         }
     }
-    LaunchedEffect(workspace.id, workspace.quota.usedBytes) {
-        files = withContext(Dispatchers.IO) {
-            if (!Files.isDirectory(workspace.paths.workspace)) emptyList()
-            else Files.walk(workspace.paths.workspace, 2).use { paths ->
-                paths.filter { it != workspace.paths.workspace }
-                    .map { workspace.paths.workspace.relativize(it).toString().replace('\\', '/') + if (Files.isDirectory(it)) "/" else "" }
-                    .sorted()
-                    .limit(16)
-                    .toList()
+    val importPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri: Uri? ->
+        if (uri != null) scope.launch {
+            val name = uri.lastPathSegment?.substringAfterLast('/')?.takeIf { it.isNotBlank() } ?: "imported-file"
+            val result = withContext(Dispatchers.IO) {
+                val temp = File(context.cacheDir, "agent-import-${UUID.randomUUID()}")
+                try {
+                    context.contentResolver.openInputStream(uri)?.use { input -> temp.outputStream().use(input::copyTo) }
+                        ?: return@withContext null
+                    workspaceManager.importFile(workspace.id, temp.toPath(), "$currentDirectory/$name")
+                } finally { temp.delete() }
             }
+            if (result == com.flue.launcher.watchface.agent.workspace.ImportResult.IMPORTED) onWorkspaceChanged(workspaceManager.get(workspace.id) ?: workspace)
+        }
+    }
+    LaunchedEffect(workspace.id, workspace.quota.usedBytes, currentDirectory) {
+        files = withContext(Dispatchers.IO) {
+            runCatching { workspaceManager.listDirectory(workspace.id, currentDirectory) }.getOrDefault(emptyList())
         }
     }
 
@@ -203,7 +214,6 @@ internal fun AgentWorkspaceDetailPage(
                 subtitle = stringResource(
                     R.string.agent_workspace_usage,
                     formatWorkspaceBytes(workspace.quota.usedBytes),
-                    formatWorkspaceBytes(workspace.quota.limitBytes),
                 ),
                 leading = { SettingsIcon(material = MiuixIcons.Grid, miuix = MiuixIcons.Grid) },
             )
@@ -351,18 +361,22 @@ internal fun AgentWorkspaceDetailPage(
                 stringResource(R.string.agent_workspace_folders),
                 style = MaterialTheme.typography.titleMedium,
             )
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                if (currentDirectory != "workspace") FlueOutlinedButton(onClick = { currentDirectory = currentDirectory.substringBeforeLast('/') }, modifier = Modifier.weight(1f)) { Text("返回上级") }
+                FlueButton(onClick = { importPicker.launch(arrayOf("*/*")) }, modifier = Modifier.weight(1f)) { Text("导入文件") }
+            }
+            Text("/$currentDirectory", fontFamily = FontFamily.Monospace, style = MaterialTheme.typography.bodySmall)
             if (files.isEmpty()) {
                 Text(
                     stringResource(R.string.agent_workspace_empty),
                     color = LauncherTheme.style.secondaryTextColor,
                 )
             } else {
-                files.forEach { path ->
-                    Text(
-                        path,
-                        fontFamily = FontFamily.Monospace,
-                        style = MaterialTheme.typography.bodySmall,
-                    )
+                files.forEach { entry ->
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                        Text((if (entry.isDirectory) "📁 " else "📄 ") + entry.name, modifier = Modifier.weight(1f).then(if (entry.isDirectory) Modifier.clickable { currentDirectory = "$currentDirectory/${entry.name}" } else Modifier), fontFamily = FontFamily.Monospace, style = MaterialTheme.typography.bodySmall)
+                        FlueOutlinedButton(onClick = { fileToDelete = entry.copy(relativePath = "$currentDirectory/${entry.name}") }) { Text("删除") }
+                    }
                 }
             }
         }
@@ -422,6 +436,12 @@ internal fun AgentWorkspaceDetailPage(
             dismissText = stringResource(R.string.agent_cancel),
             dangerous = true,
         )
+    }
+    fileToDelete?.let { entry ->
+        FlueAlertDialog(onDismissRequest = { fileToDelete = null }, title = "删除 ${entry.name}？", text = "此操作会从当前工作区移除该项目。", confirmText = stringResource(R.string.agent_delete), dismissText = stringResource(R.string.agent_cancel), dangerous = true, onConfirm = {
+            fileToDelete = null
+            scope.launch(Dispatchers.IO) { workspaceManager.deleteWorkspaceEntry(workspace.id, entry.relativePath); onWorkspaceChanged(workspaceManager.get(workspace.id) ?: workspace) }
+        })
     }
 }
 

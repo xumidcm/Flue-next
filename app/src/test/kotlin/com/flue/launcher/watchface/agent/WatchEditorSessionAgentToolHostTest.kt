@@ -1,6 +1,8 @@
 package com.flue.launcher.watchface.agent
 
 import com.flue.launcher.watchface.agent.tools.WatchAgentToolCall
+import com.flue.launcher.watchface.agent.tools.WatchAgentValidateFaceRequest
+import com.flue.launcher.watchface.agent.tools.InMemoryWatchAgentToolHost
 import com.flue.launcher.watchface.agent.tools.WatchEditorSessionAgentToolHost
 import com.flue.launcher.watchface.editor.WatchEditorSession
 import org.junit.Assert.assertEquals
@@ -10,6 +12,18 @@ import java.io.File
 import kotlinx.coroutines.runBlocking
 
 class WatchEditorSessionAgentToolHostTest {
+    @Test
+    fun `validation reports malformed global script to the agent`() {
+        val host = InMemoryWatchAgentToolHost(
+            initialWatchXml = "<Watch/>",
+            initialGlobalScript = "function broken(\n",
+        )
+
+        val result = host.validateFace(WatchAgentValidateFaceRequest())
+
+        assertTrue(result.diagnostics.any { it.code == "invalid_global_script" })
+    }
+
     @Test
     fun `adapter reads and writes session documents with stale revision protection`() = runBlocking {
         withTemporaryDirectory { root ->

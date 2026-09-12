@@ -102,7 +102,7 @@ fun AgentSettingsPage(onBack: () -> Unit) {
     var modelListUrl by rememberSaveable { mutableStateOf(selectedInitial.modelListUrlOverride.orEmpty()) }
     var model by rememberSaveable { mutableStateOf(selectedInitial.modelId.orEmpty()) }
     var contextWindow by rememberSaveable { mutableStateOf(selectedInitial.contextWindowOverride?.toString().orEmpty()) }
-    var maxOutputTokens by rememberSaveable { mutableStateOf(selectedInitial.maxOutputTokens.toString()) }
+    var maxOutputTokens by rememberSaveable { mutableStateOf(selectedInitial.maxOutputTokens?.toString().orEmpty()) }
     var customHeaders by remember { mutableStateOf(formatHeaders(selectedInitial.customHeaderNames)) }
     var userAgent by rememberSaveable { mutableStateOf(selectedInitial.userAgent.orEmpty()) }
     var apiKeyInput by remember { mutableStateOf("") }
@@ -117,9 +117,6 @@ fun AgentSettingsPage(onBack: () -> Unit) {
 
     var imageBaseUrl by rememberSaveable { mutableStateOf(featureInitial.imageBaseUrl) }
     var imageModel by rememberSaveable { mutableStateOf(featureInitial.imageModelId) }
-    var imageSize by rememberSaveable { mutableStateOf(featureInitial.imageSize) }
-    var imageQuality by rememberSaveable { mutableStateOf(featureInitial.imageQuality) }
-    var imageBackground by rememberSaveable { mutableStateOf(featureInitial.imageBackground) }
     var imageKey by remember { mutableStateOf("") }
     var savedImageKey by remember { mutableStateOf<String?>(null) }
     var showImageKey by remember { mutableStateOf(false) }
@@ -181,7 +178,7 @@ fun AgentSettingsPage(onBack: () -> Unit) {
         modelListUrl = profile.modelListUrlOverride.orEmpty()
         model = profile.modelId.orEmpty()
         contextWindow = profile.contextWindowOverride?.toString().orEmpty()
-        maxOutputTokens = profile.maxOutputTokens.toString()
+        maxOutputTokens = profile.maxOutputTokens?.toString().orEmpty()
         customHeaders = formatHeaders(profile.customHeaderNames)
         userAgent = profile.userAgent.orEmpty()
         apiKeyInput = ""
@@ -204,7 +201,7 @@ fun AgentSettingsPage(onBack: () -> Unit) {
         modelListUrlOverride = modelListUrl.trim().takeIf(String::isNotBlank),
         modelId = model.trim().takeIf(String::isNotBlank),
         contextWindowOverride = contextWindow.toLongOrNull()?.takeIf { it > 0L },
-        maxOutputTokens = maxOutputTokens.toIntOrNull()?.coerceAtLeast(1) ?: 8_192,
+        maxOutputTokens = maxOutputTokens.toIntOrNull()?.coerceAtLeast(1),
         customHeaderNames = parseHeaders(customHeaders),
         userAgent = userAgent.trim().takeIf(String::isNotBlank),
         reasoningEffort = store.get(selectedId)?.reasoningEffort,
@@ -292,17 +289,14 @@ fun AgentSettingsPage(onBack: () -> Unit) {
             val saved = withContext(Dispatchers.IO) {
                 featureStore.save(
                     AgentFeatureSettings(
-                        imageBaseUrl.trim(),
-                        imageModel.trim(),
-                        imageSize.trim(),
-                        imageQuality.trim(),
-                        imageBackground.trim(),
-                        tavilyBaseUrl.trim(),
-                        searchMaxResults.toIntOrNull()?.coerceIn(1, 50) ?: 5,
-                        searchDepth.trim(),
-                        webFetchEnabled,
-                        workspaceSearchEnabled,
-                        copyAttachments,
+                        imageBaseUrl = imageBaseUrl.trim(),
+                        imageModelId = imageModel.trim(),
+                        tavilyBaseUrl = tavilyBaseUrl.trim(),
+                        searchMaxResults = searchMaxResults.toIntOrNull()?.coerceIn(1, 50) ?: 5,
+                        searchDepth = searchDepth.trim(),
+                        webFetchEnabled = webFetchEnabled,
+                        workspaceSearchEnabled = workspaceSearchEnabled,
+                        copyAttachmentsIntoWorkspace = copyAttachments,
                     ),
                     imageKey.trim().takeIf(String::isNotBlank),
                     tavilyKey.trim().takeIf(String::isNotBlank),
@@ -385,12 +379,6 @@ fun AgentSettingsPage(onBack: () -> Unit) {
                             subtitle = stringResource(R.string.agent_workspace_management_summary),
                             onClick = { destination = AgentSettingsDestination.WORKSPACES },
                             leading = { SettingsIcon(MiuixIcons.Grid, MiuixIcons.Grid) },
-                        )
-                        AgentSettingsEntry(
-                            title = stringResource(R.string.agent_bash_permissions),
-                            subtitle = stringResource(R.string.agent_bash_permissions_summary),
-                            onClick = { destination = AgentSettingsDestination.BASH_PERMISSIONS },
-                            leading = { SettingsIcon(MiuixIcons.Tool, MiuixIcons.Tool) },
                             last = true,
                         )
                     }
@@ -640,9 +628,11 @@ fun AgentSettingsPage(onBack: () -> Unit) {
                     AgentSettingsFormCard {
                         FlueTextField(imageBaseUrl, { imageBaseUrl = it }, Modifier.fillMaxWidth(), stringResource(R.string.agent_image_base_url))
                         FlueTextField(imageModel, { imageModel = it }, Modifier.fillMaxWidth(), stringResource(R.string.agent_image_model))
-                        FlueTextField(imageSize, { imageSize = it }, Modifier.fillMaxWidth(), stringResource(R.string.agent_image_size))
-                        FlueTextField(imageQuality, { imageQuality = it }, Modifier.fillMaxWidth(), "图片质量（auto / low / medium / high）")
-                        FlueTextField(imageBackground, { imageBackground = it }, Modifier.fillMaxWidth(), "背景（auto / transparent / opaque）")
+                        Text(
+                            "尺寸、背景和质量由 Agent 根据表盘画布与素材用途自动选择。留空时使用图片 API 默认值。",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = LauncherTheme.style.secondaryTextColor,
+                        )
                         FlueTextField(
                             value = if (showImageKey && imageKey.isBlank()) savedImageKey.orEmpty() else imageKey,
                             onValueChange = { imageKey = it },

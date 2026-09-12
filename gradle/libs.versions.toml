@@ -18,6 +18,7 @@ miuix = "0.8.8"
 ffmpeg-kit = "8.1.7"
 smart-exception = "0.2.1"
 luaj = "3.0.1"
+xz = "1.12"
 
 [libraries]
 core-ktx = { module = "androidx.core:core-ktx", version.ref = "core-ktx" }
@@ -46,6 +47,7 @@ miuix-core = { module = "top.yukonga.miuix.kmp:miuix", version.ref = "miuix" }
 ffmpeg-kit-video = { module = "dev.ffmpegkit-maintained:ffmpeg-kit-video", version.ref = "ffmpeg-kit" }
 smart-exception-java = { module = "com.arthenica:smart-exception-java", version.ref = "smart-exception" }
 luaj-jse = { module = "org.luaj:luaj-jse", version.ref = "luaj" }
+xz = { module = "org.tukaani:xz", version.ref = "xz" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

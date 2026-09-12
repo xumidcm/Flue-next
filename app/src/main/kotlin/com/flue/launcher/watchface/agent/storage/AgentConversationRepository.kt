@@ -61,7 +61,8 @@ class AgentConversationRepository(context: Context) {
     @Synchronized fun applyGeneratedTitle(conversationId: String, title: String) {
         val current = getConversation(conversationId) ?: return
         if (current.titleFinalized) return
-        val cleaned = title.lineSequence().firstOrNull { it.isNotBlank() }?.trim()?.trim('"', '“', '”', '#', ' ')?.take(40).orEmpty()
+        val cleaned = title.lineSequence().firstOrNull { it.isNotBlank() }?.trim()?.trim('"', '“', '”', '#', ' ')
+            ?.replace(Regex("\\s+"), " ")?.take(120).orEmpty()
         // Generated titles remain provisional so the next completed turn can refine them.
         if (cleaned.isNotBlank()) writeConversation(current.copy(title = cleaned, titleFinalized = false))
     }

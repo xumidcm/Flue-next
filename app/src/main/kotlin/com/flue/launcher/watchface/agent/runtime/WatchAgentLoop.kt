@@ -152,6 +152,8 @@ class WatchAgentLoop(
                 name = name,
                 arguments = arguments,
             )
+        }.distinctBy { call ->
+            call.name to call.arguments.entries.sortedBy { it.key }.map { it.key to it.value }
         }
     }
 

@@ -10,18 +10,19 @@ class WorkspacePermissionStore(context: Context) {
     )
 
     @Synchronized
-    fun load(): WorkspacePermissionSettings = WorkspacePermissionSettings(
-        approvalMode = runCatching {
-            BashApprovalMode.valueOf(
-                preferences.getString(KEY_APPROVAL_MODE, BashApprovalMode.EACH_COMMAND.name)
-                    ?: BashApprovalMode.EACH_COMMAND.name,
-            )
-        }.getOrDefault(BashApprovalMode.EACH_COMMAND),
-        networkAllowed = preferences.getBoolean(KEY_NETWORK_ALLOWED, false),
-        readAllowed = preferences.getBoolean(KEY_READ_ALLOWED, true),
-        writeAllowed = preferences.getBoolean(KEY_WRITE_ALLOWED, true),
-        attachmentImportAllowed = preferences.getBoolean(KEY_ATTACHMENT_IMPORT_ALLOWED, false),
-    )
+    fun load(): WorkspacePermissionSettings {
+        val defaults = WorkspacePermissionSettings()
+        val mode = runCatching {
+            BashApprovalMode.valueOf(preferences.getString(KEY_APPROVAL_MODE, defaults.approvalMode.name)!!)
+        }.getOrDefault(defaults.approvalMode)
+        return WorkspacePermissionSettings(
+            approvalMode = mode,
+            networkAllowed = preferences.getBoolean(KEY_NETWORK_ALLOWED, defaults.networkAllowed),
+            readAllowed = preferences.getBoolean(KEY_READ_ALLOWED, defaults.readAllowed),
+            writeAllowed = preferences.getBoolean(KEY_WRITE_ALLOWED, defaults.writeAllowed),
+            attachmentImportAllowed = preferences.getBoolean(KEY_ATTACHMENT_IMPORT_ALLOWED, defaults.attachmentImportAllowed),
+        )
+    }
 
     @Synchronized
     fun save(settings: WorkspacePermissionSettings) {

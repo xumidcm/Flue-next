@@ -2,13 +2,17 @@ package com.flue.launcher.watchface.agent.tools
 
 import com.flue.launcher.watchface.editor.WatchEditorAgentCandidate
 import com.flue.launcher.watchface.editor.WatchEditorSession
+import com.flue.launcher.watchface.agent.workspace.WorkspaceManager
+import java.nio.file.Files
 
 /** Bridges Agent document tools to the real lossless editor session. */
 class WatchEditorSessionAgentToolHost(
     private val session: WatchEditorSession,
-    private val knowledge: WatchAgentKnowledgeStore = WatchAgentKnowledgeStore.EMPTY,
+    private val knowledge: WatchAgentKnowledgeStore = WatchAgentKnowledgeStore(WatchAgentKnowledgeCatalog.entries),
     private val nativePreview: NativePreviewRenderer? = null,
     private val onDocumentMutated: (WatchEditorAgentCandidate) -> Unit = {},
+    private val workspaceManager: WorkspaceManager? = null,
+    private val watchScope: String? = null,
 ) : WatchAgentToolHost, WatchAgentUndoHost {
     @Volatile private var activeUndoGroup: RevisionAwareUndoGroup? = null
     override val currentRevision: Long
@@ -78,6 +82,7 @@ class WatchEditorSessionAgentToolHost(
                 "图片 path 含 images/ 前缀；保存时会按 CloX 规范化为 images/ 内相对文件名",
             )
         }
+        validateGlobalScript(candidate.globalScript)?.let { diagnostics += it }
         return WatchAgentValidationResult(
             revision = candidate.revision,
             diagnostics = diagnostics,
@@ -115,6 +120,26 @@ class WatchEditorSessionAgentToolHost(
         onDocumentMutated(candidate)
         activeUndoGroup?.recordAgentRevision(candidate.revision)
         return candidate.mutation(request.path)
+    }
+
+    override fun syncFaceMirror(): Any {
+        val manager = workspaceManager ?: throw WatchAgentToolException("mirror_unavailable", "当前宿主未绑定工作区")
+        val id = watchScope?.let { manager.bindingFor(it)?.workspaceId } ?: throw WatchAgentToolException("mirror_unavailable", "当前表盘未绑定工作区")
+        check(manager.syncFaceMirror(id, session.agentCandidate().watchXml, session.agentCandidate().globalScript)) { "镜像同步失败" }
+        return mapOf("workspace_id" to id, "revision" to currentRevision, "path" to "face/")
+    }
+
+    override fun validateFaceMirror(): Any = mapOf("valid" to true, "revision" to currentRevision)
+
+    override fun commitFaceMirror(expectedRevision: Long): Any {
+        checkRevision(expectedRevision)
+        val manager = workspaceManager ?: throw WatchAgentToolException("mirror_unavailable", "当前宿主未绑定工作区")
+        val id = watchScope?.let { manager.bindingFor(it)?.workspaceId } ?: throw WatchAgentToolException("mirror_unavailable", "当前表盘未绑定工作区")
+        val face = manager.faceMirrorDirectory(id) ?: throw WatchAgentToolException("mirror_unavailable", "镜像目录不存在")
+        val xml = face.resolve("watch.xml"); val script = face.resolve("scripts/script.txt")
+        if (Files.isRegularFile(xml)) writeDocument(WatchAgentWriteDocumentRequest(WatchAgentDocumentPath.WATCH_XML, String(Files.readAllBytes(xml), Charsets.UTF_8), expectedRevision))
+        if (Files.isRegularFile(script)) writeDocument(WatchAgentWriteDocumentRequest(WatchAgentDocumentPath.GLOBAL_SCRIPT, String(Files.readAllBytes(script), Charsets.UTF_8), currentRevision))
+        return mapOf("committed" to true, "revision" to currentRevision)
     }
 
     override fun beginUndoGroup(): WatchAgentUndoGroup {

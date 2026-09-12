@@ -13,6 +13,11 @@ interface WatchAgentToolHost {
 
     fun editDocument(request: WatchAgentEditDocumentRequest): WatchAgentDocumentMutationResult
     fun writeDocument(request: WatchAgentWriteDocumentRequest): WatchAgentDocumentMutationResult
+
+    fun syncFaceMirror(): Any = throw WatchAgentToolException("mirror_unavailable", "当前宿主未绑定表盘镜像")
+    fun validateFaceMirror(): Any = throw WatchAgentToolException("mirror_unavailable", "当前宿主未绑定表盘镜像")
+    fun commitFaceMirror(expectedRevision: Long): Any = throw WatchAgentToolException("mirror_unavailable", "当前宿主未绑定表盘镜像")
+    fun importFaceResource(path: String): Any = throw WatchAgentToolException("mirror_unavailable", "当前宿主未绑定表盘镜像")
 }
 
 interface WatchAgentUndoHost {

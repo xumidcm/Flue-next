@@ -36,6 +36,7 @@ class WorkspaceManager private constructor(
     private val defaultQuotaBytes: Long,
     private val rootfsBackupCleaner: ((Path) -> Unit)?,
 ) {
+    data class DirectoryEntry(val relativePath: String, val name: String, val isDirectory: Boolean, val sizeBytes: Long)
     constructor(
         root: Path,
         defaultQuotaBytes: Long = DEFAULT_QUOTA_BYTES,
@@ -66,7 +67,7 @@ class WorkspaceManager private constructor(
         val id = UUID.randomUUID().toString()
         val paths = WorkspacePaths(workspacesRoot.resolve(id))
         Files.createDirectories(paths.root)
-        listOf(paths.linux, paths.home, paths.workspace, paths.generated, paths.previews)
+        listOf(paths.linux, paths.home, paths.workspace, paths.generated, paths.previews, paths.face)
             .forEach(Files::createDirectories)
         val workspace = AgentWorkspace(
             id = id,
@@ -272,6 +273,35 @@ class WorkspaceManager private constructor(
         return quota
     }
 
+    /** Lists one managed workspace directory without exposing metadata or Rootfs. */
+    @Synchronized
+    fun listDirectory(workspaceId: String, relativeDirectory: String = "workspace"): List<DirectoryEntry> {
+        val workspace = get(workspaceId) ?: return emptyList()
+        val relative = WorkspacePathPolicy.sanitizeRelative(relativeDirectory)
+        val directory = WorkspacePathPolicy.resolveInside(workspace.paths.root, relative)
+        require(Files.isDirectory(directory)) { "Workspace directory does not exist" }
+        Files.list(directory).use { stream ->
+            return stream.map { path ->
+                val childRelative = workspace.paths.workspace.relativize(path).toString().replace('\\', '/')
+                DirectoryEntry(childRelative, path.fileName.toString(), Files.isDirectory(path), if (Files.isRegularFile(path)) Files.size(path) else 0L)
+            }.sorted(compareBy<DirectoryEntry> { !it.isDirectory }.thenBy { it.name.lowercase() }).toList()
+        }
+    }
+
+    /** Deletes a file or directory inside /workspace, never protected runtime paths. */
+    @Synchronized
+    fun deleteWorkspaceEntry(workspaceId: String, relativePath: String): Boolean {
+        val workspace = get(workspaceId) ?: return false
+        val relative = WorkspacePathPolicy.sanitizeRelative(relativePath)
+        require(relative == "workspace" || relative.startsWith("workspace/")) { "Only workspace files can be deleted" }
+        val target = WorkspacePathPolicy.resolveInside(workspace.paths.root, relative)
+        require(target != workspace.paths.workspace && Files.exists(target)) { "Invalid workspace entry" }
+        require(!Files.isSymbolicLink(target)) { "Symbolic links cannot be deleted" }
+        deleteRecursively(target)
+        refreshQuota(workspaceId)
+        return !Files.exists(target)
+    }
+
     @Synchronized
     fun importFile(workspaceId: String, source: Path, targetRelativePath: String): ImportResult {
         val workspace = get(workspaceId) ?: return ImportResult.INVALID_SOURCE
@@ -332,6 +362,21 @@ class WorkspaceManager private constructor(
 
     fun exportWorkspaceArchive(workspaceId: String, targetArchive: Path): ExportResult =
         exportWorkspace(workspaceId, targetArchive)
+
+    /** Returns the isolated mirror directory for the face bound to this workspace. */
+    @Synchronized
+    fun faceMirrorDirectory(workspaceId: String): Path? =
+        get(workspaceId)?.paths?.face?.also { Files.createDirectories(it) }
+
+    /** Atomically refreshes the face mirror documents used by Bash tooling. */
+    @Synchronized
+    fun syncFaceMirror(workspaceId: String, watchXml: String, globalScript: String): Boolean {
+        val face = faceMirrorDirectory(workspaceId) ?: return false
+        writeAtomically(face.resolve("watch.xml"), watchXml)
+        val scripts = face.resolve("scripts"); Files.createDirectories(scripts)
+        writeAtomically(scripts.resolve("script.txt"), globalScript)
+        return true
+    }
 
     /** Imports an archive into a new UUID after validating every entry as a relative path. */
     @Synchronized
