@@ -335,6 +335,18 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
 
     }
 
+    /** Materializes the CYTJ custom photo once so the built-in photo face can use a real file path. */
+    private fun ensureCytjPhotoPath(): String? {
+        val target = File(getApplication<Application>().filesDir, "cytj_os_watch.jpg")
+        if (target.isFile && target.length() > 0L) return target.absolutePath
+        return runCatching {
+            getApplication<Application>().assets.open("cytj_os_watch.jpg").use { input ->
+                target.outputStream().use { output -> input.copyTo(output) }
+            }
+            target.absolutePath
+        }.getOrNull()
+    }
+
     private val store = application.dataStore
     private val repositories = FlueApplication.repositories(application)
     private val appRepository = repositories.appRepository
@@ -351,7 +363,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     private val _launcherInteractive = MutableStateFlow(true)
     val launcherInteractive: StateFlow<Boolean> = _launcherInteractive.asStateFlow()
 
-    private val _layoutMode = MutableStateFlow(LayoutMode.Honeycomb)
+    private val _layoutMode = MutableStateFlow(LayoutMode.Flow)
     val layoutMode: StateFlow<LayoutMode> = _layoutMode.asStateFlow()
     private val _themeMode = repositories.sharedState.themeMode
     val themeMode: StateFlow<ThemeMode> = _themeMode.asStateFlow()
@@ -663,12 +675,12 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     )
     val availableWatchFaces: StateFlow<List<WatchFaceDescriptor>> = _availableWatchFaces.asStateFlow()
 
-    private val _selectedWatchFaceId = MutableStateFlow(BUILT_IN_WATCHFACE_ID)
+    private val _selectedWatchFaceId = MutableStateFlow(BUILT_IN_PHOTO_WATCHFACE_ID)
     val selectedWatchFaceId: StateFlow<String> = _selectedWatchFaceId.asStateFlow()
     private var debugForceMissingWatchFace: Boolean = false
 
     private val _selectedWatchFace = MutableStateFlow(
-        WatchFaceDescriptors.builtInDescriptor(application, BUILT_IN_WATCHFACE_ID),
+        WatchFaceDescriptors.builtInDescriptor(application, BUILT_IN_PHOTO_WATCHFACE_ID),
     )
     val selectedWatchFace: StateFlow<WatchFaceDescriptor> = _selectedWatchFace.asStateFlow()
 
@@ -790,7 +802,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     private val _builtInVideoShowSeconds = MutableStateFlow(false)
     val builtInVideoShowSeconds: StateFlow<Boolean> = _builtInVideoShowSeconds.asStateFlow()
 
-    private val _builtInPhotoCustomText = MutableStateFlow("")
+    private val _builtInPhotoCustomText = MutableStateFlow("欢迎来到激动人心的CYTJ OS!")
     val builtInPhotoCustomText: StateFlow<String> = _builtInPhotoCustomText.asStateFlow()
 
     private val _builtInVideoCustomText = MutableStateFlow("")
@@ -891,9 +903,9 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                     try {
                         LayoutMode.valueOf(it)
                     } catch (_: Exception) {
-                        LayoutMode.Honeycomb
+                        LayoutMode.Flow
                     }
-                } ?: LayoutMode.Honeycomb
+                } ?: LayoutMode.Flow
                 if (_layoutMode.value != loadedLayout) _layoutMode.value = loadedLayout
 
                 // 默认深色（老师定）：手表多为 OLED，深色既省电又是三套风格的基准观感
@@ -1070,8 +1082,9 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                     persist { store.edit { it[KEY_FLOW_SPACING_DISABLED] = true } }
                 }
 
-                val loadedAppListBackground =
-                    AppListBackgroundJson.decodeOrDefault(prefs[KEY_APP_LIST_BACKGROUND])
+                val loadedAppListBackground = prefs[KEY_APP_LIST_BACKGROUND]?.let {
+                    AppListBackgroundJson.decodeOrDefault(it)
+                } ?: AppListBackgroundConfig(mode = AppListBackgroundMode.WATCH_FACE)
                 if (_appListBackground.value != loadedAppListBackground) {
                     _appListBackground.value = loadedAppListBackground
                 }
@@ -1355,15 +1368,18 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                     appRepository.setIconRenderingOptionsDeferrable(packageName = selectedPack)
                 }
 
-                val loadedWatchFaceId = prefs[KEY_SELECTED_WATCHFACE_ID] ?: BUILT_IN_WATCHFACE_ID
+                val loadedWatchFaceId = prefs[KEY_SELECTED_WATCHFACE_ID] ?: BUILT_IN_PHOTO_WATCHFACE_ID
                 if (_selectedWatchFaceId.value != loadedWatchFaceId) _selectedWatchFaceId.value = loadedWatchFaceId
                 debugForceMissingWatchFace = prefs[KEY_DEBUG_FORCE_MISSING_WATCHFACE] ?: false
 
                 val loadedWatchFaceError = prefs[KEY_LAST_WATCHFACE_ERROR]
                 if (_watchFaceLastError.value != loadedWatchFaceError) _watchFaceLastError.value = loadedWatchFaceError
 
-                val loadedPhotoPath = prefs[KEY_BUILTIN_PHOTO_PATH]
+                val loadedPhotoPath = prefs[KEY_BUILTIN_PHOTO_PATH] ?: ensureCytjPhotoPath()
                 if (_builtInPhotoPath.value != loadedPhotoPath) _builtInPhotoPath.value = loadedPhotoPath
+                if (prefs[KEY_BUILTIN_PHOTO_PATH] == null && !loadedPhotoPath.isNullOrBlank()) {
+                    persist { store.edit { it[KEY_BUILTIN_PHOTO_PATH] = loadedPhotoPath } }
+                }
 
                 val loadedVideoPath = prefs[KEY_BUILTIN_VIDEO_PATH]
                 if (_builtInVideoPath.value != loadedVideoPath) _builtInVideoPath.value = loadedVideoPath
@@ -1526,9 +1542,12 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                     _builtInVideoShowSeconds.value = loadedVideoShowSeconds
                 }
 
-                val loadedPhotoCustomText = prefs[KEY_PHOTO_CUSTOM_TEXT].orEmpty()
+                val loadedPhotoCustomText = prefs[KEY_PHOTO_CUSTOM_TEXT] ?: "欢迎来到激动人心的CYTJ OS!"
                 if (_builtInPhotoCustomText.value != loadedPhotoCustomText) {
                     _builtInPhotoCustomText.value = loadedPhotoCustomText
+                }
+                if (prefs[KEY_PHOTO_CUSTOM_TEXT] == null) {
+                    persist { store.edit { it[KEY_PHOTO_CUSTOM_TEXT] = loadedPhotoCustomText } }
                 }
 
                 val loadedVideoCustomText = prefs[KEY_VIDEO_CUSTOM_TEXT].orEmpty()

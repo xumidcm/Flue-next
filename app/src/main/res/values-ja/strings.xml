@@ -535,6 +535,7 @@
 
     <!-- このアプリについて・寄付 -->
     <string name="settings_about_title">このアプリについて</string>
+    <string name="about_custom_edition">CYTJ OS カスタム版</string>
     <string name="settings_donate_title">開発を支援</string>
     <string name="settings_donate_tip">Flue Next の開発を支援していただき、本当にありがとうございます！下の QR コードをタップすると全画面で表示できます。</string>
     <string name="settings_donate_wechat">WeChat</string>
