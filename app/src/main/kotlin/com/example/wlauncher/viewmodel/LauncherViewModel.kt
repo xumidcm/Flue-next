@@ -710,13 +710,13 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     private val _builtInVideoPath = MutableStateFlow<String?>(null)
     val builtInVideoPath: StateFlow<String?> = _builtInVideoPath.asStateFlow()
 
-    private val _builtInPhotoClockPosition = MutableStateFlow(WatchClockPosition.CENTER)
+    private val _builtInPhotoClockPosition = MutableStateFlow(WatchClockPosition.BOTTOM_RIGHT)
     val builtInPhotoClockPosition: StateFlow<WatchClockPosition> = _builtInPhotoClockPosition.asStateFlow()
 
     private val _builtInVideoClockPosition = MutableStateFlow(WatchClockPosition.CENTER)
     val builtInVideoClockPosition: StateFlow<WatchClockPosition> = _builtInVideoClockPosition.asStateFlow()
 
-    private val _builtInPhotoClockSize = MutableStateFlow(64)
+    private val _builtInPhotoClockSize = MutableStateFlow(56)
     val builtInPhotoClockSize: StateFlow<Int> = _builtInPhotoClockSize.asStateFlow()
 
     private val _builtInVideoClockSize = MutableStateFlow(64)
@@ -1386,7 +1386,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
 
                 val loadedPhotoClockPosition = prefs[KEY_PHOTO_CLOCK_POSITION]
                     ?.let(::parseClockPosition)
-                    ?: WatchClockPosition.CENTER
+                    ?: WatchClockPosition.BOTTOM_RIGHT
                 if (_builtInPhotoClockPosition.value != loadedPhotoClockPosition) {
                     _builtInPhotoClockPosition.value = loadedPhotoClockPosition
                 }
@@ -1398,7 +1398,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                     _builtInVideoClockPosition.value = loadedVideoClockPosition
                 }
 
-                val loadedPhotoClockSize = (prefs[KEY_PHOTO_CLOCK_SIZE] ?: 64).coerceIn(28, 92)
+                val loadedPhotoClockSize = (prefs[KEY_PHOTO_CLOCK_SIZE] ?: 56).coerceIn(28, 92)
                 if (_builtInPhotoClockSize.value != loadedPhotoClockSize) _builtInPhotoClockSize.value = loadedPhotoClockSize
 
                 val loadedVideoClockSize = (prefs[KEY_VIDEO_CLOCK_SIZE] ?: 64).coerceIn(28, 92)

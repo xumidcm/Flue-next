@@ -13,7 +13,7 @@ class WatchFaceCardSelectorContractTest {
 
         assertTrue(selector.contains("HorizontalPager("))
         assertTrue(selector.contains("beyondViewportPageCount = 0"))
-        assertTrue(selector.contains("key = { page -> items[page].stableId }"))
+        assertTrue(selector.contains("key = { page -> items.getOrNull(page)?.stableId"))
         assertTrue(selector.contains("WatchFaceStaticPreview("))
         assertTrue(preview.contains("playVideo = false"))
     }
