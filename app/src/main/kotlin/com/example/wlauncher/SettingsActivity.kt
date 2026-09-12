@@ -103,7 +103,7 @@ import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Refresh
 import com.flue.launcher.ui.style.FlueAlertDialog
 import com.flue.launcher.ui.style.FlueButton
-import com.flue.launcher.ui.style.FlueDialog
+import com.flue.launcher.ui.style.FlueSingleChoiceDialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
@@ -218,6 +218,7 @@ import com.flue.launcher.ui.input.RotaryHapticGate
 import com.flue.launcher.ui.input.requestFocusAfterFirstFrame
 import com.flue.launcher.ui.navigation.LayoutMode
 import com.flue.launcher.ui.settings.WatchFaceSettingCard
+import com.flue.launcher.ui.settings.agent.AgentSettingsPage
 import com.flue.launcher.ui.settings.miuix.MiuixIcons
 import com.flue.launcher.ui.settings.miuix.MiuixSettingsCard
 import com.flue.launcher.ui.settings.miuix.MiuixSettingsRow
@@ -258,12 +259,14 @@ import com.flue.launcher.ui.settings.WatchTapActionDefinition
 import com.flue.launcher.ui.settings.DebugTapState
 import com.flue.launcher.diagnostics.DiagnosticsSettingsSection
 import com.flue.launcher.diagnostics.DiagnosticsInformationSection
-import com.flue.launcher.aod.AodSettingsSection
+import com.flue.launcher.aod.AodSupplementalNotice
+import com.flue.launcher.aod.rememberAodSettingsState
 import com.flue.launcher.ui.store.clearFlueWebViewData
 import com.flue.launcher.watchface.store.MAX_WEB_ZOOM_PERCENT
 import com.flue.launcher.watchface.store.MIN_WEB_ZOOM_PERCENT
 import com.flue.launcher.watchface.store.WatchStoreUiPreferences
 import com.flue.launcher.ui.style.FlueLoadingIndicator
+import com.flue.launcher.watchface.selection.WatchFaceLongPressMode
 import top.yukonga.miuix.kmp.icon.MiuixIcons as OfficialMiuixIcons
 import top.yukonga.miuix.kmp.icon.extended.Add as OfficialAdd
 import top.yukonga.miuix.kmp.icon.extended.Back as OfficialBack
@@ -312,6 +315,7 @@ const val EXTRA_SETTINGS_DESTINATION = "settings_destination"
 const val EXTRA_SETTINGS_RETURN_TO_FACE = "settings_return_to_face"
 const val SETTINGS_DESTINATION_WATCH_FACES = "watch_faces"
 const val SETTINGS_DESTINATION_TOOLS = "tools"
+const val SETTINGS_DESTINATION_AGENT = "agent"
 private val LocalSettingsLeftSafeInsetPercent = compositionLocalOf { 0 }
 private val LocalSettingsRotaryHapticsEnabled = compositionLocalOf { true }
 
@@ -330,6 +334,7 @@ private val LocalSettingsSearchTarget = compositionLocalOf<SettingsSearchTarget?
 enum class SettingsDestination {
     ROOT,
     WATCH_FACES,
+    AGENT,
     WATCH_FACE_MORE,
     TAP_ACTION_CATEGORIES,
     TAP_ACTION_CATEGORY,
@@ -338,6 +343,7 @@ enum class SettingsDestination {
     ICON_PACKS,
     APPEARANCE,
     DISPLAY_SIZE,
+    AOD,
     FEATURE_TOGGLES,
     SIDE_SCREEN,
     NOTIFICATION_SETTINGS,
@@ -487,6 +493,7 @@ class SettingsActivity : FlueComponentActivity() {
         val initialDestination = when (getStringExtra(EXTRA_SETTINGS_DESTINATION)) {
             SETTINGS_DESTINATION_WATCH_FACES -> SettingsDestination.WATCH_FACES
             SETTINGS_DESTINATION_TOOLS -> SettingsDestination.TOOLS
+            SETTINGS_DESTINATION_AGENT -> SettingsDestination.AGENT
             else -> SettingsDestination.ROOT
         }
         return SettingsLaunchConfig(
@@ -529,6 +536,7 @@ private fun SettingsRootScreen(
     }
     var weatherLocationSelectionGeneration by remember { mutableStateOf(0L) }
     var weatherCityDialogVisible by remember { mutableStateOf(false) }
+    var watchFaceLongPressModeDialogVisible by remember { mutableStateOf(false) }
     var weatherCityDraft by remember { mutableStateOf("") }
     var weatherCityCandidates by remember { mutableStateOf<List<WatchWeatherLocation>>(emptyList()) }
     var weatherCitySearching by remember { mutableStateOf(false) }
@@ -693,6 +701,7 @@ private fun SettingsRootScreen(
     val watchFaceTextExitAnimation by vm.watchFaceTextExitAnimation.collectAsStateWithLifecycle()
     val watchFaceStatusIndicators by vm.watchFaceStatusIndicators.collectAsStateWithLifecycle()
     val watchFaceBottomFadeEnabled by vm.watchFaceBottomFadeEnabled.collectAsStateWithLifecycle()
+    val watchFaceLongPressMode by vm.watchFaceLongPressMode.collectAsStateWithLifecycle()
     val watchfaceGravityParallaxEnabled by vm.watchfaceGravityParallaxEnabled.collectAsStateWithLifecycle()
     val watchfaceGravityBackdropBlurEnabled by
         vm.watchfaceGravityBackdropBlurEnabled.collectAsStateWithLifecycle()
@@ -1672,6 +1681,14 @@ private fun SettingsRootScreen(
                         scale = itemFisheye(listState, "watchfaces", screenCenterY, screenHeightPx)
                     )
                 }
+                item("agent_settings") {
+                    SettingsCategoryCard(
+                        title = stringResource(R.string.settings_agent_title),
+                        subtitle = stringResource(R.string.settings_agent_subtitle),
+                        onClick = { navigateTo(SettingsDestination.AGENT) },
+                        scale = itemFisheye(listState, "agent_settings", screenCenterY, screenHeightPx),
+                    )
+                }
                 item("section_app_list") {
                     SectionTitle(stringResource(R.string.settings_section_app_list), itemFisheye(listState, "section_app_list", screenCenterY, screenHeightPx))
                 }
@@ -1851,6 +1868,7 @@ private fun SettingsRootScreen(
                 }
         }
 
+            SettingsDestination.AGENT -> AgentSettingsPage(onBack = { handleBack() })
             SettingsDestination.WATCH_FACES -> SettingsPageScaffold(
             title = stringResource(R.string.settings_watchfaces),
             onBack = { handleBack() },
@@ -1919,25 +1937,6 @@ private fun SettingsRootScreen(
                         md3eSecondHandColorArgb = builtInVideoMd3eSecondColorArgb
                     ),
                     onSelect = { vm.selectWatchFace(descriptor.id) },
-                    onOpenSettings = if (descriptor.supportsSettings) {
-                        {
-                            if (descriptor.isBuiltin && descriptor.id in setOf(BUILT_IN_PHOTO_WATCHFACE_ID, BUILT_IN_VIDEO_WATCHFACE_ID)) {
-                                context.startActivity(
-                                    Intent(context, InternalWatchFaceConfigActivity::class.java)
-                                        .putExtra(EXTRA_INTERNAL_WATCHFACE_ID, descriptor.id)
-                                )
-                            } else if (descriptor.isWatchmaker) {
-                                context.startActivity(
-                                    Intent(context, WatchEditorActivity::class.java)
-                                        .putExtra(WatchEditorActivity.EXTRA_WATCH_FACE_ID, descriptor.id)
-                                )
-                            } else {
-                                Toast.makeText(context, context.getString(R.string.toast_no_watchface_config), Toast.LENGTH_SHORT).show()
-                            }
-                        }
-                    } else {
-                        null
-                    },
                     onDelete = if (descriptor.isJbWatch || descriptor.isWatchmaker) {
                         { importedWatchFaceDeleteTarget = descriptor }
                     } else {
@@ -2063,6 +2062,34 @@ private fun SettingsRootScreen(
             roundFirstActionIndex = 2,
             onScrollChanged = { index, offset -> updateScroll(SettingsDestination.WATCH_FACE_MORE, index, offset) }
         ) { listState, screenCenterY, screenHeightPx, _ ->
+            flueSettingsGroup {
+                row("watchface_long_press_mode") { position ->
+                    ActionCard(
+                        title = stringResource(R.string.settings_watchface_long_press_mode),
+                        subtitle = stringResource(
+                            if (watchFaceLongPressMode == WatchFaceLongPressMode.CARDS) {
+                                R.string.settings_watchface_long_press_mode_cards_sub
+                            } else {
+                                R.string.settings_watchface_long_press_mode_list_sub
+                            },
+                        ),
+                        scale = itemFisheye(
+                            listState,
+                            "watchface_long_press_mode",
+                            screenCenterY,
+                            screenHeightPx,
+                        ),
+                        icon = {
+                            SettingsIcon(
+                                material = OfficialMiuixIcons.OfficialSettings,
+                                miuix = OfficialMiuixIcons.OfficialSettings,
+                            )
+                        },
+                        onClick = { watchFaceLongPressModeDialogVisible = true },
+                        groupPosition = position,
+                    )
+                }
+            }
             item("watch_weather_header") {
                 SectionTitle(
                     stringResource(R.string.settings_watch_weather),
@@ -2924,7 +2951,12 @@ private fun SettingsRootScreen(
                 )
             }
             item("aod_settings") {
-                AodSettingsSection()
+                SettingsCategoryCard(
+                    title = stringResource(R.string.aod_title),
+                    subtitle = stringResource(R.string.aod_description),
+                    onClick = { navigateTo(SettingsDestination.AOD) },
+                    scale = itemFisheye(listState, "aod_settings", screenCenterY, screenHeightPx),
+                )
             }
             if (!flueScreenRound) {
                 item("overlay_mask_corner_radius") {
@@ -3277,6 +3309,7 @@ private fun SettingsRootScreen(
                     )
                 }
             }
+
             // 鱼眼三段：总开关 → 子开关组 → 数值组。
             // 以前是开关与滑块交替（开关 → 滑块 → 开关 → 滑块 → 开关 → 滑块），
             // 读起来找不到主次。网格 / 心流各自专属那几项只在对应布局显示。
@@ -3601,6 +3634,145 @@ private fun SettingsRootScreen(
         }
 
             // 「功能开关」从 16 项杂烩改为路牌页：五个按领域归类的三级页。
+            SettingsDestination.AOD -> {
+                val aodState = rememberAodSettingsState()
+                val aod = aodState.config
+                SettingsPageScaffold(
+                    title = stringResource(R.string.aod_title),
+                    onBack = { handleBack() },
+                    headerTime = headerTime,
+                    initialFirstVisibleItemIndex = scrollFor(SettingsDestination.AOD).index,
+                    initialFirstVisibleItemScrollOffset = scrollFor(SettingsDestination.AOD).offset,
+                    onScrollChanged = { index, offset ->
+                        updateScroll(SettingsDestination.AOD, index, offset)
+                    },
+                ) { listState, screenCenterY, screenHeightPx, _ ->
+                    item("aod_description") {
+                        Text(
+                            text = stringResource(R.string.aod_page_description),
+                            color = LauncherTheme.style.secondaryTextColor,
+                            style = MaterialTheme.typography.bodySmall,
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                    }
+                    item("aod_enabled") {
+                        SettingsSwitchRow(
+                            title = stringResource(R.string.aod_enabled),
+                            subtitle = stringResource(
+                                if (aod.enabled) R.string.aod_state_on else R.string.aod_state_off,
+                            ),
+                            checked = aod.enabled,
+                            onToggle = aodState::setEnabled,
+                            scale = itemFisheye(listState, "aod_enabled", screenCenterY, screenHeightPx),
+                        )
+                    }
+                    item("aod_charging") {
+                        SettingsSwitchRow(
+                            title = stringResource(R.string.aod_charging),
+                            subtitle = stringResource(
+                                if (aod.alwaysWhenCharging) R.string.aod_state_on else R.string.aod_state_off,
+                            ),
+                            checked = aod.alwaysWhenCharging,
+                            onToggle = aodState::setAlwaysWhenCharging,
+                            scale = itemFisheye(listState, "aod_charging", screenCenterY, screenHeightPx),
+                        )
+                    }
+                    item("aod_timeout") {
+                        SettingsSliderRow(
+                            title = stringResource(R.string.aod_timeout),
+                            value = aod.timeoutSeconds.toFloat(),
+                            valueText = "${aod.timeoutSeconds} s",
+                            localValueText = { "${it.roundToInt()} s" },
+                            range = 5f..300f,
+                            steps = 58,
+                            onValueChange = {},
+                            onValueChangeFinished = { aodState.setTimeoutSeconds(it.roundToInt()) },
+                            enabled = aodState.controlsEnabled,
+                            scale = itemFisheye(listState, "aod_timeout", screenCenterY, screenHeightPx),
+                        )
+                    }
+                    item("aod_brightness") {
+                        SettingsSliderRow(
+                            title = stringResource(R.string.aod_brightness),
+                            value = aod.brightnessPercent.toFloat(),
+                            valueText = "${aod.brightnessPercent}%",
+                            localValueText = { "${it.roundToInt()}%" },
+                            range = 1f..100f,
+                            steps = 98,
+                            onValueChange = {},
+                            onValueChangeFinished = { aodState.setBrightnessPercent(it.roundToInt()) },
+                            enabled = aodState.controlsEnabled,
+                            scale = itemFisheye(listState, "aod_brightness", screenCenterY, screenHeightPx),
+                        )
+                    }
+                    item("aod_reawaken") {
+                        SettingsSwitchRow(
+                            title = stringResource(R.string.aod_reawaken),
+                            subtitle = stringResource(
+                                if (aod.reawaken) R.string.aod_state_on else R.string.aod_state_off,
+                            ),
+                            checked = aod.reawaken,
+                            enabled = aodState.controlsEnabled,
+                            onToggle = aodState::setReawaken,
+                            scale = itemFisheye(listState, "aod_reawaken", screenCenterY, screenHeightPx),
+                        )
+                    }
+                    item("aod_lock") {
+                        SettingsSwitchRow(
+                            title = stringResource(R.string.aod_lock),
+                            subtitle = stringResource(
+                                if (aod.lockGestures) R.string.aod_state_on else R.string.aod_state_off,
+                            ),
+                            checked = aod.lockGestures,
+                            enabled = aodState.controlsEnabled,
+                            onToggle = aodState::setLockGestures,
+                            scale = itemFisheye(listState, "aod_lock", screenCenterY, screenHeightPx),
+                        )
+                    }
+                    item("aod_lock_delay") {
+                        SettingsSliderRow(
+                            title = stringResource(R.string.aod_lock_delay),
+                            value = aod.lockDelaySeconds.toFloat(),
+                            valueText = "${aod.lockDelaySeconds} s",
+                            localValueText = { "${it.roundToInt()} s" },
+                            range = 0f..30f,
+                            steps = 29,
+                            onValueChange = {},
+                            onValueChangeFinished = { aodState.setLockDelaySeconds(it.roundToInt()) },
+                            enabled = aodState.controlsEnabled && aod.lockGestures,
+                            scale = itemFisheye(listState, "aod_lock_delay", screenCenterY, screenHeightPx),
+                        )
+                    }
+                    item("aod_shallow") {
+                        SettingsSwitchRow(
+                            title = stringResource(R.string.aod_shallow),
+                            subtitle = stringResource(
+                                if (aod.shallowSleep) R.string.aod_state_on else R.string.aod_state_off,
+                            ),
+                            checked = aod.shallowSleep,
+                            enabled = aodState.controlsEnabled && aod.lockGestures,
+                            onToggle = aodState::setShallowSleep,
+                            scale = itemFisheye(listState, "aod_shallow", screenCenterY, screenHeightPx),
+                        )
+                    }
+                    item("aod_power_exit") {
+                        SettingsSwitchRow(
+                            title = stringResource(R.string.aod_power_exit),
+                            subtitle = stringResource(
+                                if (aod.powerButtonExit) R.string.aod_state_on else R.string.aod_state_off,
+                            ),
+                            checked = aod.powerButtonExit,
+                            enabled = aodState.controlsEnabled && aod.reawaken,
+                            onToggle = aodState::setPowerButtonExit,
+                            scale = itemFisheye(listState, "aod_power_exit", screenCenterY, screenHeightPx),
+                        )
+                    }
+                    item("aod_supplemental_notice") {
+                        AodSupplementalNotice(aodState)
+                    }
+                }
+            }
+
             SettingsDestination.FEATURE_TOGGLES -> SettingsPageScaffold(
             title = stringResource(R.string.settings_feature_toggles),
             onBack = { handleBack() },
@@ -4935,6 +5107,22 @@ private fun SettingsRootScreen(
 
         donatePreviewResId?.let { resId ->
             DonatePreviewDialog(resId = resId, onDismiss = { donatePreviewResId = null })
+        }
+
+        if (watchFaceLongPressModeDialogVisible) {
+            FlueSingleChoiceDialog(
+                onDismissRequest = { watchFaceLongPressModeDialogVisible = false },
+                title = stringResource(R.string.settings_watchface_long_press_mode),
+                options = listOf(
+                    WatchFaceLongPressMode.CARDS to
+                        stringResource(R.string.settings_watchface_long_press_mode_cards),
+                    WatchFaceLongPressMode.LIST to
+                        stringResource(R.string.settings_watchface_long_press_mode_list),
+                ),
+                selected = watchFaceLongPressMode,
+                onSelect = vm::setWatchFaceLongPressMode,
+                cancelText = stringResource(android.R.string.cancel),
+            )
         }
 
         if (weatherCityDialogVisible) {
@@ -6883,18 +7071,32 @@ private fun OverlayMaskCornerRadiusDialog(
     var localRadiusDp by remember(currentRadiusDp) {
         mutableFloatStateOf(currentRadiusDp.toFloat())
     }
-    // The preview is the dialog itself. Keep its shape on the exact slider
-    // frame instead of adding a second easing animation behind the finger.
+    // 全屏提示不再用外层卡片表达圆角，因此用独立样块实时预览滑杆值。
     val previewRadiusDp = localRadiusDp
         .coerceIn(0f, MAX_OVERLAY_MASK_CORNER_RADIUS_DP.toFloat())
         .dp
     val dialogShape = RoundedCornerShape(previewRadiusDp)
     val interactionSource = remember { MutableInteractionSource() }
 
-    // 外壳（窗口属性 / 遮罩 / inset / 全局 UI 大小 / 限高 / 滚动）全部交给 FlueDialog，
-    // 三档风格各自的表面装饰也在那里。这里把**正在拖动的圆角**传进去，弹窗自己就是预览。
-    FlueDialog(onDismissRequest = onDismiss, shape = dialogShape) {
-        Box(modifier = Modifier.size(62.dp)) {
+    FlueAlertDialog(
+        onDismissRequest = onDismiss,
+        title = stringResource(R.string.dialog_overlay_mask_corner_title),
+        text = stringResource(R.string.dialog_overlay_mask_corner_subtitle),
+        confirmText = stringResource(R.string.action_done),
+        // This compact sheet has no scrollable body. Leaving a vertical-scroll
+        // ancestor here lets it win the pointer sequence from MIUIX's horizontal slider.
+        scrollableContent = false,
+        onConfirm = {
+            onSave(normalizeOverlayMaskCornerRadiusDp(localRadiusDp.roundToInt()))
+        },
+    ) {
+        Box(
+            modifier = Modifier
+                .size(76.dp)
+                .clip(dialogShape)
+                .background(dialogOnSurface.copy(alpha = 0.08f))
+                .border(2.dp, launcherStyle.accentColor.copy(alpha = 0.72f), dialogShape),
+        ) {
             Box(
                 modifier = Modifier
                     .size(40.dp)
@@ -6911,21 +7113,6 @@ private fun OverlayMaskCornerRadiusDialog(
                     .border(3.dp, dialogSurface, RoundedCornerShape(12.dp)),
             )
         }
-        Spacer(Modifier.height(12.dp))
-        Text(
-            text = stringResource(R.string.dialog_overlay_mask_corner_title),
-            color = dialogOnSurface,
-            fontSize = 25.sp,
-            fontWeight = FontWeight.Bold,
-            textAlign = TextAlign.Center,
-        )
-        Spacer(Modifier.height(8.dp))
-        Text(
-            text = stringResource(R.string.dialog_overlay_mask_corner_subtitle),
-            color = dialogOnSurfaceVariant,
-            fontSize = 14.sp,
-            textAlign = TextAlign.Center,
-        )
         Spacer(Modifier.height(20.dp))
         Row(
             modifier = Modifier
@@ -6995,25 +7182,6 @@ private fun OverlayMaskCornerRadiusDialog(
             fontSize = 12.sp,
             textAlign = TextAlign.Center,
         )
-        Spacer(Modifier.height(20.dp))
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(54.dp)
-                .clip(RoundedCornerShape(999.dp))
-                .background(launcherStyle.accentColor)
-                .clickable {
-                    onSave(normalizeOverlayMaskCornerRadiusDp(localRadiusDp.roundToInt()))
-                },
-            contentAlignment = Alignment.Center,
-        ) {
-            Text(
-                text = stringResource(R.string.action_done),
-                color = Color.White,
-                fontSize = 17.sp,
-                fontWeight = FontWeight.SemiBold,
-            )
-        }
     }
 }
 
@@ -7696,6 +7864,8 @@ internal fun buildSettingsSearchIndex(context: Context): List<SettingsSearchEntr
     SettingsSearchEntry("APPEARANCE", "direct_launch_app_list", s(R.string.settings_direct_launch_app_list), s(R.string.search_d_direct_launch), listOf("zjjr", "direct launch")),
     SettingsSearchEntry("APPEARANCE", "splash_delay", s(R.string.search_t_splash_delay), s(R.string.search_d_splash_delay), listOf("qdyc", "splash delay", "yanchi")),
     SettingsSearchEntry("DISPLAY_SIZE", null, s(R.string.settings_display_fit), s(R.string.search_d_display_size), listOf("xssp", "size", "daxiao", "fisheye", "yuyan")),
+    SettingsSearchEntry("AOD", null, s(R.string.aod_title), s(R.string.aod_description), listOf("aod", "xiping", "ambient", "息屏")),
+    SettingsSearchEntry("AOD", "aod_enabled", s(R.string.aod_title), s(R.string.aod_description), listOf("aod", "brightness", "timeout", "息屏", "亮度")),
     SettingsSearchEntry("DISPLAY_SIZE", "global_ui_scale", s(R.string.settings_global_ui_size), s(R.string.search_d_global_ui_scale), listOf("qjdx", "scale", "suofang")),
     SettingsSearchEntry("DISPLAY_SIZE", "honeycomb_cols", s(R.string.settings_honeycomb_cols), s(R.string.search_d_honeycomb_cols), listOf("fwls", "columns", "lieshu")),
     SettingsSearchEntry("DISPLAY_SIZE", "app_list_scale", s(R.string.settings_app_list_size), s(R.string.search_d_app_list_scale), listOf("lbdx", "app list size")),
@@ -7723,6 +7893,7 @@ internal fun buildSettingsSearchIndex(context: Context): List<SettingsSearchEntr
     SettingsSearchEntry("WATCH_FACES", "watchface_editor_current", s(R.string.settings_watchface_editor_current), s(R.string.search_t_watchface_editor_new), listOf("bjbp", "edit face", "bianji", "editor")),
     SettingsSearchEntry("WATCH_FACES", "watchface_refresh", s(R.string.settings_watchface_refresh), s(R.string.settings_watchface_refresh_sub), listOf("smbp", "rescan", "shuaxin", "refresh")),
     SettingsSearchEntry("WATCH_FACE_MORE", null, s(R.string.search_t_watchface_more), s(R.string.search_d_watchface_more), listOf("bpgd", "xinlv", "riqi", "date")),
+    SettingsSearchEntry("WATCH_FACE_MORE", "watchface_long_press_mode", s(R.string.settings_watchface_long_press_mode), s(R.string.settings_watchface_long_press_mode_cards_sub), listOf("chang an", "long press", "cards", "list", "kapian", "liebiao")),
     SettingsSearchEntry("WATCH_FACE_MORE", "watch_weather_header", s(R.string.settings_watch_weather), s(R.string.settings_watch_weather_sub), listOf("tq", "weather", "tianqi")),
     SettingsSearchEntry("WATCH_FACE_MORE", "watch_weather_manual_city", s(R.string.settings_watch_weather_city), s(R.string.settings_watch_weather_city_unset), listOf("cs", "city", "chengshi", "location")),
     SettingsSearchEntry("WATCH_FACE_MORE", "watch_weather_system_location", s(R.string.settings_watch_weather_use_system), s(R.string.settings_watch_weather_use_system_sub), listOf("xtdw", "system location", "dingwei", "gps")),

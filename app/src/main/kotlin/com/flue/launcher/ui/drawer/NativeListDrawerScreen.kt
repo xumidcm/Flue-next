@@ -651,16 +651,8 @@ internal fun nativeListDrawerConfig(request: NativeListDrawerConfigRequest): Nat
         dragEnabled = !request.dragBlocked,
         iconShadowEnabled = request.iconShadowEnabled,
         edgeSpacingCompressionEnabled = request.edgeSpacingCompressionEnabled,
-        // 入场动画对所有风格都开。
-        //
-        // 这里以前是 `!request.appleWatchIconShape`：Apple 风格（默认风格）下入场动画
-        // 被整个关掉，`nativeStaggeredEntryProgress` 一进来就 return 1f，图标直接就位。
-        // 于是老师看到的是「应用列表压根没有甩尾入场动画，倒是设置页有」—— 设置页走的
-        // 是另一套 Compose 动画，不受这个开关影响。
-        //
-        // 原来关掉的理由应该是旧 Compose 版 Apple 档另有一套入场（appListEntryVisuals
-        // 的 BETA_12_CLASSIC 分支），原生化之后那套没搬过来，这个开关就成了纯粹的缺失。
-        entryMotionEnabled = true,
+        // 与设置项共用同一个开关；默认值为关闭，避免新安装设备悄悄启用甩尾入场动画。
+        entryMotionEnabled = request.entryStaggerEnabled,
         entryProgress = request.entryProgress,
         // 0.65：底部行晚约 27% 行程，watchOS 式甩尾但不至于拖沓。
         entryStaggerStrength = if (request.entryStaggerEnabled) 0.65f else 0f,

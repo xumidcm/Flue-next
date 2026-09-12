@@ -21,6 +21,7 @@ import androidx.compose.ui.window.DialogProperties
 import com.flue.launcher.STORE_LAYER_ENTER
 import com.flue.launcher.STORE_LAYER_EXIT
 import com.flue.launcher.blockPointerPassThrough
+import com.flue.launcher.ui.style.FlueOverlayHost
 import kotlinx.coroutines.CoroutineScope
 
 internal val LocalWatchStorePageActive = staticCompositionLocalOf { true }
@@ -38,7 +39,9 @@ internal fun WatchStoreDialog(
     content: @Composable () -> Unit,
 ) {
     if (LocalWatchStorePageActive.current) {
-        Dialog(onDismissRequest = onDismissRequest, properties = properties, content = content)
+        Dialog(onDismissRequest = onDismissRequest, properties = properties) {
+            FlueOverlayHost(content = content)
+        }
     }
 }
 

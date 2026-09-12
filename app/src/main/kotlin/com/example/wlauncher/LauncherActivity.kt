@@ -61,6 +61,8 @@ import androidx.compose.ui.layout.boundsInWindow
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalViewConfiguration
+import androidx.compose.ui.platform.ViewConfiguration
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.zIndex
@@ -102,6 +104,7 @@ import com.flue.launcher.ui.home.WatchFaceLoadingMode
 import com.flue.launcher.ui.home.WatchFaceLoadingScreen
 import com.flue.launcher.ui.home.WatchFaceBottomFadeOverlay
 import com.flue.launcher.ui.home.WatchFaceStatusIndicatorOverlay
+import com.flue.launcher.ui.home.WatchFaceCardSelector
 import com.flue.launcher.ui.home.rememberAppListSeedColor
 import com.flue.launcher.ui.navigation.GestureHost
 import com.flue.launcher.ui.navigation.LayoutMode
@@ -130,11 +133,16 @@ import com.flue.launcher.ui.theme.ThemeMode
 import com.flue.launcher.ui.theme.UiStyle
 import com.flue.launcher.ui.theme.WatchLauncherTheme
 import com.flue.launcher.ui.theme.isMaterial
+import com.flue.launcher.ui.style.LocalFlueOverlayActive
 import com.flue.launcher.util.RecentsVisibility
 import com.flue.launcher.viewmodel.LauncherViewModel
 import com.flue.launcher.watchface.BUILT_IN_WATCHFACE_ID
 import com.flue.launcher.watchface.BUILT_IN_VIDEO_WATCHFACE_ID
 import com.flue.launcher.watchface.BuiltInWatchFaceOptions
+import com.flue.launcher.watchface.selection.WatchFaceLongPressMode
+import com.flue.launcher.watchface.selection.WatchFaceChooserDestination
+import com.flue.launcher.watchface.selection.WatchFaceChooserEntryPoint
+import com.flue.launcher.watchface.selection.resolveWatchFaceChooserDestination
 import com.flue.launcher.watchface.jbwatch.JbWatchFaceHost
 import com.flue.launcher.watchface.standard.WatchmakerWatchFaceHost
 import com.flue.launcher.watchface.standard.rememberWatchmakerWatchDataProvider
@@ -151,6 +159,7 @@ import kotlin.math.abs
 private const val SIDE_SCREEN_TRANSITION_MS = 260
 private const val NOTIFICATION_TRANSITION_MS = 240
 private const val APP_RETURN_MAINTENANCE_DELAY_MS = 260L
+private const val WATCH_FACE_LONG_PRESS_TIMEOUT_MS = 450L
 private const val WIDGET_HOST_LOG_TAG = "FlueWidgetHost"
 
 /**
@@ -435,6 +444,10 @@ fun LauncherScreen(vm: LauncherViewModel, aodController: AodController? = null) 
     val launchSourceState by vm.launchSourceState.collectAsStateWithLifecycle()
     val selectedWatchFaceId by vm.selectedWatchFaceId.collectAsStateWithLifecycle()
     val selectedWatchFace by vm.selectedWatchFace.collectAsStateWithLifecycle()
+    val availableWatchFaces by vm.availableWatchFaces.collectAsStateWithLifecycle()
+    val watchFaceLongPressMode by vm.watchFaceLongPressMode.collectAsStateWithLifecycle()
+    var watchFaceCardsVisible by rememberSaveable { mutableStateOf(false) }
+    val promptOverlayActive = LocalFlueOverlayActive.current
     val watchfaceCanvasDefault by vm.watchfaceCanvasDefault.collectAsStateWithLifecycle()
     val watchfaceCanvasOverrides by vm.watchfaceCanvasOverrides.collectAsStateWithLifecycle()
     // 三层继承在这里落地：每表盘覆盖优先，缺省用 App 默认。
@@ -442,7 +455,8 @@ fun LauncherScreen(vm: LauncherViewModel, aodController: AodController? = null) 
     val watchFaceSelectionReady by vm.watchFaceSelectionReady.collectAsStateWithLifecycle()
     val watchFaceRefreshToken by vm.watchFaceRefreshToken.collectAsStateWithLifecycle()
     val watchmakerDataProvider = rememberWatchmakerWatchDataProvider(
-        active = selectedWatchFace.isWatchmaker && launcherInteractive,
+        active = selectedWatchFace.isWatchmaker && launcherInteractive &&
+            !watchFaceCardsVisible && !promptOverlayActive,
         ambientMode = ambientMode,
     )
     val builtInPhotoPath by vm.builtInPhotoPath.collectAsStateWithLifecycle()
@@ -595,15 +609,24 @@ fun LauncherScreen(vm: LauncherViewModel, aodController: AodController? = null) 
     val reduceLegacyDrawerEffects = Build.VERSION.SDK_INT < Build.VERSION_CODES.S && screenState == ScreenState.App
     val notificationsEnabled = showNotification
     val notificationSceneActive = screenState == ScreenState.Notifications
-    val openWatchFaceChooser: () -> Unit = remember(context) {
+    val openWatchFaceChooser: () -> Unit = remember(context, watchFaceLongPressMode) {
         {
             vibrateHaptic(context)
-            context.startActivity(
-                Intent(context, SettingsActivity::class.java)
-                    .putExtra(EXTRA_SETTINGS_DESTINATION, SETTINGS_DESTINATION_WATCH_FACES)
-                    .putExtra(EXTRA_SETTINGS_RETURN_TO_FACE, true)
-                    .addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
-            )
+            if (
+                resolveWatchFaceChooserDestination(
+                    WatchFaceChooserEntryPoint.LONG_PRESS,
+                    watchFaceLongPressMode,
+                ) == WatchFaceChooserDestination.CARDS
+            ) {
+                watchFaceCardsVisible = true
+            } else {
+                context.startActivity(
+                    Intent(context, SettingsActivity::class.java)
+                        .putExtra(EXTRA_SETTINGS_DESTINATION, SETTINGS_DESTINATION_WATCH_FACES)
+                        .putExtra(EXTRA_SETTINGS_RETURN_TO_FACE, true)
+                        .addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+                )
+            }
             Unit
         }
     }
@@ -1762,10 +1785,12 @@ fun LauncherScreen(vm: LauncherViewModel, aodController: AodController? = null) 
         // only during the opening gesture. Heavy gyro/Lua faces otherwise
         // resume their tick after settle and compete with RecyclerView while
         // remaining fully hidden behind the opaque list.
-        val watchFaceOverlayTransitionActive = shouldFreezeWatchmakerForLauncherBackdrop(
-            sideSceneOverlayActive = sideSceneOverlayActive,
-            appListBackdropActive = appListLayerRaised,
-        )
+        val watchFaceOverlayTransitionActive =
+            watchFaceCardsVisible || promptOverlayActive ||
+                shouldFreezeWatchmakerForLauncherBackdrop(
+                    sideSceneOverlayActive = sideSceneOverlayActive,
+                    appListBackdropActive = appListLayerRaised,
+                )
         var faceTransformSettled by remember { mutableStateOf(false) }
         LaunchedEffect(faceAnimState, faceExternallyDriven) {
             faceTransformSettled = false
@@ -1784,6 +1809,8 @@ fun LauncherScreen(vm: LauncherViewModel, aodController: AodController? = null) 
                 !notificationGestureActive &&
                 !appListLayerRaised &&
                 !showLaunchBackdrop &&
+                !watchFaceCardsVisible &&
+                !promptOverlayActive &&
                 !directLaunchBackdropVisible
         LaunchedEffect(legacyCaptureAllowed, legacyWatchFaceVisualKey) {
             if (legacyCaptureAllowed) requestCurrentWatchFaceFrame()
@@ -1980,7 +2007,8 @@ fun LauncherScreen(vm: LauncherViewModel, aodController: AodController? = null) 
             onBackdropCaptureRequested = requestCleanWatchFaceFrame,
             // 加载页顶着的时候上滑 / 侧滑一律不响应：这些识别器挂在加载页外层，
             // 加载页自己的 pointerInput 拦不到，只能从这里整个停掉。
-            gesturesLocked = !watchFaceSelectionReady || aodGestureLocked,
+            gesturesLocked = !watchFaceSelectionReady || aodGestureLocked ||
+                watchFaceCardsVisible || promptOverlayActive,
             modifier = Modifier.fillMaxSize()
         ) {
             if (directLaunchBackdropVisible) {
@@ -2144,6 +2172,13 @@ fun LauncherScreen(vm: LauncherViewModel, aodController: AodController? = null) 
                         },
                     )
             ) {
+                val platformViewConfiguration = LocalViewConfiguration.current
+                val watchFaceViewConfiguration = remember(platformViewConfiguration) {
+                    object : ViewConfiguration by platformViewConfiguration {
+                        override val longPressTimeoutMillis: Long = WATCH_FACE_LONG_PRESS_TIMEOUT_MS
+                    }
+                }
+                CompositionLocalProvider(LocalViewConfiguration provides watchFaceViewConfiguration) {
                 AnimatedContent(
                     // 只认 watchFaceSelectionReady。
                     //
@@ -2189,7 +2224,7 @@ fun LauncherScreen(vm: LauncherViewModel, aodController: AodController? = null) 
                             bottomFadeHeightDp = honeycombBottomFade,
                             bottomFadeBlurRadiusDp = if (blurEnabled && edgeBlurEnabled) honeycombEdgeBlurRadius else 0f,
                             hasNotifications = showNotification && notificationGroups.isNotEmpty(),
-                            onLongPress = if (launcherInteractive && screenState == ScreenState.Face && !sideSceneOverlayActive) openWatchFaceChooser else null,
+                            onLongPress = if (launcherInteractive && screenState == ScreenState.Face && !sideSceneOverlayActive && !watchFaceCardsVisible && !promptOverlayActive) openWatchFaceChooser else null,
                             onDoubleTap = if (
                                 doubleTapLockScreenEnabled &&
                                 launcherInteractive &&
@@ -2204,7 +2239,7 @@ fun LauncherScreen(vm: LauncherViewModel, aodController: AodController? = null) 
                                 isFaceVisible = launcherInteractive && screenState == ScreenState.Face &&
                                 !watchFaceOverlayTransitionActive,
                                 refreshToken = watchFaceRefreshToken,
-                                onLongPress = if (launcherInteractive && screenState == ScreenState.Face && !sideSceneOverlayActive) openWatchFaceChooser else null,
+                                onLongPress = if (launcherInteractive && screenState == ScreenState.Face && !sideSceneOverlayActive && !watchFaceCardsVisible && !promptOverlayActive) openWatchFaceChooser else null,
                                 onDoubleTap = if (
                                     doubleTapLockScreenEnabled &&
                                     launcherInteractive &&
@@ -2242,7 +2277,7 @@ fun LauncherScreen(vm: LauncherViewModel, aodController: AodController? = null) 
                                 isFaceVisible = launcherInteractive && screenState == ScreenState.Face &&
                                 !watchFaceOverlayTransitionActive,
                                 refreshToken = watchFaceRefreshToken,
-                                onLongPress = if (launcherInteractive && screenState == ScreenState.Face && !sideSceneOverlayActive) openWatchFaceChooser else null,
+                                onLongPress = if (launcherInteractive && screenState == ScreenState.Face && !sideSceneOverlayActive && !watchFaceCardsVisible && !promptOverlayActive) openWatchFaceChooser else null,
                                 onDoubleTap = if (
                                     doubleTapLockScreenEnabled &&
                                     launcherInteractive &&
@@ -2282,7 +2317,7 @@ fun LauncherScreen(vm: LauncherViewModel, aodController: AodController? = null) 
                             bottomFadeHeightDp = honeycombBottomFade,
                             bottomFadeBlurRadiusDp = if (blurEnabled && edgeBlurEnabled) honeycombEdgeBlurRadius else 0f,
                             hasNotifications = showNotification && notificationGroups.isNotEmpty(),
-                            onLongPress = if (launcherInteractive && screenState == ScreenState.Face && !sideSceneOverlayActive) openWatchFaceChooser else null,
+                            onLongPress = if (launcherInteractive && screenState == ScreenState.Face && !sideSceneOverlayActive && !watchFaceCardsVisible && !promptOverlayActive) openWatchFaceChooser else null,
                             onDoubleTap = if (
                                 doubleTapLockScreenEnabled &&
                                 launcherInteractive &&
@@ -2291,6 +2326,7 @@ fun LauncherScreen(vm: LauncherViewModel, aodController: AodController? = null) 
                             ) lockScreenWithPlatform else null,
                         )
                     }
+                }
                 }
                 // 状态图标属于表盘本身：与表盘共用缩放、下沉、透明度和模糊，
                 // 由上层页面自然遮挡，返回时也不再等待额外窗口/就绪帧。
@@ -2687,6 +2723,8 @@ fun LauncherScreen(vm: LauncherViewModel, aodController: AodController? = null) 
                             launchAppFromLauncher(appInfo, origin, ScreenState.Stack)
                         },
                         onSetShortcut = vm::setSideScreenShortcut,
+                        onQueryAppShortcuts = vm::querySideScreenAppShortcuts,
+                        onSetAppShortcut = vm::setSideScreenAppShortcut,
                         onRemoveShortcut = vm::removeSideScreenShortcut,
                         onSwapShortcut = vm::swapSideScreenShortcuts,
                         onSetShowNotification = vm::setShowNotification,
@@ -2912,6 +2950,26 @@ fun LauncherScreen(vm: LauncherViewModel, aodController: AodController? = null) 
                         overlayMaskCornerRadiusDp = overlayMaskCornerRadiusDp,
                     )
                     }
+                }
+            }
+            if (watchFaceCardsVisible) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .zIndex(10f),
+                ) {
+                    WatchFaceCardSelector(
+                        vm = vm,
+                        watchFaces = availableWatchFaces,
+                        selectedWatchFaceId = selectedWatchFaceId,
+                        refreshToken = watchFaceRefreshToken,
+                        uiStyle = uiStyle,
+                        builtInPhotoPath = builtInPhotoPath,
+                        builtInVideoPath = builtInVideoPath,
+                        photoOptions = photoWatchOptions,
+                        videoOptions = videoWatchOptions,
+                        onDismiss = { watchFaceCardsVisible = false },
+                    )
                 }
             }
         }

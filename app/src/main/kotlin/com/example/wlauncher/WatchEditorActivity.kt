@@ -58,6 +58,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -90,6 +91,7 @@ import com.flue.launcher.ui.style.FlueAlertDialog
 import com.flue.launcher.ui.style.FlueButton
 import com.flue.launcher.ui.style.FlueCard
 import com.flue.launcher.ui.style.FlueOutlinedButton
+import com.flue.launcher.ui.style.FlueSlider
 import androidx.compose.material3.Button
 import androidx.compose.material3.Checkbox
 import com.flue.launcher.ui.style.FlueLoadingIndicator
@@ -105,6 +107,7 @@ import top.yukonga.miuix.kmp.icon.MiuixIcons as OfficialMiuixIcons
 import top.yukonga.miuix.kmp.icon.extended.Clear as OfficialClear
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -164,6 +167,7 @@ import top.yukonga.miuix.kmp.icon.MiuixIcons
 import top.yukonga.miuix.kmp.icon.extended.Add
 import top.yukonga.miuix.kmp.icon.extended.Back
 import top.yukonga.miuix.kmp.icon.extended.Backup
+import top.yukonga.miuix.kmp.icon.extended.Share
 import top.yukonga.miuix.kmp.icon.extended.ChevronForward
 import top.yukonga.miuix.kmp.icon.extended.Close
 import top.yukonga.miuix.kmp.icon.extended.Copy
@@ -209,12 +213,20 @@ import com.flue.launcher.watchface.editor.WatchEditorLayerKey
 import com.flue.launcher.watchface.editor.WatchEditorTreeRow
 import com.flue.launcher.watchface.editor.WatchEditorLiveAttributeApplicator
 import com.flue.launcher.watchface.editor.WatchEditorCanvasMapping
+import com.flue.launcher.watchface.standard.WatchCanvasSettings
 import com.flue.launcher.watchface.editor.WatchEditorCropAspect
 import com.flue.launcher.watchface.editor.WatchEditorCropHandle
 import com.flue.launcher.watchface.editor.WatchEditorCropRect
 import com.flue.launcher.watchface.editor.WatchEditorSelectionBox
 import com.flue.launcher.watchface.editor.WatchEditorSession
 import com.flue.launcher.watchface.editor.watchXmlAssetPath
+import com.flue.launcher.watchface.agent.runtime.WatchAgentViewModel
+import com.flue.launcher.watchface.agent.tools.WatchAgentDisplayMode
+import com.flue.launcher.watchface.agent.tools.WatchAgentPreviewMode
+import com.flue.launcher.watchface.agent.tools.WatchAgentPreviewResult
+import com.flue.launcher.watchface.agent.tools.WatchEditorSessionAgentToolHost
+import com.flue.launcher.ui.editor.agent.WatchAgentFullscreen
+import com.flue.launcher.ui.editor.agent.WatchAgentPanel
 import com.flue.launcher.ui.theme.WatchColors
 import com.flue.launcher.ui.editor.EditorResourceThumbnail
 import com.flue.launcher.watchface.editor.WatchEditorResourceEntry
@@ -316,6 +328,14 @@ class WatchEditorActivity : FlueComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // FLAG_FULLSCREEN disables platform resize on older Android versions.
+        // Keep immersive chrome through insets instead, and let Compose own IME space.
+        window.clearFlags(android.view.WindowManager.LayoutParams.FLAG_FULLSCREEN)
+        androidx.core.view.WindowCompat.setDecorFitsSystemWindows(window, false)
+        androidx.core.view.WindowCompat.getInsetsController(window, window.decorView).apply {
+            hide(androidx.core.view.WindowInsetsCompat.Type.systemBars())
+            systemBarsBehavior = androidx.core.view.WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+        }
         // 仅在用户原本隐藏后台卡片时做临时覆盖；不写回偏好。原本就显示的
         // 情况完全不动，退出编辑器后再恢复原来的隐藏状态。
         if (RecentsVisibility.readPreference(applicationContext)) {
@@ -413,6 +433,16 @@ private fun WatchEditorRoute(
 ) {
     val context = androidx.compose.ui.platform.LocalContext.current
     val scope = rememberCoroutineScope()
+    val openAgentSettings = remember(context) {
+        {
+            context.startActivity(
+                Intent(context, SettingsActivity::class.java).apply {
+                    putExtra(EXTRA_SETTINGS_DESTINATION, SETTINGS_DESTINATION_AGENT)
+                    putExtra(EXTRA_SETTINGS_RETURN_TO_FACE, true)
+                },
+            )
+        }
+    }
     // 预览的模糊底图跟随设置（景深本身在预览里强制开，理由见 WatchEditorPreview）。
     val editorGravityBackdropBlurEnabled by
         vm.watchfaceGravityBackdropBlurEnabled.collectAsStateWithLifecycle()
@@ -1286,18 +1316,10 @@ private fun WatchEditorRoute(
     var blankCanvasSize by remember(watchFaceId) {
         mutableStateOf(WatchCanvasSize.DEFAULT)
     }
-    // 格式版本必须在 createBlank 之前定下来 —— build_source 是建档时写进
-    // watch.xml 的，事后改要重写文档。新建时先停在选择页，选完才开工；
-    // 打开已有表盘不经过这里。
-    var pendingFormatChoice by remember(watchFaceId) {
-        mutableStateOf(watchFaceId.isNullOrBlank())
-    }
-    var blankFormatVersion by remember(watchFaceId) {
-        mutableStateOf(WatchFormatVersion.V1)
-    }
-    LaunchedEffect(watchFaceId, blankCanvasSize, pendingFormatChoice, blankFormatVersion) {
-        if (pendingFormatChoice) return@LaunchedEffect
-        val requestedCanvas = blankCanvasSize ?: return@LaunchedEffect
+    // 新建表盘统一生成 WatchMaker 1.0。已有 Studio 2.0 表盘仍可导入和编辑，
+    // 但新建入口不再暴露版本选择，也不会写 build_source="studio"。
+    LaunchedEffect(watchFaceId, blankCanvasSize) {
+        val requestedCanvas = blankCanvasSize
         loading = true
         errorMessage = null
         runCatching {
@@ -1309,7 +1331,7 @@ private fun WatchEditorRoute(
                         context,
                         roundShape = blankFaceIsRound,
                         canvasSize = requestedCanvas,
-                        formatVersion = blankFormatVersion,
+                        formatVersion = WatchFormatVersion.V1,
                     )
                 } else {
                     val descriptor = WatchmakerWatchFaceStorage.scan(context)
@@ -1636,13 +1658,6 @@ private fun WatchEditorRoute(
 
     Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
         when {
-        pendingFormatChoice -> WatchFormatChoicePage(
-            onChoose = { version ->
-                blankFormatVersion = version
-                pendingFormatChoice = false
-            },
-            onCancel = onClose,
-        )
         loading -> CenteredStatus(
             stringResource(R.string.watch_editor_status_creating_draft),
             showProgress = true,
@@ -1666,6 +1681,79 @@ private fun WatchEditorRoute(
                     }
                 }
                 Box(modifier = Modifier.fillMaxSize()) {
+                    val agentViewModel: WatchAgentViewModel = viewModel()
+                    val agentScope = active.logicalId ?: "draft:${active.draftDirectory.name}"
+                    LaunchedEffect(agentScope) { agentViewModel.onEditorEntered(agentScope) }
+                    DisposableEffect(Unit) {
+                        onDispose { agentViewModel.onEditorExited() }
+                    }
+                    val agentToolHost = remember(active, previewRenderer, previewAmbient) {
+                        WatchEditorSessionAgentToolHost(
+                            session = active,
+                            nativePreview = previewRenderer?.let { renderer ->
+                                WatchEditorSessionAgentToolHost.NativePreviewRenderer { session, request, candidate ->
+                                    val render = {
+                                        val requestedAmbient = request.display == WatchAgentDisplayMode.DIM
+                                        renderer.setAmbientMode(requestedAmbient)
+                                        try {
+                                            val target = request.target.removePrefix("layer:")
+                                            val layer = session.snapshot().layers.firstOrNull {
+                                                it.key.value == target || it.id == target
+                                            }
+                                            if (layer != null && request.mode == WatchAgentPreviewMode.ISOLATED) {
+                                                renderer.renderLayerThumbnail(layer.definitionIndex, PREVIEW_IMAGE_SIZE_PX)
+                                            } else {
+                                                renderer.renderFaceBitmap(PREVIEW_IMAGE_SIZE_PX)
+                                            }
+                                        } finally {
+                                            renderer.setAmbientMode(previewAmbient)
+                                        }
+                                    }
+                                    // The renderer is main-thread bound. Post from a worker and
+                                    // wait only there; never runBlocking(Main.immediate), which
+                                    // can deadlock the editor while a canvas gesture is committing.
+                                    val bitmap = if (android.os.Looper.myLooper() == android.os.Looper.getMainLooper()) {
+                                        runCatching { render() }.getOrNull()
+                                    } else {
+                                        val future = java.util.concurrent.FutureTask<android.graphics.Bitmap?> { runCatching { render() }.getOrNull() }
+                                        android.os.Handler(android.os.Looper.getMainLooper()).post(future)
+                                        runCatching { future.get(8, java.util.concurrent.TimeUnit.SECONDS) }.getOrNull()
+                                    }
+                                    val bytes = bitmap?.let { rendered ->
+                                        try {
+                                            java.io.ByteArrayOutputStream().use { output ->
+                                                rendered.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, output)
+                                                output.toByteArray()
+                                            }
+                                        } finally {
+                                            rendered.recycle()
+                                        }
+                                    }
+                                    WatchAgentPreviewResult(
+                                        revision = candidate.revision,
+                                        target = request.target,
+                                        renderer = "flue-watchmaker-native",
+                                        available = bytes != null,
+                                        imageBytes = bytes,
+                                    )
+                                }
+                            },
+                            onDocumentMutated = {
+                                scope.launch {
+                                    val next = withContext(Dispatchers.IO) {
+                                        active.flushDraftForPreview()
+                                        active.snapshot()
+                                    }
+                                    updateSnapshot(next)
+                                    previewToken++
+                                }
+                            },
+                        )
+                    }
+                    DisposableEffect(agentToolHost) {
+                        agentViewModel.bindToolHost(agentToolHost)
+                        onDispose { agentViewModel.unbindToolHost(agentToolHost) }
+                    }
                     WatchEditorScreen(
                         snapshot = current,
                         selectedLayer = selected,
@@ -1704,6 +1792,11 @@ private fun WatchEditorRoute(
                         onUpdateTranslation = { dx, dy ->
                             if (transformGate.hasActiveGesture()) {
                                 batchTransformPreview = active.updateLayerTranslationPreview(dx, dy)
+                            }
+                        },
+                        onUpdateSelectionScale = { factor ->
+                            if (transformGate.hasActiveGesture()) {
+                                batchTransformPreview = active.updateLayerSelectionScalePreview(factor)
                             }
                         },
                         onEndTranslation = { cancelled ->
@@ -2100,6 +2193,9 @@ private fun WatchEditorRoute(
                             openInternalFileBrowser(EditorInternalImportKind.CONVERSION)
                         },
                         onPreviewRendererChanged = { previewRenderer = it },
+                        onOpenAgentSettings = openAgentSettings,
+                        watchScope = agentScope,
+                        agentViewModel = agentViewModel,
                         onPreviewRefreshReady = { loadedToken ->
                             if (pendingTransformRefreshToken == loadedToken) {
                                 pendingTransformRefreshToken = null
@@ -2312,6 +2408,7 @@ private fun WatchEditorScreen(
     batchTransformPreview: Map<WatchEditorLayerKey, WatchEditorTransform>,
     onBeginTranslation: (WatchEditorLayerKey) -> Boolean,
     onUpdateTranslation: (Float, Float) -> Unit,
+    onUpdateSelectionScale: (Float) -> Unit,
     onEndTranslation: (Boolean) -> Unit,
     previewDescriptor: WatchFaceDescriptor,
     previewToken: Int,
@@ -2371,8 +2468,13 @@ private fun WatchEditorScreen(
      * preview.jpg 写回草稿，否则列表和商店永远显示原作者那张预览图。
      */
     onPreviewRendererChanged: (WatchmakerWatchFaceView?) -> Unit = {},
+    watchScope: String,
+    agentViewModel: WatchAgentViewModel,
+    onOpenAgentSettings: () -> Unit,
 ) {
     var panel by rememberSaveable { mutableStateOf(WatchEditorPanel.LAYERS) }
+    var previousEditorPanel by rememberSaveable { mutableStateOf(WatchEditorPanel.LAYERS) }
+    val agentState by agentViewModel.state.collectAsStateWithLifecycle()
     // 三档布局：上箭头=画布铺满全屏，下箭头=图层/属性/表盘面板铺满全屏，
     // 中间态为分屏。用一个动画化的高度比例驱动，绝不整树替换——以前
     // previewFullscreen 的提前 return 会把 AndroidView 销毁重建，进出全屏
@@ -2392,6 +2494,7 @@ private fun WatchEditorScreen(
         WatchEditorPanel.LAYERS -> layerListState
         WatchEditorPanel.PROPERTIES -> propertiesListState
         WatchEditorPanel.WATCH -> watchListState
+        WatchEditorPanel.AGENT -> rememberLazyListState()
     }
     val selectedBlockOrders = remember(snapshot.layers, selectedLayerKeys) {
         val block = watchEditorLayerSelectionBlock(snapshot.layers, selectedLayerKeys)
@@ -2499,11 +2602,27 @@ private fun WatchEditorScreen(
             runCatching { layerListState.animateScrollToItem(itemsBeforeRows + rowIndex) }
         }
     }
-    BackHandler(enabled = editorLayout != WatchEditorLayout.SPLIT) {
+    BackHandler(enabled = agentState.surface == com.flue.launcher.watchface.agent.model.AgentSurface.FULLSCREEN) {
+        agentViewModel.exitFullscreen()
+    }
+    BackHandler(enabled = agentState.surface != com.flue.launcher.watchface.agent.model.AgentSurface.FULLSCREEN && panel == WatchEditorPanel.AGENT) {
+        agentViewModel.minimize()
+        panel = previousEditorPanel
+    }
+    BackHandler(enabled = editorLayout != WatchEditorLayout.SPLIT && panel != WatchEditorPanel.AGENT) {
         editorLayout = WatchEditorLayout.SPLIT
     }
 
+    var selectionScaleFactor by remember { mutableFloatStateOf(1f) }
+    var selectionScaleGestureActive by remember { mutableStateOf(false) }
+    LaunchedEffect(batchTransformPreview.isEmpty(), transformCommitInFlight) {
+        if (batchTransformPreview.isEmpty() && !transformCommitInFlight) {
+            selectionScaleFactor = 1f
+            selectionScaleGestureActive = false
+        }
+    }
     val previewContent: @Composable (Modifier) -> Unit = { previewModifier ->
+        Box(modifier = previewModifier) {
         WatchEditorPreview(
             descriptor = previewDescriptor,
             refreshToken = previewToken,
@@ -2536,7 +2655,7 @@ private fun WatchEditorScreen(
             onBeginTransform = onBeginTransform,
             onUpdateTransform = onUpdateTransform,
             onEndTransform = onEndTransform,
-            modifier = previewModifier,
+            modifier = Modifier.fillMaxSize(),
             onFaceViewChanged = {
                 thumbnailRenderer = it
                 onPreviewRendererChanged(it)
@@ -2550,6 +2669,32 @@ private fun WatchEditorScreen(
             // 视频层的圆形裁剪判据，与渲染器给 Canvas 段那一刀同源（表盘声明的形状）。
             faceIsRound = previewRoundOverride ?: (watchFaceShape(snapshot.rootAttributes["shape"]) == WatchFaceShape.ROUND),
         )
+        // 息屏预览只切换渲染状态，不应额外出现图层缩放滑杆；缩放是多选编辑手势的工具。
+        if (selectedLayerKeys.isNotEmpty() && multiSelectMode) {
+            EditorSelectionScaleSlider(
+                value = selectionScaleFactor,
+                enabled = busyMessage == null && !transformCommitInFlight &&
+                    (batchTransformPreview.isEmpty() || selectionScaleGestureActive),
+                onValueChange = { factor ->
+                    val key = selectedLayer?.key ?: selectedLayerKeys.first()
+                    if (selectionScaleGestureActive || onBeginTranslation(key)) {
+                        selectionScaleGestureActive = true
+                        selectionScaleFactor = factor
+                        onUpdateSelectionScale(factor)
+                    }
+                },
+                onValueChangeFinished = {
+                    if (selectionScaleGestureActive) {
+                        selectionScaleGestureActive = false
+                        onEndTranslation(false)
+                    }
+                },
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(horizontal = 28.dp, vertical = 8.dp),
+            )
+        }
+        }
     }
 
     // 圆屏弦宽适配的两个测量点（详见下方 chordViewportWidth 处的注释）。
@@ -2560,6 +2705,7 @@ private fun WatchEditorScreen(
     BoxWithConstraints(
         modifier = Modifier
             .fillMaxSize()
+            .imePadding()
             .onGloballyPositioned { chordRootTopInWindow = it.positionInWindow().y },
     ) {
         val editorMaxHeight = maxHeight
@@ -2569,7 +2715,9 @@ private fun WatchEditorScreen(
         // 三档布局共用一条动画化的高度比例：预览常驻挂载只改高度，
         // AndroidView（表盘渲染器）全程不销毁、切换全屏不再重载表盘。
         val splitFraction = (splitPreviewSize / maxHeight.value).coerceIn(0.24f, 0.60f)
-        val targetPreviewFraction = when (editorLayout) {
+        val agentKeyboardVisible = panel == WatchEditorPanel.AGENT &&
+            androidx.compose.foundation.layout.WindowInsets.ime.getBottom(LocalDensity.current) > 0
+        val targetPreviewFraction = if (agentKeyboardVisible) 0f else when (editorLayout) {
             WatchEditorLayout.CANVAS_FULL -> 1f
             WatchEditorLayout.SPLIT -> splitFraction
             WatchEditorLayout.PANEL_FULL -> 0f
@@ -2622,7 +2770,7 @@ private fun WatchEditorScreen(
         Column(modifier = Modifier.fillMaxSize().clipToBounds()) {
             // 顶栏在两个全屏档整块滑出让位（高度动画驱动下方内容重排）。
             AnimatedVisibility(
-                visible = editorLayout == WatchEditorLayout.SPLIT,
+                visible = editorLayout == WatchEditorLayout.SPLIT && !agentKeyboardVisible,
                 enter = expandVertically(expandFrom = Alignment.Top) + fadeIn(),
                 exit = shrinkVertically(shrinkTowards = Alignment.Top) + fadeOut(),
             ) {
@@ -2636,14 +2784,8 @@ private fun WatchEditorScreen(
                         ),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    IconButton(onClick = onToggleMultiSelect,
-                        enabled = busyMessage == null && !transformCommitInFlight && transformPreview == null && batchTransformPreview.isEmpty(),
-                        modifier = Modifier.size(36.dp)) {
-                        Icon(
-                            FlueMiuixIcons.Check,
-                            contentDescription = stringResource(if (multiSelectMode) R.string.watch_editor_multi_select_done else R.string.watch_editor_multi_select),
-                            tint = if (multiSelectMode) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
-                        )
+                    IconButton(onClick = onBack, modifier = Modifier.size(36.dp)) {
+                        Icon(MiuixIcons.Back, contentDescription = stringResource(R.string.watch_editor_back))
                     }
                     Column(
                         modifier = Modifier.weight(1f),
@@ -2679,8 +2821,14 @@ private fun WatchEditorScreen(
                             .widthIn(max = toolbarViewportDp.dp)
                             .horizontalScroll(rememberScrollState()),
                     ) {
-                        IconButton(onClick = onBack, modifier = Modifier.size(36.dp)) {
-                            Icon(MiuixIcons.Back, contentDescription = stringResource(R.string.watch_editor_back))
+                        IconButton(onClick = onToggleMultiSelect,
+                            enabled = busyMessage == null && !transformCommitInFlight && transformPreview == null && batchTransformPreview.isEmpty(),
+                            modifier = Modifier.size(36.dp)) {
+                            Icon(
+                                FlueMiuixIcons.Check,
+                                contentDescription = stringResource(if (multiSelectMode) R.string.watch_editor_multi_select_done else R.string.watch_editor_multi_select),
+                                tint = if (multiSelectMode) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
+                            )
                         }
                         IconButton(
                             onClick = { previewPlaying = !previewPlaying },
@@ -2805,15 +2953,25 @@ private fun WatchEditorScreen(
                     WatchEditorPanel.entries.forEach { candidate ->
                         Tab(
                             selected = panel == candidate,
-                            onClick = { panel = candidate },
+                            modifier = Modifier,
+                            onClick = {
+                                if (candidate == WatchEditorPanel.AGENT) {
+                                    if (panel != WatchEditorPanel.AGENT) previousEditorPanel = panel
+                                    editorLayout = WatchEditorLayout.SPLIT
+                                    agentViewModel.openAgent()
+                                }
+                                panel = candidate
+                            },
                             icon = {
                                 Icon(
                                     imageVector = when (candidate) {
                                         WatchEditorPanel.LAYERS -> MiuixIcons.Layers
                                         WatchEditorPanel.PROPERTIES -> MiuixIcons.Tune
                                         WatchEditorPanel.WATCH -> MiuixIcons.WorldClock
+                                        WatchEditorPanel.AGENT -> FlueMiuixIcons.Sparkle
                                     },
                                     contentDescription = null,
+                                    tint = LocalContentColor.current,
                                 )
                             },
                             text = { Text(stringResource(candidate.labelRes), maxLines = 1) },
@@ -3515,6 +3673,8 @@ private fun WatchEditorScreen(
                                 modifier = Modifier.fillMaxWidth(),
                             )
                             FlueOutlinedButton(onClick = onOpenOtherApps, enabled = busyMessage == null, modifier = Modifier.fillMaxWidth()) {
+                                Icon(MiuixIcons.Share, contentDescription = null)
+                                Spacer(Modifier.width(6.dp))
                                 Text(stringResource(R.string.watch_editor_open_other_apps))
                             }
                             FlueOutlinedButton(
@@ -3570,6 +3730,15 @@ private fun WatchEditorScreen(
                         )
                     }
                 }
+                WatchEditorPanel.AGENT -> WatchAgentPanel(
+                    viewModel = agentViewModel,
+                    onMaximize = { agentViewModel.enterFullscreen() },
+                    onOpenSettings = onOpenAgentSettings,
+                    onMinimize = {
+                        agentViewModel.minimize()
+                        panel = previousEditorPanel
+                    },
+                )
                 }
             }
         }
@@ -3591,6 +3760,17 @@ private fun WatchEditorScreen(
                 )
             }
         }
+        if (agentState.surface == com.flue.launcher.watchface.agent.model.AgentSurface.FULLSCREEN) {
+            WatchAgentFullscreen(
+                viewModel = agentViewModel,
+                onRestore = { agentViewModel.exitFullscreen() },
+                onOpenSettings = onOpenAgentSettings,
+                onMinimize = {
+                    agentViewModel.minimize()
+                    panel = previousEditorPanel
+                },
+            )
+        }
     }
 
 }
@@ -3599,6 +3779,7 @@ private enum class WatchEditorPanel(@StringRes val labelRes: Int) {
     LAYERS(R.string.watch_editor_panel_layers),
     PROPERTIES(R.string.watch_editor_panel_properties),
     WATCH(R.string.watch_editor_panel_watch),
+    AGENT(R.string.watch_editor_panel_agent),
 }
 
 internal fun watchEditorScriptByteCount(script: String): Int =
@@ -4241,6 +4422,9 @@ private fun WatchEditorPreview(
             },
             update = { stage ->
                 val view = stage.renderer
+                // Device previews use the same centered crop as Canvas Adjust's
+                // "Fill" mode instead of silently falling back to FIT.
+                view.setCanvasSettings(WatchCanvasSettings.GLOBAL_DEFAULT)
                 stage.setAmbientMode(ambientMode)
                 // Evaluation must follow the native mode switch, including while playback is paused.
                 if (geometryAmbientMode != ambientMode) {
@@ -4360,6 +4544,7 @@ private fun WatchEditorPreview(
                                 ?: size.height.toFloat().coerceAtLeast(1f),
                             designWidth = designExtentWidth,
                             designHeight = designExtentHeight,
+                            fill = true,
                         )
                         val currentGeometries = latestGeometries.value.map { geometry ->
                             val layer = latestLayers.value.firstOrNull { it.key == geometry.key }
@@ -4718,6 +4903,7 @@ private fun WatchEditorPreview(
                 modifier = Modifier.fillMaxSize(),
                 designExtentWidth = designExtentWidth,
                 designExtentHeight = designExtentHeight,
+                fill = true,
                 showHandles = !multiSelectMode && !ambientMode,
             )
         }
@@ -4747,6 +4933,43 @@ private data class EditorSaveResult(
     val snapshot: WatchEditorSnapshot,
 )
 
+@Composable
+private fun EditorSelectionScaleSlider(
+    value: Float,
+    enabled: Boolean,
+    onValueChange: (Float) -> Unit,
+    onValueChangeFinished: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val style = LauncherTheme.style
+    Column(
+        modifier = modifier
+            .fillMaxWidth()
+            .clip(style.panelShape)
+            .background(Color.Black.copy(alpha = 0.78f))
+            .padding(horizontal = 14.dp, vertical = 9.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Text(
+            text = stringResource(
+                R.string.watch_editor_selection_scale,
+                (value * 100f).roundToInt(),
+            ),
+            color = style.titleColor,
+            style = MaterialTheme.typography.labelMedium,
+        )
+        FlueSlider(
+            value = value,
+            onValueChange = onValueChange,
+            modifier = Modifier.fillMaxWidth(),
+            valueRange = 0.25f..3f,
+            steps = 54,
+            enabled = enabled,
+            onValueChangeFinished = onValueChangeFinished,
+        )
+    }
+}
+
 /**
  * The adjustment frame around the selected layer: a 1dp bright outline whose
  * corners scale proportionally, edge midpoints scale a single axis, and a
@@ -4759,6 +4982,7 @@ private fun EditorSelectionOverlay(
     modifier: Modifier = Modifier,
     designExtentWidth: Float = WatchmakerGeometry.DESIGN_SIZE,
     designExtentHeight: Float = WatchmakerGeometry.DESIGN_SIZE,
+    fill: Boolean = false,
     showHandles: Boolean = true,
 ) {
     Canvas(modifier = modifier) {
@@ -4769,6 +4993,7 @@ private fun EditorSelectionOverlay(
             viewHeightPx = size.height.coerceAtLeast(1f),
             designWidth = designExtentWidth,
             designHeight = designExtentHeight,
+            fill = fill,
         )
         fun toView(point: com.flue.launcher.watchface.editor.WatchEditorPoint): Offset = Offset(
             mapping.viewX(point.x),
@@ -6777,105 +7002,6 @@ private fun ErrorPage(message: String, onClose: () -> Unit) {
         Text(message, color = MaterialTheme.colorScheme.error)
         Spacer(Modifier.height(12.dp))
         Button(onClick = onClose) { Text(stringResource(R.string.watch_editor_back)) }
-    }
-}
-
-@Composable
-private fun WatchFormatChoicePage(
-    onChoose: (WatchFormatVersion) -> Unit,
-    onCancel: () -> Unit,
-) {
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .verticalScroll(rememberScrollState())
-            .padding(horizontal = 20.dp, vertical = 24.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-    ) {
-        Text(
-            text = stringResource(R.string.watch_editor_format_choice_title),
-            style = MaterialTheme.typography.titleMedium,
-            textAlign = TextAlign.Center,
-        )
-        Spacer(Modifier.height(16.dp))
-        WatchFormatChoiceCard(
-            title = stringResource(R.string.watch_editor_format_v1_title),
-            subtitle = stringResource(R.string.watch_editor_format_v1_sub),
-            recommended = true,
-            onClick = { onChoose(WatchFormatVersion.V1) },
-        )
-        Spacer(Modifier.height(10.dp))
-        WatchFormatChoiceCard(
-            title = stringResource(R.string.watch_editor_format_v2_title),
-            subtitle = stringResource(R.string.watch_editor_format_v2_sub),
-            recommended = false,
-            onClick = { onChoose(WatchFormatVersion.V2) },
-        )
-        Spacer(Modifier.height(18.dp))
-        Surface(
-            shape = LauncherTheme.style.compactShape,
-            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
-        ) {
-            Text(
-                text = stringResource(R.string.watch_editor_format_choice_note),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(14.dp),
-            )
-        }
-        Spacer(Modifier.height(16.dp))
-        TextButton(onClick = onCancel) {
-            Text(stringResource(R.string.watch_editor_cancel))
-        }
-    }
-}
-
-@Composable
-private fun WatchFormatChoiceCard(
-    title: String,
-    subtitle: String,
-    recommended: Boolean,
-    onClick: () -> Unit,
-) {
-    // 卡片形状统一走令牌：同一屏里 14 / 16 / 20dp 混着写，圆角就参差不齐
-    // （老师报的 AW 卡片圆角不统一）。
-    val cardShape = LauncherTheme.style.compactShape
-    Surface(
-        shape = cardShape,
-        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.85f),
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(cardShape)
-            .clickable(onClick = onClick),
-    ) {
-        Column(modifier = Modifier.padding(16.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    text = title,
-                    style = MaterialTheme.typography.titleSmall,
-                )
-                if (recommended) {
-                    Spacer(Modifier.width(8.dp))
-                    Surface(
-                        shape = RoundedCornerShape(8.dp),
-                        color = MaterialTheme.colorScheme.primary.copy(alpha = 0.22f),
-                    ) {
-                        Text(
-                            text = stringResource(R.string.watch_editor_format_recommended),
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.dp),
-                        )
-                    }
-                }
-            }
-            Spacer(Modifier.height(6.dp))
-            Text(
-                text = subtitle,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
     }
 }
 

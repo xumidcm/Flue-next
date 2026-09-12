@@ -303,6 +303,16 @@ class WatchFaceLuaRuntime private constructor(
         evaluateValue(expression, resolver)?.toboolean()
     }
 
+    /**
+     * Evaluate an inline Lua condition even when it only contains locals/tags.
+     * Face-state detection controls cache invalidation, not whether Lua is a
+     * valid backend for the attribute.
+     */
+    fun evaluateBoolean(
+        expression: String,
+        resolver: (String) -> WatchTagResolution = { WatchTagResolution.Unsupported(it) },
+    ): Boolean? = evaluateValue(expression, resolver)?.toboolean()
+
     fun globalRenderedValue(name: String): String? {
         if (closed) return null
         val value = globals.rawget(name)

@@ -811,6 +811,10 @@
     <string name="widget_empty">ウィジェットはまだありません。右上の追加をタップしてください。</string>
     <string name="side_hidden_messages_fmt">+%1$d 件の新着メッセージ</string>
     <string name="side_add_shortcut">クイック起動を追加</string>
+    <string name="side_shortcut_open_app">アプリを開く</string>
+    <string name="side_shortcut_back_to_apps">アプリ一覧に戻る</string>
+    <string name="side_shortcut_reading">アプリのショートカットを読み込んでいます…</string>
+    <string name="side_shortcut_unavailable">ショートカットが無効か、固定できませんでした</string>
     <string name="widget_add_widget">ウィジェットを追加</string>
     <string name="widget_no_results">利用可能なウィジェットが見つかりません</string>
     <string name="widget_back_to_apps">アプリ一覧に戻る</string>

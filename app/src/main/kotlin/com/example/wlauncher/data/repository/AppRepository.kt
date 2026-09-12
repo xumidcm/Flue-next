@@ -10,6 +10,9 @@ import android.content.pm.LauncherApps
 import android.content.pm.ResolveInfo
 import android.content.pm.ShortcutInfo
 import android.os.Build
+import android.os.Process
+import android.os.SystemClock
+import android.os.UserHandle
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.BitmapShader
@@ -63,6 +66,7 @@ class AppRepository(private val context: Context) {
         private const val APP_LIST_CACHE_DIR = "app_list_cache"
         private const val APP_LIST_CACHE_ICON_DIR = "icons"
         private const val APP_LIST_CACHE_FILE = "snapshot.json"
+        private const val SHORTCUT_QUERY_CACHE_MILLIS = 30_000L
 
         // 版本 4：自适应图标改为自绘抗锯齿裁剪，旧缓存位图带黑色锯齿边，必须整体重建。
         // 版本 5：文件夹合成底板从 0.24 圆角矩形改为整圆，旧缓存里那张方底板
@@ -143,8 +147,28 @@ class AppRepository(private val context: Context) {
         }
     }
 
+    private data class CachedShortcutQuery(
+        val loadedAtElapsedMillis: Long,
+        val shortcuts: List<ShortcutInfo>,
+    )
+
+    private val launcherAppsService = context.getSystemService(LauncherApps::class.java)
+    private val shortcutQueryCache = ConcurrentHashMap<String, CachedShortcutQuery>()
+    private val launcherAppsCallback = object : LauncherApps.Callback() {
+        override fun onPackageAdded(packageName: String, user: UserHandle) = invalidateShortcuts(packageName)
+        override fun onPackageChanged(packageName: String, user: UserHandle) = invalidateShortcuts(packageName)
+        override fun onPackageRemoved(packageName: String, user: UserHandle) = invalidateShortcuts(packageName)
+        override fun onPackagesAvailable(packageNames: Array<out String>, user: UserHandle, replacing: Boolean) =
+            packageNames.forEach(::invalidateShortcuts)
+        override fun onPackagesUnavailable(packageNames: Array<out String>, user: UserHandle, replacing: Boolean) =
+            packageNames.forEach(::invalidateShortcuts)
+        override fun onShortcutsChanged(packageName: String, shortcuts: List<ShortcutInfo>, user: UserHandle) =
+            invalidateShortcuts(packageName)
+    }
+
     private val packageReceiver = object : BroadcastReceiver() {
         override fun onReceive(ctx: Context?, intent: Intent?) {
+            intent?.data?.schemeSpecificPart?.let(::invalidateShortcuts)
             synchronized(refreshMonitor) {
                 packageRefreshJob?.cancel()
                 packageRefreshJob = scope.launch {
@@ -174,6 +198,7 @@ class AppRepository(private val context: Context) {
             addDataScheme("package")
         }
         context.registerReceiver(packageReceiver, filter)
+        runCatching { launcherAppsService?.registerCallback(launcherAppsCallback) }
     }
 
     fun setCustomOrder(order: List<String>) {
@@ -544,6 +569,8 @@ class AppRepository(private val context: Context) {
         }
         scope.cancel()
         synchronized(iconCache) { iconCache.clear() }
+        shortcutQueryCache.clear()
+        runCatching { launcherAppsService?.unregisterCallback(launcherAppsCallback) }
         try {
             context.unregisterReceiver(packageReceiver)
         } catch (_: Exception) {
@@ -595,27 +622,92 @@ class AppRepository(private val context: Context) {
     }
 
     fun addPinnedShortcut(shortcutInfo: ShortcutInfo): Boolean {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return false
-        val packageName = shortcutInfo.safePackageName() ?: return false
-        val shortcutId = runCatching { shortcutInfo.id }.getOrNull()?.takeIf { it.isNotBlank() } ?: return false
-        val label = runCatching { shortcutInfo.shortLabel?.toString() }.getOrNull()
-            ?: runCatching { shortcutInfo.longLabel?.toString() }.getOrNull()
-            ?: shortcutId
+        return storePinnedShortcut(shortcutInfo, pinForLauncher = false) != null
+    }
+
+    /**
+     * Returns the launcher's public app-shortcut surface only: manifest,
+     * dynamic and already pinned entries. Exported activities are deliberately
+     * not enumerated.
+     */
+    fun queryLaunchableShortcuts(packageName: String): List<ShortcutInfo> {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O || packageName.isBlank()) return emptyList()
+        shortcutQueryCache[packageName]?.let { cached ->
+            if (SystemClock.elapsedRealtime() - cached.loadedAtElapsedMillis <= SHORTCUT_QUERY_CACHE_MILLIS) {
+                return cached.shortcuts
+            }
+        }
+        val launcherApps = launcherAppsService ?: return emptyList()
+        if (!launcherApps.hasShortcutHostPermission()) return emptyList()
+        val query = LauncherApps.ShortcutQuery()
+            .setPackage(packageName)
+            .setQueryFlags(
+                LauncherApps.ShortcutQuery.FLAG_MATCH_MANIFEST or
+                    LauncherApps.ShortcutQuery.FLAG_MATCH_DYNAMIC or
+                    LauncherApps.ShortcutQuery.FLAG_MATCH_PINNED,
+            )
+        val shortcuts = runCatching {
+            launcherApps.getShortcuts(query, Process.myUserHandle()).orEmpty()
+                .distinctBy { it.id }
+                .sortedWith(
+                    compareBy<ShortcutInfo> { if (it.isEnabled) 0 else 1 }
+                        .thenBy { it.rank }
+                        .thenBy { shortcutLabel(it).lowercase() },
+                )
+        }.getOrDefault(emptyList())
+        shortcutQueryCache[packageName] = CachedShortcutQuery(SystemClock.elapsedRealtime(), shortcuts)
+        return shortcuts
+    }
+
+    /** Pins a user-selected shortcut and returns the stable catalog key used by the side screen. */
+    fun pinAndAddShortcut(shortcutInfo: ShortcutInfo): String? =
+        storePinnedShortcut(shortcutInfo, pinForLauncher = true)
+
+    private fun storePinnedShortcut(shortcutInfo: ShortcutInfo, pinForLauncher: Boolean): String? {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return null
+        val packageName = shortcutInfo.safePackageName() ?: return null
+        val shortcutId = runCatching { shortcutInfo.id }.getOrNull()?.takeIf { it.isNotBlank() } ?: return null
+        if (pinForLauncher) {
+            val launcherApps = launcherAppsService ?: return null
+            if (!launcherApps.hasShortcutHostPermission()) return null
+            val pinnedIds = itemStorage.loadShortcuts()
+                .asSequence()
+                .filter { it.packageName == packageName }
+                .mapNotNull { it.pinnedShortcutId }
+                .plus(shortcutId)
+                .distinct()
+                .toList()
+            if (runCatching {
+                    launcherApps.pinShortcuts(packageName, pinnedIds, Process.myUserHandle())
+                }.isFailure
+            ) return null
+        }
+        val label = shortcutLabel(shortcutInfo)
         val iconBitmap = runCatching {
             val launcherApps = context.getSystemService(LauncherApps::class.java)
             launcherApps?.getShortcutIconDrawable(shortcutInfo, context.resources.displayMetrics.densityDpi)
                 ?.let { renderIconBitmap(it, currentIconSize) }
         }.getOrNull()
-        itemStorage.addShortcut(
+        val stored = itemStorage.addShortcut(
             label = label,
             packageName = packageName,
             intentUri = pinnedShortcutUri(packageName, shortcutId),
             icon = iconBitmap,
             pinnedShortcutId = shortcutId
         )
+        invalidateShortcuts(packageName)
         refreshAsync()
-        return true
+        return stored.componentKey
     }
+
+    private fun invalidateShortcuts(packageName: String) {
+        shortcutQueryCache.remove(packageName)
+    }
+
+    private fun shortcutLabel(shortcutInfo: ShortcutInfo): String =
+        runCatching { shortcutInfo.shortLabel?.toString() }.getOrNull()?.takeIf(String::isNotBlank)
+            ?: runCatching { shortcutInfo.longLabel?.toString() }.getOrNull()?.takeIf(String::isNotBlank)
+            ?: runCatching { shortcutInfo.id }.getOrDefault("")
 
     private fun ShortcutInfo.safePackageName(): String? {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return null

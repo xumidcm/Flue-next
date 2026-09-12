@@ -158,7 +158,8 @@
             android:exported="false"
             android:label="@string/internal_watchface_config_title"
             android:theme="@style/Theme.WatchLauncher"
-            android:screenOrientation="portrait" />
+            android:screenOrientation="portrait"
+            android:windowSoftInputMode="adjustResize" />
         <activity
             android:name=".BuiltInFileManagerActivity"
             android:exported="false"
@@ -190,7 +191,8 @@
             android:exported="false"
             android:label="@string/watch_editor_title"
             android:theme="@style/Theme.WatchLauncher"
-            android:screenOrientation="portrait" />
+            android:screenOrientation="portrait"
+            android:windowSoftInputMode="adjustResize" />
 
         <activity
             android:name=".CanvasAdjustActivity"

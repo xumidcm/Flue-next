@@ -5,6 +5,7 @@ import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.MaterialExpressiveTheme
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.MotionScheme
+import androidx.compose.material3.Shapes
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.expressiveLightColorScheme
 import androidx.compose.material3.lightColorScheme
@@ -13,10 +14,12 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.remember
 import androidx.compose.ui.graphics.Color
+import androidx.compose.foundation.shape.CornerBasedShape
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Density
 import com.flue.launcher.ui.common.FlueScreenShape
 import com.flue.launcher.ui.common.LocalFlueScreenShapeOverride
+import com.flue.launcher.ui.style.FlueOverlayHost
 
 // UI 风格
 enum class UiStyle {
@@ -99,6 +102,20 @@ private val MiuixLightColorScheme = lightColorScheme(
     outline = Color(0x1F000000),
 )
 
+/** Keeps raw Material text inputs visually aligned with Flue's larger row corners. */
+private fun flueMaterialShapes(style: LauncherStyle): Shapes {
+    val rowShape = style.rowShape as CornerBasedShape
+    val cardShape = style.cardShape as CornerBasedShape
+    val panelShape = style.panelShape as CornerBasedShape
+    return Shapes(
+        extraSmall = rowShape,
+        small = rowShape,
+        medium = cardShape,
+        large = panelShape,
+        extraLarge = panelShape,
+    )
+}
+
 // 主题模式
 enum class ThemeMode {
     SYSTEM,
@@ -123,13 +140,22 @@ fun WatchLauncherTheme(
     }
 
     WatchColors.setDarkMode(isDark)
+    val FlueMaterialShapes = remember(uiStyle, isDark) {
+        flueMaterialShapes(
+            when (uiStyle) {
+                UiStyle.APPLE_WATCH -> appleWatchLauncherStyle(isDark)
+                UiStyle.MATERIAL_3 -> materialLauncherStyle(isDark)
+                UiStyle.MIUIX -> miuixLauncherStyle(isDark)
+            },
+        )
+    }
 
     val inner: @Composable () -> Unit = {
         CompositionLocalProvider(LocalFlueScreenShapeOverride provides screenShape) {
             ProvideLauncherStyle(
                 uiStyle = uiStyle,
                 darkMode = isDark,
-                content = content
+                content = { FlueOverlayHost(content = content) }
             )
         }
     }
@@ -140,10 +166,12 @@ fun WatchLauncherTheme(
         UiStyle.MATERIAL_3 -> MaterialExpressiveTheme(
             colorScheme = if (isDark) darkColorScheme() else expressiveLightColorScheme(),
             motionScheme = MotionScheme.expressive(),
+            shapes = FlueMaterialShapes,
             content = inner,
         )
         UiStyle.MIUIX -> MaterialTheme(
             colorScheme = if (isDark) MiuixDarkColorScheme else MiuixLightColorScheme,
+            shapes = FlueMaterialShapes,
             // M3 主题必须留在外层：106 个 `LauncherTheme.style` 读取点与大量
             // `MaterialTheme.colorScheme` 读取点都依赖它，拆不掉。MIUIX 档在它**里面**
             // 再套一层真 `MiuixTheme`，miuix 组件（basic.Switch / basic.Slider /
@@ -153,6 +181,7 @@ fun WatchLauncherTheme(
         )
         UiStyle.APPLE_WATCH -> MaterialTheme(
             colorScheme = if (isDark) DarkColorScheme else LightColorScheme,
+            shapes = FlueMaterialShapes,
             content = inner,
         )
     }
@@ -212,9 +241,10 @@ fun ProvideGlobalUiScale(    scalePercent: Int,
  */
 @Composable
 fun ProvideDialogUiScale(
+    scaleOverride: Float? = null,
     content: @Composable () -> Unit
 ) {
-    val scale = LocalGlobalUiScale.current
+    val scale = scaleOverride ?: LocalGlobalUiScale.current
     val dialogDensity = LocalDensity.current
     val scaledDensity = remember(dialogDensity, scale) {
         Density(

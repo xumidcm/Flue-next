@@ -568,32 +568,32 @@ fun watchEditorDragDeltaInParentFrame(
 /**
  * 视图像素 ↔ 设计坐标的双轴映射。
  *
- * 和渲染器 `watchCanvasTransform` 用同一套契约：**等比** scale 取
- * `min(viewW/designW, viewH/designH)`，画布在视口内居中（letterbox）。所以这里
+ * 和渲染器 `watchCanvasTransform` 用同一套契约：**等比** scale 在 FIT 时取
+ * `min(viewW/designW, viewH/designH)`，在 FILL 时取 `max(...)`；画布始终居中。所以这里
  * 以视口中心为基准反投，而不是「除以宽度」——后者只在视口比例恰好等于设计比例
  * 时才成立，而编辑器预览的高度是弹簧动画驱动的，动画中途两者必然不相等。用
  * 中心反投在动画每一帧都和渲染结果对齐。
  *
  * [designWidth] / [designHeight] 缺省是原生方形画布，方形表盘行为与改动前一致。
  *
- * ⚠️ 这里保持**单轴**是有意的：编辑器预览从不调 `setCanvasSettings`，永远按
- * `WatchCanvasSettings.DEFAULT`（FIT）渲染，此时渲染器的 `scaleX == scaleY`，
- * 两边正好对齐。用户的画布铺法只作用于桌面表盘 —— 编辑的是设计画布本身，不该
- * 被观看偏好带偏。若哪天编辑器要跟随用户设置，这个类必须同步拆成双轴，否则
- * 命中测试会和画面错开。
+ * 编辑器的设备预览固定使用居中 FILL，与画布调节的“铺满模式”一致；[fill] 让
+ * 选择框、命中测试和渲染器使用同一缩放规则。
  */
 data class WatchEditorCanvasMapping(
     val viewWidthPx: Float,
     val viewHeightPx: Float,
     val designWidth: Float = WatchmakerGeometry.DESIGN_SIZE,
     val designHeight: Float = WatchmakerGeometry.DESIGN_SIZE,
+    val fill: Boolean = false,
 ) {
     /** 等比缩放因子（视图像素 / 设计单位）；退化输入回落 1 避免除零。 */
     val scale: Float
         get() {
             if (viewWidthPx <= 0f || viewHeightPx <= 0f) return 1f
             if (designWidth <= 0f || designHeight <= 0f) return 1f
-            val candidate = minOf(viewWidthPx / designWidth, viewHeightPx / designHeight)
+            val widthScale = viewWidthPx / designWidth
+            val heightScale = viewHeightPx / designHeight
+            val candidate = if (fill) maxOf(widthScale, heightScale) else minOf(widthScale, heightScale)
             return if (candidate > 0f && candidate.isFinite()) candidate else 1f
         }
 

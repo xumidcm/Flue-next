@@ -334,6 +334,7 @@ class NativeAppListPerformancePolicyTest {
             config = NativeAppListConfig(
                 presentation = NativeAppListPresentation.DENSE_GRID,
                 denseGridColumns = 5,
+                entryMotionEnabled = true,
                 entryProgress = 0.5f,
             ),
             output = scratch,

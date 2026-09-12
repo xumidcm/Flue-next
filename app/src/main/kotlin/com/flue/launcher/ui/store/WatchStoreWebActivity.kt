@@ -62,7 +62,7 @@ import com.flue.launcher.R
 import com.flue.launcher.i18n.FlueComponentActivity
 import com.flue.launcher.ui.common.InternalFileBrowserHost
 import com.flue.launcher.ui.common.InternalFileBrowserRequest
-import com.flue.launcher.ui.style.FlueDialog
+import com.flue.launcher.ui.style.FlueAlertDialog
 import com.flue.launcher.ui.style.FlueLoadingIndicator
 import com.flue.launcher.ui.theme.LauncherTheme
 import com.flue.launcher.ui.theme.ProvideGlobalUiScale
@@ -1085,7 +1085,7 @@ private fun WebErrorAction(label: String, onClick: () -> Unit) {
     }
 }
 
-/** C4 的三选项。取消由 [FlueDialog] 的点空白与返回键统一走 `onDismiss`。 */
+/** C4 的三选项。列表滚动，取消操作固定在圆屏安全弦宽内。 */
 @Composable
 private fun WebUploadChooserDialog(
     onPickInstalled: () -> Unit,
@@ -1093,18 +1093,22 @@ private fun WebUploadChooserDialog(
     onPickSystem: () -> Unit,
     onDismiss: () -> Unit,
 ) {
-    FlueDialog(onDismissRequest = onDismiss) {
-        Text(
-            text = stringResource(R.string.watch_store_web_upload_title),
-            color = MaterialTheme.colorScheme.onSurface,
-            fontSize = 17.sp,
-            fontWeight = FontWeight.Bold,
-        )
-        Spacer(Modifier.height(10.dp))
-        WebChooserRow(stringResource(R.string.watch_store_web_upload_installed), onPickInstalled)
-        WebChooserRow(stringResource(R.string.watch_store_web_upload_internal), onPickInternal)
-        WebChooserRow(stringResource(R.string.watch_store_web_upload_system), onPickSystem)
-    }
+    FlueAlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(stringResource(R.string.watch_store_web_upload_title)) },
+        text = {
+            Column(modifier = Modifier.fillMaxWidth()) {
+                WebChooserRow(stringResource(R.string.watch_store_web_upload_installed), onPickInstalled)
+                WebChooserRow(stringResource(R.string.watch_store_web_upload_internal), onPickInternal)
+                WebChooserRow(stringResource(R.string.watch_store_web_upload_system), onPickSystem)
+            }
+        },
+        dismissButton = {
+            androidx.compose.material3.TextButton(onClick = onDismiss) {
+                Text(stringResource(R.string.watch_editor_cancel))
+            }
+        },
+    )
 }
 
 @Composable
@@ -1113,35 +1117,34 @@ private fun InstalledWatchFacePickerDialog(
     onSelect: (WatchFaceDescriptor) -> Unit,
     onDismiss: () -> Unit,
 ) {
-    FlueDialog(onDismissRequest = onDismiss) {
-        Text(
-            text = stringResource(R.string.watch_store_web_upload_installed),
-            color = MaterialTheme.colorScheme.onSurface,
-            fontSize = 17.sp,
-            fontWeight = FontWeight.Bold,
-        )
-        Spacer(Modifier.height(10.dp))
-        if (faces.isEmpty()) {
-            Text(
-                text = stringResource(R.string.watch_store_web_upload_no_installed),
-                color = LauncherTheme.style.secondaryTextColor,
-                fontSize = 13.sp,
-            )
-            return@FlueDialog
-        }
-        // **不能再套一层 verticalScroll**：FlueDialog 的卡片本身就是可滚动的 Column，
-        // 嵌两层滚动容器会让内层拿到无限高约束 —— 直接抛
-        // 「Vertically scrollable component was measured with an infinity maximum height」。
-        // 老师点「从已安装表盘选择」时的崩溃就是这个。
-        Column(
-            modifier = Modifier.fillMaxWidth(),
-            verticalArrangement = Arrangement.spacedBy(6.dp),
-        ) {
-            faces.forEach { descriptor ->
-                WebChooserRow(descriptor.displayName) { onSelect(descriptor) }
+    FlueAlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(stringResource(R.string.watch_store_web_upload_installed)) },
+        text = {
+            if (faces.isEmpty()) {
+                Text(
+                    text = stringResource(R.string.watch_store_web_upload_no_installed),
+                    color = LauncherTheme.style.secondaryTextColor,
+                    fontSize = 13.sp,
+                )
+            } else {
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    faces.forEach { descriptor ->
+                        WebChooserRow(descriptor.displayName) { onSelect(descriptor) }
+                    }
+                }
             }
-        }
-    }
+        },
+        dismissButton = {
+            androidx.compose.material3.TextButton(onClick = onDismiss) {
+                Text(stringResource(R.string.watch_editor_cancel))
+            }
+        },
+        scrollableContent = true,
+    )
 }
 
 @Composable
@@ -1150,7 +1153,10 @@ private fun WebChooserRow(label: String, onClick: () -> Unit) {
     Box(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(vertical = 3.dp),
+            .padding(vertical = 3.dp)
+            .height(50.dp)
+            .clip(style.compactShape)
+            .background(style.cardColor),
     ) {
         androidx.compose.material3.TextButton(
             onClick = onClick,

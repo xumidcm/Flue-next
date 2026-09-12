@@ -158,6 +158,15 @@ object SettingsHierarchy {
                 destination = "WATCH_FACES",
                 subtitle = "选择、扫描与删除表盘；selected_watchface_id"
             ),
+            SettingsEntry.Picker(
+                id = "watchface_long_press_mode",
+                title = "长按表盘打开方式",
+                prefKey = "watchface_long_press_mode",
+                options = listOf(
+                    PickerOption("cards", "卡片"),
+                    PickerOption("list", "列表"),
+                ),
+            ),
             SettingsEntry.Navigation(
                 id = "watchface_store",
                 title = "表盘商店",

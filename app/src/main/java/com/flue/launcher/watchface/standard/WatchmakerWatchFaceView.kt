@@ -49,6 +49,8 @@ import com.flue.launcher.watchface.editor.shape.buildWatchShapePath
 import com.flue.launcher.watchface.editor.shape.watchShapeClampCornerRadius
 import com.flue.launcher.watchface.editor.shape.watchShapeHasRoundedCorner
 import com.flue.launcher.watchface.editor.shape.watchShapeKindOf
+import com.flue.launcher.watchface.agent.tools.WatchAgentExpressionClassifier
+import com.flue.launcher.watchface.agent.tools.WatchAgentExpressionKind
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -142,11 +144,16 @@ internal fun watchFaceNeedsLuaRuntime(
     return layers.any { layer ->
         WatchTapActionParser.parse(
             layer.attributes["tap_action"] ?: layer.attributes["action"],
-        ) is WatchTapAction.Script || watchmakerLayerAttributeValues(layer).any { value ->
-            EXTERNAL_DATA_REFERENCE.containsMatchIn(value)
-        }
+        ) is WatchTapAction.Script || watchmakerLayerAttributeValues(layer).any(::watchFaceAttributeUsesLua)
     }
 }
+
+/**
+ * Inline Lua is a complete program even when it does not mention a face global.
+ * Keep this gate in one place so the import path and the frame evaluator agree.
+ */
+private fun watchFaceAttributeUsesLua(value: String): Boolean =
+    WatchAgentExpressionClassifier.classify(value).kind == WatchAgentExpressionKind.LUA_EXPRESSION
 
 /** Lua-only expressions need the sandbox even when the face has no script file or tap action. */
 private val EXTERNAL_DATA_REFERENCE = Regex("\\bWF\\s*(?:\\.|\\[)", RegexOption.IGNORE_CASE)
@@ -5047,6 +5054,9 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
             sources = expressionSources,
             scope = expressionScope,
         )
+        val luaExpressionSources = expressionSources
+            .filter(::watchFaceAttributeUsesLua)
+            .mapTo(LinkedHashSet()) { it.trim() }
         return PreparedSource(
             sourceGeneration = sourceGeneration,
             animationStartedAtUptimeMs = SystemClock.uptimeMillis(),
@@ -5067,6 +5077,7 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
             expressionScope = expressionScope,
             luaRuntime = luaRuntime,
             ownsLuaRuntime = luaRuntime != null && inheritedRuntime == null,
+            luaExpressionSources = luaExpressionSources,
             expressionCompileReport = expressionCompileReport,
             renderPlan = renderPlanResult.items,
             renderPlanDiagnostics = renderPlanResult.diagnostics,
@@ -6068,6 +6079,11 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         source.luaRuntime?.evaluateFaceText(value) { tag ->
             resolveTagResolutionWithoutLua(tag, calendar, source)
         }?.let { return it.take(WatchExpressionLimits.MAX_RESULT_TEXT_LENGTH) }
+        if (source.luaExpressionSources.contains(value.trim())) {
+            source.luaRuntime?.evaluateText(value) { tag ->
+                resolveTagResolutionWithoutLua(tag, calendar, source)
+            }?.let { return it.take(WatchExpressionLimits.MAX_RESULT_TEXT_LENGTH) }
+        }
         return WatchmakerExpressionEvaluator.evaluateText(value, source.expressionScope) { tag ->
             resolveTagResolution(tag, calendar, source)
         }
@@ -6136,10 +6152,20 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
 
     private fun isDisplayed(display: String?, source: PreparedSource): Boolean =
         watchmakerDisplayVisible(display, ambientMode) { value ->
-            source.luaRuntime?.evaluateFaceBoolean(value) { tag -> resolveFrameTagWithoutLua(tag, source) }
-                ?: WatchmakerExpressionEvaluator.evaluateBoolean(value, false, source.expressionScope) {
+            source.luaRuntime?.evaluateFaceBoolean(value) { tag ->
+                resolveFrameTagWithoutLua(tag, source)
+            } ?: if (source.luaExpressionSources.contains(value.trim())) {
+                source.luaRuntime?.evaluateBoolean(value) { tag ->
+                    resolveFrameTagWithoutLua(tag, source)
+                } ?: run {
+                    reportLuaAttributeFallback(source, "display", value)
+                    false
+                }
+            } else {
+                WatchmakerExpressionEvaluator.evaluateBoolean(value, false, source.expressionScope) {
                     tag -> resolveFrameTag(tag, source)
                 }
+            }
         }
 
     private fun dynamicNumber(value: String?, fallback: Float, source: PreparedSource): Float {
@@ -6147,11 +6173,28 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         source.luaRuntime?.evaluateFaceNumber(raw) { tag ->
             resolveFrameTagWithoutLua(tag, source)
         }?.let { return it.toFloat() }
+        if (source.luaExpressionSources.contains(raw.trim())) {
+            source.luaRuntime?.evaluateNumber(raw) { tag ->
+                resolveFrameTagWithoutLua(tag, source)
+            }?.takeIf(Double::isFinite)?.let { return it.toFloat() }
+            reportLuaAttributeFallback(source, "number", raw)
+        }
         return WatchmakerExpressionEvaluator.evaluateNumber(
             value,
             fallback,
             source.expressionScope,
         ) { tag -> resolveFrameTag(tag, source) }
+    }
+
+    private fun reportLuaAttributeFallback(source: PreparedSource, attribute: String, expression: String) {
+        val summary = expression.replace(Regex("\\s+"), " ").take(180)
+        val key = "$attribute\u0000$summary"
+        val firstFailure = synchronized(source.reportedLuaFallbacks) {
+            source.reportedLuaFallbacks.add(key)
+        }
+        if (firstFailure) {
+            Log.w(TAG, "Lua $attribute attribute fell back safely: $summary")
+        }
     }
 
     /**
@@ -6726,6 +6769,7 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         val expressionScope: WatchExpressionScope,
         val luaRuntime: WatchFaceLuaRuntime?,
         val ownsLuaRuntime: Boolean,
+        val luaExpressionSources: Set<String> = emptySet(),
         /**
          * 导入期预编译的产物摘要。随 generation 一起换掉，所以不需要额外的失效逻辑。
          *
@@ -6751,6 +6795,7 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         val layerCacheKeys: List<String> = definition.layers.mapIndexed { index, layer ->
             layerCacheKey(layer, index)
         }
+        val reportedLuaFallbacks: MutableSet<String> = HashSet()
 
         fun layerCacheKey(layer: WatchmakerLayer, layerIndex: Int): String = buildString {
             append(rootCacheKey)

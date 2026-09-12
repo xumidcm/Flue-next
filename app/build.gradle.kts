@@ -48,7 +48,7 @@ android {
         minSdk = 27
         targetSdk = 36
         versionCode = 25
-        versionName = "2.2.1-fix"
+        versionName = "2.3.0"
         ndk { abiFilters += listOf("armeabi-v7a", "arm64-v8a") }
     }
 
@@ -86,6 +86,14 @@ android {
     buildFeatures {
         compose = true
         buildConfig = true
+    }
+
+    packaging {
+        jniLibs {
+            // libproot_exec.so is launched by ProcessBuilder, so Android must
+            // materialise it as a real executable in nativeLibraryDir.
+            useLegacyPackaging = true
+        }
     }
 
     testOptions {
@@ -134,6 +142,7 @@ dependencies {
     // used only as the pure-Java VM/compiler; its file, package and Java bridge
     // libraries are never exposed to a face.
     implementation(libs.luaj.jse)
+    implementation(libs.xz)
 
     debugImplementation(libs.compose.ui.tooling)
     implementation(libs.compose.ui.tooling.preview)

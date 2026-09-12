@@ -1,0 +1,18 @@
+<resources>
+    <string name="agent_conversation_actions">Conversation actions</string>
+    <string name="agent_delete_conversation">Delete this conversation?</string>
+    <string name="agent_reasoning_depth">Reasoning</string>
+    <string name="agent_reasoning_default">Default</string>
+    <string name="agent_reasoning_none">Off</string>
+    <string name="agent_reasoning_low">Low</string>
+    <string name="agent_reasoning_medium">Medium</string>
+    <string name="agent_reasoning_high">High</string>
+    <string name="agent_choose_workspace">Choose workspace</string>
+    <string name="agent_search_models">Search fetched models</string>
+    <string name="agent_refresh_models">Refresh models</string>
+    <string name="agent_next_turn_setting">The current reply keeps its model. Your selection applies to the next message.</string>
+    <string name="agent_reasoning_compatibility">Default follows the model settings. Custom depth requires provider and model support; use Default if unsupported.</string>
+    <string name="agent_workspace_after_stop">Stop the current reply before switching workspaces.</string>
+    <string name="agent_tool_read_image">View image</string>
+    <string name="agent_tool_list_workspace">Browse workspace</string>
+</resources>

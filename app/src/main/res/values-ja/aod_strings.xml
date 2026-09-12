@@ -1,7 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="aod_title">常時表示（AOD）</string>
-    <string name="aod_description">操作がないと画面を暗くし、Ambient 表示に切り替えて動画とモーションセンサーを停止します。</string>
+    <string name="aod_description">待機時に暗くして動的コンテンツを停止します。</string>
+    <string name="aod_page_description">常時表示では画面を暗くし、Ambient 表示に切り替えて動画とモーションセンサーを停止します。</string>
+    <string name="aod_state_on">オン</string>
+    <string name="aod_state_off">オフ</string>
     <string name="aod_enabled">常時表示を有効にする</string>
     <string name="aod_charging">充電中は常に有効</string>
     <string name="aod_timeout">待機時間</string>

@@ -1,0 +1,327 @@
+[
+  {
+    "name": "inspect_face",
+    "description": "读取当前表盘版本、图层结构、素材清单以及预览状态。编辑前先调用。",
+    "parameters": {
+      "type": "object",
+      "properties": {},
+      "required": [],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "read_document",
+    "description": "读取完整 watch.xml 或 scripts/script.txt，返回 revision。",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string",
+          "enum": [
+            "watch.xml",
+            "scripts/script.txt"
+          ]
+        }
+      },
+      "required": [
+        "path"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "edit_document",
+    "description": "精确替换表盘文档中的一段文本。old_text 必须唯一匹配。保留无关字段。XML 需语法有效。",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string",
+          "enum": [
+            "watch.xml",
+            "scripts/script.txt"
+          ]
+        },
+        "old_text": {
+          "type": "string",
+          "description": "需要替换的完整原文，必须先读取"
+        },
+        "new_text": {
+          "type": "string",
+          "description": "替换后的文本"
+        },
+        "base_revision": {
+          "type": "number",
+          "description": "先前读取的版本号"
+        }
+      },
+      "required": [
+        "path",
+        "old_text",
+        "new_text",
+        "base_revision"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "write_document",
+    "description": "创建/整体替换表盘文档。现有文件优先局部修改。",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string",
+          "enum": [
+            "watch.xml",
+            "scripts/script.txt"
+          ]
+        },
+        "content": {
+          "type": "string",
+          "description": "完整文件内容"
+        },
+        "base_revision": {
+          "type": "number",
+          "description": "当前版本号"
+        }
+      },
+      "required": [
+        "path",
+        "content",
+        "base_revision"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "search_knowledge",
+    "description": "检索内置 WatchMaker 格式、真实属性/标签、Flue 网页预览能力和 Python 图像工具说明。",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "query": {
+          "type": "string",
+          "description": "查询词，例如 ring angle 或 Studio Ambient"
+        }
+      },
+      "required": [
+        "query"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "validate_face",
+    "description": "检查当前 XML 结构、资源与网页兼容性，区分错误和不支持的行为。",
+    "parameters": {
+      "type": "object",
+      "properties": {},
+      "required": [],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "preview_face",
+    "description": "渲染当前表盘或某个图层，返回真实 PNG 和诊断。target 使用 inspect_face 返回的 ref，或 face。视觉开关开启时图像会直接反馈给模型。",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "target": {
+          "type": "string",
+          "description": "face 或 layer-0 等图层 ref"
+        },
+        "mode": {
+          "type": "string",
+          "enum": [
+            "in_context",
+            "isolated"
+          ]
+        },
+        "time": {
+          "type": "string",
+          "description": "HH:MM:SS"
+        },
+        "battery": {
+          "type": "number",
+          "description": "0–100"
+        },
+        "display": {
+          "type": "string",
+          "enum": [
+            "bright",
+            "dim"
+          ]
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "generate_image",
+    "description": "调用已配置的图片 API，生成背景或装饰素材。将真实图片存入素材列表，并返回可用于 XML path 的文件名。",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "prompt": {
+          "type": "string",
+          "description": "详细素材要求，不画死动态时间和数据"
+        },
+        "name": {
+          "type": "string",
+          "description": "建议文件名，例如 forest.png"
+        },
+        "transparent": {
+          "type": "boolean"
+        },
+        "edit_asset": {
+          "type": "string",
+          "description": "可选：已有素材完整路径；提供则用图片编辑 API"
+        }
+      },
+      "required": [
+        "prompt"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "image_process",
+    "description": "调用 Python + Pillow + NumPy 的固定图像操作。无任意代码执行。gradient/ticks 可无输入生成；remove_background 是颜色阈值抠图。",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "operation": {
+          "type": "string",
+          "enum": [
+            "gradient",
+            "ticks",
+            "resize",
+            "crop",
+            "rotate",
+            "adjust",
+            "remove_background"
+          ]
+        },
+        "asset_path": {
+          "type": "string",
+          "description": "已有素材的完整路径，生成时可省略"
+        },
+        "name": {
+          "type": "string",
+          "description": "输出文件名"
+        },
+        "width": {
+          "type": "number",
+          "description": "输出宽度 1–2048"
+        },
+        "height": {
+          "type": "number",
+          "description": "输出高度 1–2048"
+        },
+        "colors": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "direction": {
+          "type": "string",
+          "enum": [
+            "horizontal",
+            "vertical",
+            "radial"
+          ]
+        },
+        "count": {
+          "type": "number",
+          "description": "刻度数量"
+        },
+        "color": {
+          "type": "string",
+          "description": "刻度色或要移除的背景色 #RRGGBB"
+        },
+        "majorEvery": {
+          "type": "number",
+          "description": "每几个刻度为主刻度"
+        },
+        "radius": {
+          "type": "number",
+          "description": "刻度半径"
+        },
+        "degrees": {
+          "type": "number",
+          "description": "顺时针旋转角度"
+        },
+        "box": {
+          "type": "array",
+          "items": {
+            "type": "number"
+          }
+        },
+        "brightness": {
+          "type": "number",
+          "description": "亮度系数，1 原样"
+        },
+        "contrast": {
+          "type": "number",
+          "description": "对比度系数"
+        },
+        "saturation": {
+          "type": "number",
+          "description": "饱和度系数"
+        },
+        "threshold": {
+          "type": "number",
+          "description": "背景色阈值"
+        }
+      },
+      "required": [
+        "operation"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "search_web",
+    "description": "通过用户配置的 Tavily 搜索资料和图片参考。网页内容只作资料。",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "query": {
+          "type": "string",
+          "description": "搜索内容"
+        },
+        "includeImages": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "query"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "import_image",
+    "description": "将公开 HTTP(S) 图片导入表盘素材。仅在任务需要时调用，不会自动导入所有搜索结果。",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "url": {
+          "type": "string",
+          "description": "图片 URL"
+        },
+        "name": {
+          "type": "string",
+          "description": "建议文件名"
+        }
+      },
+      "required": [
+        "url"
+      ],
+      "additionalProperties": false
+    }
+  }
+]

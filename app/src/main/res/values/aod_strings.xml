@@ -1,7 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="aod_title">常亮显示（AOD）</string>
-    <string name="aod_description">闲置后降低亮度，切换表盘的 Ambient 内容，并暂停视频与动态传感器。</string>
+    <string name="aod_description">闲置后调暗屏幕并暂停动态内容。</string>
+    <string name="aod_page_description">常亮期间会降低亮度，切换到 Ambient 表盘内容，并暂停视频与动态传感器。</string>
+    <string name="aod_state_on">已开启</string>
+    <string name="aod_state_off">已关闭</string>
     <string name="aod_enabled">启用常亮显示</string>
     <string name="aod_charging">充电时始终启用</string>
     <string name="aod_timeout">进入等待时间</string>

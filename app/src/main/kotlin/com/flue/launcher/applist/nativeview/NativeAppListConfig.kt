@@ -147,7 +147,7 @@ data class NativeAppListConfig(
     val scrollIndicatorEnabled: Boolean = true,
     val edgeSpacingCompressionEnabled: Boolean = true,
     /** Classic (Beta 1.2) keeps content stable; Next animates entry progress. */
-    val entryMotionEnabled: Boolean = true,
+    val entryMotionEnabled: Boolean = DEFAULT_APP_LIST_STAGGER_ENABLED,
     /**
      * Monotonic token for a new app-list entry. Compose changes this once per
      * transition; the native host owns the frame clock for the actual motion.
@@ -385,6 +385,7 @@ private const val MAX_ROW_HEIGHT_PX = MAX_NATIVE_METRIC_PX * 3
 private const val MIN_POSITIVE_DRAWING_VALUE = 0.01f
 private const val MAX_APP_SCALE = 4f
 private const val MIN_FISHEYE_RANGE = 0.01f
+internal const val DEFAULT_APP_LIST_STAGGER_ENABLED = false
 private const val DEFAULT_FISHEYE_RANGE = 0.4f
 private const val DEFAULT_ROW_HEIGHT_PX = 64
 private const val DEFAULT_ICON_SIZE_PX = 40

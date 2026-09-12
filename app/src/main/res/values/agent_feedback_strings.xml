@@ -1,0 +1,18 @@
+<resources>
+    <string name="agent_conversation_actions">对话操作</string>
+    <string name="agent_delete_conversation">删除这段对话？</string>
+    <string name="agent_reasoning_depth">思考深度</string>
+    <string name="agent_reasoning_default">默认</string>
+    <string name="agent_reasoning_none">关闭</string>
+    <string name="agent_reasoning_low">轻度</string>
+    <string name="agent_reasoning_medium">标准</string>
+    <string name="agent_reasoning_high">深入</string>
+    <string name="agent_choose_workspace">选择工作区</string>
+    <string name="agent_search_models">搜索已拉取的模型</string>
+    <string name="agent_refresh_models">刷新模型列表</string>
+    <string name="agent_next_turn_setting">当前回复继续使用原模型，新选择从下一次发送生效。</string>
+    <string name="agent_reasoning_compatibility">默认遵循模型设置。自定义深度需要服务商和模型支持；不支持时请选择默认。</string>
+    <string name="agent_workspace_after_stop">停止当前回复后即可切换工作区。</string>
+    <string name="agent_tool_read_image">查看图片</string>
+    <string name="agent_tool_list_workspace">浏览工作区</string>
+</resources>

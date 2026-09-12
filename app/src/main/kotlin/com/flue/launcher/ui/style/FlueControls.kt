@@ -143,7 +143,12 @@ fun FlueTextField(
     keyboardOptions: KeyboardOptions = KeyboardOptions.Default,
     visualTransformation: androidx.compose.ui.text.input.VisualTransformation =
         androidx.compose.ui.text.input.VisualTransformation.None,
+    placeholder: String? = null,
+    supportingText: String? = null,
+    trailingIcon: (@Composable () -> Unit)? = null,
+    minLines: Int = 1,
     maxLines: Int = if (singleLine) 1 else Int.MAX_VALUE,
+    isError: Boolean = false,
 ) {
     val style = LauncherTheme.style
     OutlinedTextField(
@@ -152,10 +157,15 @@ fun FlueTextField(
         modifier = modifier,
         enabled = enabled,
         singleLine = singleLine,
+        minLines = minLines,
         maxLines = maxLines,
+        isError = isError,
         keyboardOptions = keyboardOptions,
         visualTransformation = visualTransformation,
         label = label?.let { { Text(it) } },
+        placeholder = placeholder?.let { { Text(it) } },
+        supportingText = supportingText?.let { { Text(it) } },
+        trailingIcon = trailingIcon,
         shape = style.rowShape,
         colors = OutlinedTextFieldDefaults.colors(
             focusedBorderColor = style.accentColor,

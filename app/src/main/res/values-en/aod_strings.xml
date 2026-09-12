@@ -1,7 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="aod_title">Always-on display (AOD)</string>
-    <string name="aod_description">Dim after inactivity, use Ambient face content, and pause video and motion sensors.</string>
+    <string name="aod_description">Dim on idle and pause dynamic content.</string>
+    <string name="aod_page_description">AOD dims the screen, shows Ambient face content, and pauses video and motion sensors.</string>
+    <string name="aod_state_on">On</string>
+    <string name="aod_state_off">Off</string>
     <string name="aod_enabled">Enable always-on display</string>
     <string name="aod_charging">Always enable while charging</string>
     <string name="aod_timeout">Idle timeout</string>

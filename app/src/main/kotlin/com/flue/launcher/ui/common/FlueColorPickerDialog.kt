@@ -7,7 +7,6 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
@@ -24,6 +23,7 @@ import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import com.flue.launcher.R
+import com.flue.launcher.ui.style.FlueAlertDialog
 import java.util.Locale
 
 /**
@@ -59,7 +59,7 @@ fun FlueColorPickerDialog(
     val currentColor = Color(
         android.graphics.Color.HSVToColor(floatArrayOf(hue, saturation, value)),
     )
-    AlertDialog(
+    FlueAlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(title) },
         text = {

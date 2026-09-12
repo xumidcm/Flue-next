@@ -125,4 +125,21 @@ class WatchCanvasExtentTest {
         assertEquals(1f, mapping.scale, 0.001f)
         assertEquals(0f, mapping.designX(0f), 0.001f)
     }
+
+    @Test
+    fun `fill preview center crops a square design into a portrait viewport`() {
+        val mapping = WatchEditorCanvasMapping(
+            viewWidthPx = 320f,
+            viewHeightPx = 400f,
+            designWidth = 512f,
+            designHeight = 512f,
+            fill = true,
+        )
+
+        assertEquals(400f / 512f, mapping.scale, 0.0001f)
+        assertEquals(-40f, mapping.viewX(-256f), 0.01f)
+        assertEquals(360f, mapping.viewX(256f), 0.01f)
+        assertEquals(0f, mapping.viewY(-256f), 0.01f)
+        assertEquals(400f, mapping.viewY(256f), 0.01f)
+    }
 }

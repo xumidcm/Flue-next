@@ -201,4 +201,40 @@ class WatchEditorFeedbackSessionTest {
         assertFalse(session.snapshot().canUndo)
         assertFalse(session.snapshot().layers.single().attributes.containsKey("x"))
     }
+
+    @Test fun batchScaleChangesEverySelectedLayerAndCreatesOneUndoEntry() = withSession(
+        """<Watch><Layer id="a" type="text" anim_scale="80"/><Layer id="b" type="image" anim_scale_x="120" anim_scale_y="90"/></Watch>""",
+    ) { session, _ ->
+        val keys = session.snapshot().layers.map { it.key }.toSet()
+        session.beginLayerTranslationGesture(keys)
+        val preview = session.updateLayerSelectionScalePreview(1.5f)
+        assertEquals(1.2f, preview.getValue(keys.first()).scaleX, 0.0001f)
+        assertEquals(1.8f, preview.getValue(keys.last()).scaleX, 0.0001f)
+        assertTrue(session.commitLayerTranslationGesture())
+        assertEquals("120", session.snapshot().layers[0].attributes["anim_scale_x"])
+        assertEquals("135", session.snapshot().layers[1].attributes["anim_scale_y"])
+        assertTrue(session.undo())
+        assertEquals("80", session.snapshot().layers[0].attributes["anim_scale"])
+        assertEquals("90", session.snapshot().layers[1].attributes["anim_scale_y"])
+    }
+
+    @Test fun ambientScaleWritesOnlyAmbientOverridesAndCanBeCancelled() = withSession(
+        """<Watch build_source="studio"><Layer type="text" anim_scale="75"><Ambient anim_scale_x="50"/></Layer></Watch>""",
+    ) { session, _ ->
+        val key = session.snapshot().layers.single().key
+        session.beginLayerTranslationGesture(
+            setOf(key),
+            mapOf(key to WatchEditorTransform(scaleX = 0.5f, scaleY = 0.75f)),
+            ambientMode = true,
+        )
+        val preview = session.updateLayerSelectionScalePreview(2f)
+        assertEquals(1f, preview.getValue(key).scaleX, 0.0001f)
+        assertEquals(1.5f, preview.getValue(key).scaleY, 0.0001f)
+        assertEquals("100", session.snapshot().layers.single().ambientAttributes["anim_scale_x"])
+        assertEquals("150", session.snapshot().layers.single().ambientAttributes["anim_scale_y"])
+        assertTrue(session.cancelLayerTranslationGesture())
+        assertEquals("75", session.snapshot().layers.single().attributes["anim_scale"])
+        assertEquals("50", session.snapshot().layers.single().ambientAttributes["anim_scale_x"])
+        assertFalse(session.snapshot().layers.single().ambientAttributes.containsKey("anim_scale_y"))
+    }
 }

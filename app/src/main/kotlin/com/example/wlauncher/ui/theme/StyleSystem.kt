@@ -181,7 +181,14 @@ data class LauncherStyle(
     val switchTouchTarget: Dp = 48.dp,
     /** 该风格加载指示器的默认边长。三套的视觉密度不同，默认值也就不同。 */
     val loadingIndicatorSize: Dp = 28.dp,
-)
+) {
+    /** Compact rectangular controls retain corners even inside a 42dp icon target. */
+    val smallControlShape: Shape = when (uiStyle) {
+        UiStyle.APPLE_WATCH -> RoundedCornerShape(14.dp)
+        UiStyle.MATERIAL_3 -> RoundedCornerShape(12.dp)
+        UiStyle.MIUIX -> RoundedCornerShape(10.dp)
+    }
+}
 
 private val LocalLauncherStyle = compositionLocalOf { appleWatchLauncherStyle(darkMode = true) }
 

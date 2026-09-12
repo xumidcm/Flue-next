@@ -11,6 +11,8 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.PackageManager
+import android.content.pm.LauncherApps
+import android.content.pm.ShortcutInfo
 import android.graphics.Outline
 import android.hardware.Sensor
 import android.hardware.SensorEvent
@@ -106,6 +108,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.input.pointer.AwaitPointerEventScope
@@ -135,6 +138,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.zIndex
 import androidx.core.content.ContextCompat
+import androidx.core.graphics.drawable.toBitmap
 import top.yukonga.miuix.kmp.icon.MiuixIcons
 import top.yukonga.miuix.kmp.icon.extended.Add
 import top.yukonga.miuix.kmp.icon.extended.Back
@@ -528,6 +532,8 @@ fun SmartStackLayer(
     onOpenNotification: (String, Offset) -> Unit,
     onLaunchApp: (AppInfo, Offset) -> Unit,
     onSetShortcut: (Int, String?) -> Unit,
+    onQueryAppShortcuts: suspend (AppInfo) -> List<ShortcutInfo>,
+    onSetAppShortcut: suspend (Int, ShortcutInfo) -> Boolean,
     onRemoveShortcut: (Int) -> Unit,
     onSwapShortcut: (Int, Int) -> Unit,
     onSetShowNotification: (Boolean) -> Unit,
@@ -974,7 +980,9 @@ fun SmartStackLayer(
     when (val state = modalState) {
         is SideScreenModalState.ShortcutPicker -> ShortcutPickerOverlay(
             apps = apps,
-            onSelect = { onSetShortcut(state.slotIndex, it.componentKey) },
+            onQueryShortcuts = onQueryAppShortcuts,
+            onSelectOpenApp = { onSetShortcut(state.slotIndex, it.componentKey) },
+            onSelectShortcut = { onSetAppShortcut(state.slotIndex, it) },
             onDismiss = { modalState = SideScreenModalState.None }
         )
         is SideScreenModalState.ShortcutActions -> AppShortcutOverlay(
@@ -2211,6 +2219,18 @@ internal data class SideScreenShortcutGridSpec(
     val spacingDp: Int,
 )
 
+internal enum class SideScreenShortcutSelection {
+    ADD_OPEN_APP,
+    CHOOSE_ACTION,
+}
+
+internal fun sideScreenShortcutSelection(shortcutCount: Int): SideScreenShortcutSelection =
+    if (shortcutCount > 0) {
+        SideScreenShortcutSelection.CHOOSE_ACTION
+    } else {
+        SideScreenShortcutSelection.ADD_OPEN_APP
+    }
+
 internal fun sideScreenShortcutGridSpec(rows: Int): SideScreenShortcutGridSpec =
     if (rows >= 3) {
         SideScreenShortcutGridSpec(maxIconSizeDp = 68, spacingDp = 18)
@@ -2833,12 +2853,15 @@ private fun EmptyWidgetCard(width: Dp) {
 @Composable
 private fun ShortcutPickerOverlay(
     apps: List<AppInfo>,
-    onSelect: (AppInfo) -> Unit,
+    onQueryShortcuts: suspend (AppInfo) -> List<ShortcutInfo>,
+    onSelectOpenApp: (AppInfo) -> Unit,
+    onSelectShortcut: suspend (ShortcutInfo) -> Boolean,
     onDismiss: () -> Unit
 ) {
     val appPickerItems = remember(apps) {
         apps.asSequence()
             .filterNot { it.isFolder }
+            .filterNot { it.isAppListShortcut }
             .map { app ->
                 ShortcutPickerItem(
                     componentKey = app.componentKey,
@@ -2850,37 +2873,143 @@ private fun ShortcutPickerOverlay(
             }
             .toList()
     }
+    var selectedApp by remember { mutableStateOf<AppInfo?>(null) }
+    var selectedShortcuts by remember { mutableStateOf<List<ShortcutInfo>>(emptyList()) }
+    var loadingPackage by remember { mutableStateOf<String?>(null) }
+    var selectionFailed by remember { mutableStateOf(false) }
+    var appListReturnIndex by remember { mutableIntStateOf(0) }
+    var appListReturnOffset by remember { mutableIntStateOf(0) }
     val listState = rememberLazyListState()
-    ModalShell(onDismiss) { dismiss ->
+    val scope = rememberCoroutineScope()
+    LaunchedEffect(selectedApp?.packageName) {
+        if (selectedApp == null) {
+            listState.scrollToItem(appListReturnIndex, appListReturnOffset)
+        } else {
+            listState.scrollToItem(0)
+        }
+    }
+    BackHandler(enabled = selectedApp != null) {
+        selectedApp = null
+        selectedShortcuts = emptyList()
+        selectionFailed = false
+    }
+    ModalShell(onDismiss, backHandlerEnabled = selectedApp == null) { dismiss ->
         Column(Modifier.fillMaxWidth(0.82f).heightIn(max = 420.dp).clip(LauncherTheme.style.panelShape).background(Color(0xFF1E1E1E)).padding(vertical = 12.dp)) {
             Text(
-                stringResource(R.string.side_add_shortcut),
+                selectedApp?.label ?: stringResource(R.string.side_add_shortcut),
                 color = Color.White,
                 fontSize = 16.sp,
                 fontWeight = FontWeight.SemiBold,
                 modifier = Modifier.align(Alignment.CenterHorizontally).padding(bottom = 10.dp),
             )
-            LazyColumn(
-                state = listState,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .weight(1f, fill = false)
-                    .flueOverscroll(listState),
-                contentPadding = PaddingValues(horizontal = 8.dp),
-                verticalArrangement = Arrangement.spacedBy(4.dp)
+            AnimatedContent(
+                targetState = selectedApp,
+                transitionSpec = {
+                    val forward = initialState == null && targetState != null
+                    val enter = slideInHorizontally(
+                        animationSpec = tween(220),
+                        initialOffsetX = { width -> if (forward) width / 3 else -width / 3 },
+                    ) + fadeIn(tween(160))
+                    val exit = slideOutHorizontally(
+                        animationSpec = tween(220),
+                        targetOffsetX = { width -> if (forward) -width / 3 else width / 3 },
+                    ) + fadeOut(tween(140))
+                    enter togetherWith exit using SizeTransform(clip = false)
+                },
+                label = "shortcut_picker_level",
+                modifier = Modifier.weight(1f, fill = false),
             ) {
-                items(
-                    items = appPickerItems,
-                    key = { it.componentKey },
-                    contentType = { "shortcut_picker_app" }
-                ) { app ->
-                    ShortcutPickerRow(
-                        item = app,
-                        onClick = {
-                            onSelect(app.source)
-                            dismiss()
+                LazyColumn(
+                    state = listState,
+                    modifier = Modifier.fillMaxWidth().flueOverscroll(listState),
+                    contentPadding = PaddingValues(horizontal = 8.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    if (it == null) {
+                        items(
+                            items = appPickerItems,
+                            key = { item -> item.componentKey },
+                            contentType = { "shortcut_picker_app" },
+                        ) { app ->
+                            ShortcutPickerRow(
+                                item = app,
+                                busy = loadingPackage == app.packageName,
+                                onClick = {
+                                    if (loadingPackage != null) return@ShortcutPickerRow
+                                    scope.launch {
+                                        appListReturnIndex = listState.firstVisibleItemIndex
+                                        appListReturnOffset = listState.firstVisibleItemScrollOffset
+                                        loadingPackage = app.packageName
+                                        val shortcuts = onQueryShortcuts(app.source)
+                                        loadingPackage = null
+                                        when (sideScreenShortcutSelection(shortcuts.size)) {
+                                            SideScreenShortcutSelection.ADD_OPEN_APP -> {
+                                                onSelectOpenApp(app.source)
+                                                dismiss()
+                                            }
+                                            SideScreenShortcutSelection.CHOOSE_ACTION -> {
+                                                selectedShortcuts = shortcuts
+                                                selectedApp = app.source
+                                            }
+                                        }
+                                    }
+                                },
+                            )
                         }
-                    )
+                    } else {
+                        item("back_to_shortcut_apps") {
+                            ShortcutPickerBackRow(onClick = {
+                                selectedApp = null
+                                selectedShortcuts = emptyList()
+                                selectionFailed = false
+                            })
+                        }
+                        item("open_app") {
+                            ShortcutActionRow(
+                                label = stringResource(R.string.side_shortcut_open_app),
+                                subtitle = it.label,
+                                icon = it.cachedIcon,
+                                enabled = true,
+                                onClick = {
+                                    onSelectOpenApp(it)
+                                    dismiss()
+                                },
+                            )
+                        }
+                        items(
+                            items = selectedShortcuts,
+                            key = { shortcut -> shortcut.id },
+                            contentType = { "shortcut_action" },
+                        ) { shortcut ->
+                            val label = shortcut.shortLabel?.toString()?.takeIf(String::isNotBlank)
+                                ?: shortcut.longLabel?.toString()?.takeIf(String::isNotBlank)
+                                ?: shortcut.id
+                            val disabledReason = shortcut.disabledMessage?.toString()?.takeIf(String::isNotBlank)
+                            ShortcutActionRow(
+                                label = label,
+                                subtitle = disabledReason ?: it.label,
+                                shortcut = shortcut,
+                                fallbackIcon = it.cachedIcon,
+                                enabled = shortcut.isEnabled,
+                                onClick = {
+                                    scope.launch {
+                                        selectionFailed = false
+                                        if (onSelectShortcut(shortcut)) dismiss() else selectionFailed = true
+                                    }
+                                },
+                            )
+                        }
+                        if (selectionFailed) {
+                            item("shortcut_selection_failed") {
+                                Text(
+                                    stringResource(R.string.side_shortcut_unavailable),
+                                    color = Color(0xFFFF6B66),
+                                    fontSize = 12.sp,
+                                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+                                )
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -3048,6 +3177,96 @@ private fun WidgetPickerBackRow(onClick: () -> Unit) {
 }
 
 @Composable
+private fun ShortcutPickerBackRow(onClick: () -> Unit) {
+    val pressed = rememberPressedState()
+    val isPressed by pressed
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .height(54.dp)
+            .clip(RoundedCornerShape(999.dp))
+            .background(if (isPressed) Color(0xFF3A3A3A) else Color(0xFF2B2B2D))
+            .instantPressGesture(pressed, onClick = onClick)
+            .padding(horizontal = 16.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(MiuixIcons.Back, null, Modifier.size(18.dp), tint = Color.White)
+        Spacer(Modifier.width(9.dp))
+        Text(
+            stringResource(R.string.side_shortcut_back_to_apps),
+            color = Color.White,
+            fontSize = 14.sp,
+            fontWeight = FontWeight.SemiBold,
+        )
+    }
+}
+
+@Composable
+private fun ShortcutActionRow(
+    label: String,
+    subtitle: String,
+    enabled: Boolean,
+    onClick: () -> Unit,
+    icon: ImageBitmap? = null,
+    shortcut: ShortcutInfo? = null,
+    fallbackIcon: ImageBitmap? = null,
+) {
+    val context = LocalContext.current
+    val rowIcon by produceState<ImageBitmap?>(
+        initialValue = icon ?: fallbackIcon,
+        shortcut?.id,
+        shortcut?.lastChangedTimestamp,
+    ) {
+        if (shortcut != null) {
+            value = withContext(Dispatchers.IO) {
+                runCatching {
+                    context.getSystemService(LauncherApps::class.java)
+                        ?.getShortcutIconDrawable(shortcut, context.resources.displayMetrics.densityDpi)
+                        ?.toBitmap(width = 96, height = 96)
+                        ?.asImageBitmap()
+                }.getOrNull() ?: fallbackIcon
+            }
+        }
+    }
+    val pressed = rememberPressedState()
+    val isPressed by pressed
+    val scale by animateFloatAsState(
+        if (isPressed && enabled) 0.985f else 1f,
+        spring(stiffness = 880f, dampingRatio = 0.8f),
+        label = "shortcut_action_row",
+    )
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .height(62.dp)
+            .graphicsLayer {
+                scaleX = scale
+                scaleY = scale
+                alpha = if (enabled) 1f else 0.46f
+            }
+            .clip(LauncherTheme.style.rowShape)
+            .background(if (isPressed && enabled) Color(0xFF303030) else Color.Transparent)
+            .then(if (enabled) Modifier.instantPressGesture(pressed, onClick = onClick) else Modifier)
+            .padding(horizontal = 16.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        rowIcon?.let { bitmap ->
+            Image(
+                bitmap,
+                contentDescription = label,
+                modifier = Modifier.size(42.dp).clip(RoundedCornerShape(12.dp)),
+                contentScale = ContentScale.Crop,
+            )
+        }
+        Spacer(Modifier.width(12.dp))
+        Column {
+            Text(label, color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
+            Text(subtitle, color = WatchColors.TextTertiary, fontSize = 11.sp, maxLines = 1)
+        }
+    }
+}
+
+@Composable
 private fun WidgetPickerAppRow(
     app: WidgetPickerApp,
     widgetRepository: WidgetRepository,
@@ -3205,6 +3424,7 @@ private fun TypeTab(
 @Composable
 private fun ShortcutPickerRow(
     item: ShortcutPickerItem,
+    busy: Boolean,
     onClick: () -> Unit
 ) {
     val pressed = rememberPressedState()
@@ -3240,7 +3460,12 @@ private fun ShortcutPickerRow(
         Spacer(Modifier.width(12.dp))
         Column {
             Text(item.label, color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
-            Text(item.packageName, color = WatchColors.TextTertiary, fontSize = 11.sp, maxLines = 1)
+            Text(
+                if (busy) stringResource(R.string.side_shortcut_reading) else item.packageName,
+                color = WatchColors.TextTertiary,
+                fontSize = 11.sp,
+                maxLines = 1,
+            )
         }
     }
 }

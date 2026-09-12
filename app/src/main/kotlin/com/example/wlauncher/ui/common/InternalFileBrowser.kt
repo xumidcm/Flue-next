@@ -41,7 +41,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.InsertDriveFile
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -75,6 +74,7 @@ import com.flue.launcher.R
 import com.flue.launcher.ui.settings.miuix.MiuixIcons
 import com.flue.launcher.ui.theme.LauncherTheme
 import com.flue.launcher.ui.theme.ProvideDialogUiScale
+import com.flue.launcher.ui.style.FlueAlertDialog
 import java.io.File
 import java.util.Locale
 import kotlin.math.max
@@ -148,7 +148,7 @@ private fun InternalFileBrowserPermissionDialog(
     onDismiss: () -> Unit,
     onGrant: () -> Unit,
 ) {
-    AlertDialog(
+    FlueAlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(stringResource(R.string.internal_file_browser_permission_title)) },
         text = { Text(stringResource(R.string.internal_file_browser_permission_message)) },

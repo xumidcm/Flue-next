@@ -8,6 +8,47 @@ import org.junit.Test
 
 class WatchFaceLuaRuntimeTest {
 
+    @Test
+    fun `local inline IIFE evaluates without face global state`() {
+        val expression = "((function() local mo=tonumber('{dn}') or 9; local t=(mo-9)/6; return 255.0*t*t*(3-2*t) end)())/255*100"
+        WatchFaceLuaRuntime.create(
+            initialScript = null,
+            resolveTag = { tag -> if (tag == "dn") WatchTagResolution.Resolved("12") else WatchTagResolution.Unsupported(tag) },
+        ).use { runtime ->
+            val result = runtime.evaluateNumber(expression) { tag ->
+                if (tag == "dn") WatchTagResolution.Resolved("12") else WatchTagResolution.Unsupported(tag)
+            }
+            assertTrue(result.isFinite())
+            assertTrue(result > 0.0)
+        }
+    }
+
+    @Test
+    fun `inline IIFE enables Lua runtime without global script`() {
+        val layer = WatchmakerLayer(
+            id = "earth",
+            type = "image",
+            parentId = null,
+            attributes = mapOf("x" to "((function() local n=2; return n*21 end)())"),
+            children = emptyList(),
+        )
+        assertTrue(watchFaceNeedsLuaRuntime(null, listOf(layer)))
+    }
+
+    @Test
+    fun `local inline IIFE can drive display without face global state`() {
+        val expression = "(function() local hour=tonumber('{dh24}') or 0; return hour >= 6 and hour < 18 end)()"
+        WatchFaceLuaRuntime.create(null).use { runtime ->
+            assertTrue(
+                runtime.evaluateBoolean(expression) { tag ->
+                    if (tag == "dh24") WatchTagResolution.Resolved("12")
+                    else WatchTagResolution.Unsupported(tag)
+                } == true,
+            )
+            assertFalse(runtime.referencesFaceState(expression))
+        }
+    }
+
     /**
      * 属性结果缓存。老师报「这个表盘用起来很卡」的那张 M3 Expressive 表盘，89 个图层里有 87 个
      * `color` 写成脚本里的色调映射函数调用 —— 60fps 下每秒五千多次 Lua 调用，全在算同一批颜色。

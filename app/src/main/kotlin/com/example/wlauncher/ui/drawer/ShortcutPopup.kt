@@ -33,7 +33,6 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.AlertDialog
 import androidx.compose.ui.res.stringResource
 import com.flue.launcher.R
 import androidx.compose.material3.OutlinedTextField
@@ -60,6 +59,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.flue.launcher.data.model.AppInfo
+import com.flue.launcher.ui.style.FlueAlertDialog
 import com.flue.launcher.ui.style.flueOverscroll
 import com.flue.launcher.ui.theme.LauncherTheme
 
@@ -134,7 +134,7 @@ fun AppShortcutOverlay(
     }
 
     if (renameDialogVisible) {
-        AlertDialog(
+        FlueAlertDialog(
             onDismissRequest = { renameDialogVisible = false },
             title = { Text(stringResource(R.string.shortcut_menu_rename_folder_title)) },
             text = {

@@ -70,7 +70,9 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import com.flue.launcher.ui.style.FlueAlertDialog
+import com.flue.launcher.ui.style.FlueOverlayHost
 import com.flue.launcher.ui.style.FlueDialog
+import com.flue.launcher.ui.style.FlueSingleChoiceDialog
 import com.flue.launcher.ui.style.FlueButton
 import com.flue.launcher.ui.style.FlueOutlinedButton
 import com.flue.launcher.ui.style.FlueLoadingIndicator
@@ -78,8 +80,6 @@ import com.flue.launcher.ui.style.FlueLoadingIndicatorUsage
 import com.flue.launcher.ui.style.FlueRefreshIndicator
 import com.flue.launcher.ui.style.FlueCard
 import com.flue.launcher.ui.style.FlueSurface
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -111,7 +111,6 @@ import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
-import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.input.pointer.pointerInput
@@ -121,7 +120,6 @@ import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.layout.positionInWindow
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
@@ -132,10 +130,6 @@ import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.sp
 import com.flue.launcher.ui.store.WatchStoreDialog as Dialog
 import androidx.compose.ui.window.DialogProperties
-import top.yukonga.miuix.kmp.basic.BasicComponent
-import top.yukonga.miuix.kmp.basic.ListPopupDefaults
-import top.yukonga.miuix.kmp.basic.PopupPositionProvider
-import top.yukonga.miuix.kmp.extra.WindowListPopup
 import top.yukonga.miuix.kmp.icon.MiuixIcons
 import top.yukonga.miuix.kmp.icon.extended.Add
 import top.yukonga.miuix.kmp.icon.extended.Album
@@ -165,10 +159,6 @@ import top.yukonga.miuix.kmp.icon.extended.Refresh
 import top.yukonga.miuix.kmp.icon.extended.Search
 import top.yukonga.miuix.kmp.icon.extended.Tune
 import top.yukonga.miuix.kmp.icon.extended.UploadCloud
-import top.yukonga.miuix.kmp.theme.Colors as MiuixColors
-import top.yukonga.miuix.kmp.theme.MiuixTheme
-import top.yukonga.miuix.kmp.theme.darkColorScheme as miuixDarkColorScheme
-import top.yukonga.miuix.kmp.theme.lightColorScheme as miuixLightColorScheme
 import com.flue.launcher.ui.settings.miuix.MiuixIcons as FlueMiuixIcons
 import com.flue.launcher.ui.store.StoreOverlayTitle
 import com.flue.launcher.ui.store.StoreOverlayTitleBlock
@@ -235,7 +225,6 @@ import androidx.compose.ui.graphics.Shape
 import com.flue.launcher.ui.theme.LauncherStyle
 import com.flue.launcher.ui.theme.LauncherTheme
 import com.flue.launcher.ui.theme.UiStyle
-import com.flue.launcher.ui.theme.LocalGlobalUiScale
 import com.flue.launcher.ui.theme.ProvideDialogUiScale
 import com.flue.launcher.ui.theme.ProvideGlobalUiScale
 import com.flue.launcher.ui.theme.WatchColors
@@ -2235,17 +2224,7 @@ private fun StoreFloatingActions(
     }
 }
 
-/**
- * 顶栏最右的 miuix 三点溢出菜单。
- *
- * 用 miuix 真组件 [WindowListPopup]（而不是 `ListPopup`）：后者要靠 miuix `Scaffold`
- * 提供 `MiuixPopupUtils` 宿主，本项目明确不引 miuix 的布局骨架；`WindowListPopup`
- * 自己起平台窗口，不需要宿主。
- *
- * 行用 [BasicComponent] 而不是 `DropdownImpl` —— 后者只收纯文本，挂不了图标。
- * 也不用 miuix 的 `ListPopupColumn`：它把列宽硬夹在 200..288dp，窄圆屏上会溢出；
- * 这里自己出一列，宽度跟着屏宽走。
- */
+/** 顶栏三点菜单也进入同窗口全屏提示层，避免独立 Popup 无法复用背景模糊。 */
 @Composable
 private fun StoreOverflowMenu(
     showManagement: Boolean,
@@ -2268,160 +2247,110 @@ private fun StoreOverflowMenu(
 ) {
     val style = LauncherTheme.style
     var expanded by remember { mutableStateOf(false) }
-    // 弹层宽度按**屏宽比例**定，而不是跟随最宽那一行。
-    //
-    // 试过内在测量（`IntrinsicSize.Max`）：宽度确实贴着最长标签，但整块就显小了 ——
-    // 老师报「又太小了，改回上面那一版，只要把宽度稍微收窄一点」。所以回到定宽，
-    // 比例从 0.66 收到 0.60、上下限从 148..220 收到 140..204。
-    //
-    // **屏宽要先换算回「布局 dp」**：外层 ProvideGlobalUiScale 把 density 乘过 scale，而
-    // `screenWidthDp` 始终是系统原始 dp。直接乘比例的话，全局 UI 大小拉到 150% 时
-    // 这块会摊到几乎满屏。
-    val uiScale = LocalGlobalUiScale.current.coerceAtLeast(0.01f)
-    val screenWidth = LocalConfiguration.current.screenWidthDp.dp / uiScale
-    val popupWidth = (screenWidth * STORE_OVERFLOW_WIDTH_FRACTION)
-        .coerceIn(STORE_OVERFLOW_MIN_WIDTH, STORE_OVERFLOW_MAX_WIDTH)
-        // 极窄屏 + 大 UI 倍率下，下限本身就可能超过屏宽，留一点边距兜住。
-        .coerceAtMost(screenWidth - 16.dp)
-    // 弹层是独立平台窗口，density 在它的根节点被按窗口自己的 DisplayMetrics 重新提供，
-    // 外层缩放过的那份到不了里面（与 ProvideDialogUiScale 那条注释同一个坑）。这里把外层
-    // 这一份**原样**带进去：popup 若本来就继承了 density，重复提供同一个值是空操作，
-    // 不会出现 scale 乘两次。
-    val outerDensity = LocalDensity.current
-    // WindowListPopup 内部放一个 Spacer 读「它父节点」的坐标当锚点，所以触发按钮
-    // 与弹层必须共用这一个 Box —— 锚就是这 40dp 的按钮。
-    Box {
-        IconButton(onClick = { expanded = true }, modifier = Modifier.size(40.dp)) {
-            Box {
-                Icon(
-                    imageVector = MiuixIcons.More,
-                    contentDescription = stringResource(R.string.watch_store_more_options),
-                    tint = style.titleColor,
-                    modifier = Modifier.size(20.dp),
+    IconButton(onClick = { expanded = true }, modifier = Modifier.size(40.dp)) {
+        Box {
+            Icon(
+                imageVector = MiuixIcons.More,
+                contentDescription = stringResource(R.string.watch_store_more_options),
+                tint = style.titleColor,
+                modifier = Modifier.size(20.dp),
+            )
+            if (hasUnreadNotifications && onOpenNotifications != null) {
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .size(6.dp)
+                        .clip(CircleShape)
+                        .background(WatchColors.ActiveRed),
                 )
-                // 通知降级进菜单的那一档（圆屏），未读红点跟着搬到三点上，
-                // 否则未读状态在整屏上没有任何提示。
-                if (hasUnreadNotifications && onOpenNotifications != null) {
-                    Box(
-                        modifier = Modifier
-                            .align(Alignment.TopEnd)
-                            .size(6.dp)
-                            .clip(CircleShape)
-                            .background(WatchColors.ActiveRed),
-                    )
-                }
             }
         }
-        // MiuixTheme 要包在调用点外面：弹层容器自己的底色与遮罩
-        // （ListPopupContent 的 surfaceContainer、ListPopupLayout 的 windowDimming）
-        // 是在 WindowListPopup 内部读的，包在 content 里就来不及了。
-        MiuixTheme(colors = rememberMiuixPopupColors()) {
-            WindowListPopup(
-                show = expanded,
-                popupPositionProvider = ListPopupDefaults.ContextMenuPositionProvider,
-                alignment = PopupPositionProvider.Align.TopEnd,
-                onDismissRequest = { expanded = false },
-                minWidth = popupWidth,
+    }
+    if (expanded) {
+        FlueDialog(onDismissRequest = { expanded = false }, scrollableContent = false) {
+            Text(
+                text = stringResource(R.string.watch_store_more_options),
+                color = style.titleColor,
+                fontSize = when (style.uiStyle) {
+                    UiStyle.APPLE_WATCH -> 23.sp
+                    UiStyle.MIUIX -> 21.sp
+                    UiStyle.MATERIAL_3 -> 22.sp
+                },
+                fontWeight = if (style.uiStyle == UiStyle.MATERIAL_3) FontWeight.Medium else FontWeight.Bold,
+                textAlign = TextAlign.Center,
+            )
+            Spacer(Modifier.height(14.dp))
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f, fill = false)
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                CompositionLocalProvider(LocalDensity provides outerDensity) {
-                    Column(modifier = Modifier.width(popupWidth)) {
-                        // 通知排在最前：它是「有新东西」的入口，比管理类的项更急。
-                        onOpenNotifications?.let { open ->
-                            StoreOverflowItem(
-                                icon = Icons.Rounded.NotificationsNone,
-                                label = stringResource(R.string.watch_store_notifications),
-                            ) {
-                                expanded = false
-                                open()
-                            }
-                        }
-                        // 账号相关的那几行按登录态给（见 watchStoreAccountMenuActions）：
-                        // 登录后是「我的上传 + 上传表盘」，未登录只给一行「登录 / 注册」。
-                        //
-                        // 市场没加载成功时管理类的两项不摆 —— 点进去只会再失败一次；
-                        // 但「登录 / 注册」照摆，那是这种状态下唯一能自救的入口。
-                        watchStoreAccountMenuActions(signedIn = isLoggedIn)
-                            .filter {
-                                it == WatchStoreAccountMenuAction.LOGIN_OR_REGISTER || showManagement
-                            }
-                            .forEach { action ->
-                                when (action) {
-                                    WatchStoreAccountMenuAction.LOGIN_OR_REGISTER -> StoreOverflowItem(
-                                        icon = MiuixIcons.Contacts,
-                                        label = stringResource(R.string.watch_store_login_or_register),
-                                    ) {
-                                        expanded = false
-                                        onLogin()
-                                    }
-                                    WatchStoreAccountMenuAction.MY_UPLOADS -> StoreOverflowItem(
-                                        icon = MiuixIcons.Folder,
-                                        label = stringResource(R.string.watch_store_my_uploads),
-                                    ) {
-                                        expanded = false
-                                        onMyUploads()
-                                    }
-                                }
-                            }
-                        // 收藏与合集是账号的东西：未登录时这两项直接不出现（与铃铛同一条
-                        // 判断），点开只能看见「请先登录」的入口不如没有。
-                        onMyFavorites?.let { open ->
-                            StoreOverflowItem(
-                                icon = MiuixIcons.Favorites,
-                                label = stringResource(R.string.watch_store_my_favorites),
-                            ) {
-                                expanded = false
-                                open()
-                            }
-                        }
-                        onMyCollections?.let { open ->
-                            StoreOverflowItem(
-                                icon = MiuixIcons.Album,
-                                label = stringResource(R.string.watch_store_my_collections),
-                            ) {
-                                expanded = false
-                                open()
-                            }
-                        }
-                        // H2：个人资料同样是账号的东西，未登录不出现。
-                        onOpenProfile?.let { open ->
-                            StoreOverflowItem(
-                                icon = MiuixIcons.Contacts,
-                                label = stringResource(R.string.watch_store_profile),
-                            ) {
-                                expanded = false
-                                open()
-                            }
-                        }
-                        StoreOverflowItem(
-                            icon = MiuixIcons.Community,
-                            label = stringResource(R.string.watch_store_top_creators),
-                        ) {
-                            expanded = false
-                            onOpenCreators()
-                        }
-                        StoreOverflowItem(
-                            icon = MiuixIcons.Store,
-                            label = stringResource(R.string.watch_store_web_open_store),
-                        ) {
-                            expanded = false
-                            onOpenWebStore()
-                        }
-                        StoreOverflowItem(
-                            icon = MiuixIcons.Link,
-                            label = stringResource(R.string.watch_store_web_open_external),
-                        ) {
-                            expanded = false
-                            onOpenWebStoreExternal()
-                        }
-                        StoreOverflowItem(
-                            icon = MiuixIcons.Tune,
-                            label = stringResource(R.string.watch_store_custom_market_url),
-                        ) {
-                            expanded = false
-                            onOpenCustomMarketUrl()
-                        }
+                onOpenNotifications?.let { open ->
+                    StoreOverflowItem(Icons.Rounded.NotificationsNone, stringResource(R.string.watch_store_notifications)) {
+                        expanded = false
+                        open()
                     }
                 }
+                watchStoreAccountMenuActions(signedIn = isLoggedIn)
+                    .filter { it == WatchStoreAccountMenuAction.LOGIN_OR_REGISTER || showManagement }
+                    .forEach { action ->
+                        when (action) {
+                            WatchStoreAccountMenuAction.LOGIN_OR_REGISTER -> StoreOverflowItem(
+                                MiuixIcons.Contacts,
+                                stringResource(R.string.watch_store_login_or_register),
+                            ) {
+                                expanded = false
+                                onLogin()
+                            }
+                            WatchStoreAccountMenuAction.MY_UPLOADS -> StoreOverflowItem(
+                                MiuixIcons.Folder,
+                                stringResource(R.string.watch_store_my_uploads),
+                            ) {
+                                expanded = false
+                                onMyUploads()
+                            }
+                        }
+                    }
+                onMyFavorites?.let { open ->
+                    StoreOverflowItem(MiuixIcons.Favorites, stringResource(R.string.watch_store_my_favorites)) {
+                        expanded = false
+                        open()
+                    }
+                }
+                onMyCollections?.let { open ->
+                    StoreOverflowItem(MiuixIcons.Album, stringResource(R.string.watch_store_my_collections)) {
+                        expanded = false
+                        open()
+                    }
+                }
+                onOpenProfile?.let { open ->
+                    StoreOverflowItem(MiuixIcons.Contacts, stringResource(R.string.watch_store_profile)) {
+                        expanded = false
+                        open()
+                    }
+                }
+                StoreOverflowItem(MiuixIcons.Community, stringResource(R.string.watch_store_top_creators)) {
+                    expanded = false
+                    onOpenCreators()
+                }
+                StoreOverflowItem(MiuixIcons.Store, stringResource(R.string.watch_store_web_open_store)) {
+                    expanded = false
+                    onOpenWebStore()
+                }
+                StoreOverflowItem(MiuixIcons.Link, stringResource(R.string.watch_store_web_open_external)) {
+                    expanded = false
+                    onOpenWebStoreExternal()
+                }
+                StoreOverflowItem(MiuixIcons.Tune, stringResource(R.string.watch_store_custom_market_url)) {
+                    expanded = false
+                    onOpenCustomMarketUrl()
+                }
+            }
+            Spacer(Modifier.height(8.dp))
+            StoreOverflowItem(MiuixIcons.Back, stringResource(R.string.watch_editor_cancel)) {
+                expanded = false
             }
         }
     }
@@ -2430,12 +2359,7 @@ private fun StoreOverflowMenu(
 /**
  * 溢出菜单的一行。
  *
- * **自绘而不是用 miuix 的 `BasicComponent`**：后者的默认排版是手机尺度（16dp 四边内边距 +
- * 16sp 标题），套在手表的小弹层里整体偏大（老师报「弹窗整体元素都偏大」）。自绘之后每个数
- * 都能单独调 —— 现在这一档是「比 miuix 默认收一点、比上一轮那次收得过头的 13.5sp 大回来」。
- *
- * 文字 `softWrap = false` + 单行省略：弹层是定宽的，长标签折行会把行高撑成两倍，
- * 一列里高矮不齐比省略号难看。
+ * 三种风格都使用对应的卡片色与紧凑形状，50dp 高度保留适合手表的触摸面积。
  */
 @Composable
 private fun StoreOverflowItem(
@@ -2443,23 +2367,27 @@ private fun StoreOverflowItem(
     label: String,
     onClick: () -> Unit,
 ) {
+    val style = LauncherTheme.style
     Row(
         modifier = Modifier
             .fillMaxWidth()
+            .height(50.dp)
+            .clip(style.compactShape)
+            .background(style.cardColor)
             .clickable(onClick = onClick)
-            .padding(horizontal = 15.dp, vertical = 11.dp),
+            .padding(horizontal = 15.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Icon(
             imageVector = icon,
             contentDescription = null,
-            tint = MiuixTheme.colorScheme.onSurfaceVariantActions,
+            tint = style.accentColor,
             modifier = Modifier.size(20.dp),
         )
         Spacer(Modifier.width(12.dp))
         Text(
             text = label,
-            color = MiuixTheme.colorScheme.onSurface,
+            color = style.titleColor,
             fontSize = 15.sp,
             maxLines = 1,
             softWrap = false,
@@ -2495,25 +2423,6 @@ private val STORE_FORM_ROUND_INSET = 40.dp
 
 /** 详情页里直接展示的评论条数，其余进「查看全部评论」二级页。 */
 private const val DETAIL_COMMENT_PREVIEW_COUNT = 1
-
-/** 弹层宽度占屏宽的比例。上一版是 0.66，老师说「稍微收窄一点」。 */
-private const val STORE_OVERFLOW_WIDTH_FRACTION = 0.60f
-
-/** 弹层宽度下限。比这更窄的话，两三个字的标签会让弹层看着像个气泡。 */
-private val STORE_OVERFLOW_MIN_WIDTH = 140.dp
-
-/** 弹层宽度上限。方屏上按比例算会很宽，压住它才不会盖掉半个页面。 */
-private val STORE_OVERFLOW_MAX_WIDTH = 204.dp
-
-/**
- * 弹层的 miuix 配色。MaterialTheme 才是真正的明暗权威（见遮罩圆角弹窗那条注释），
- * 所以从它的表面亮度反推，而不是另读一遍系统深色开关——那会忽略应用内的主题覆盖。
- */
-@Composable
-private fun rememberMiuixPopupColors(): MiuixColors {
-    val dark = MaterialTheme.colorScheme.surface.luminance() < 0.5f
-    return remember(dark) { if (dark) miuixDarkColorScheme() else miuixLightColorScheme() }
-}
 
 @Composable
 private fun FilterBar(
@@ -2565,32 +2474,21 @@ private fun FilterBar(
             ) {
                 onCategoryMenuExpandedChange(true)
             }
-            DropdownMenu(
-                expanded = categoryMenuExpanded,
+        }
+        if (categoryMenuExpanded) {
+            val allCategoriesLabel = stringResource(R.string.watch_store_all_categories)
+            FlueSingleChoiceDialog(
                 onDismissRequest = { onCategoryMenuExpandedChange(false) },
-            ) {
-                DropdownMenuItem(
-                    text = { Text(stringResource(R.string.watch_store_all_categories)) },
-                    onClick = { onCategoryChange(null) },
-                )
-                categories.take(40).forEach { category ->
-                    DropdownMenuItem(
-                        text = { Text(category.name, maxLines = 1, overflow = TextOverflow.Ellipsis) },
-                        onClick = { onCategoryChange(category) },
-                    )
-                }
-                if (categoriesError != null) {
-                    DropdownMenuItem(
-                        text = {
-                            Text(
-                                stringResource(R.string.watch_store_category_load_failed),
-                                color = WatchColors.ActiveRed,
-                            )
-                        },
-                        onClick = { onCategoryMenuExpandedChange(false) },
-                    )
-                }
-            }
+                title = stringResource(R.string.watch_store_category),
+                options = listOf<Pair<WatchStoreCategory?, String>>(null to allCategoriesLabel) +
+                    categories.take(40).map { it to it.name },
+                selected = selectedCategory,
+                onSelect = onCategoryChange,
+                cancelText = stringResource(R.string.watch_editor_cancel),
+                message = categoriesError?.let {
+                    stringResource(R.string.watch_store_category_load_failed)
+                },
+            )
         }
     }
 }
@@ -4230,6 +4128,7 @@ private fun WatchStoreSocialDetailSection(
                         decorFitsSystemWindows = false,
                     ),
                 ) {
+                    FlueOverlayHost {
                     // Dialog 是独立 Window，Compose 会按它自己的 DisplayMetrics 重新提供
                     // LocalDensity，外层 ProvideGlobalUiScale 那份缩放过的到不了这里 ——
                     // 所以评论二级页一直按系统原始 density 排版，「全局 UI 大小」对它无效。
@@ -4272,6 +4171,20 @@ private fun WatchStoreSocialDetailSection(
                             }
                         }
                     }
+                    if (loginPromptVisible && pageActive) {
+                        FlueAlertDialog(
+                            onDismissRequest = { loginPromptVisible = false },
+                            title = stringResource(R.string.watch_store_login_required),
+                            confirmText = stringResource(R.string.watch_store_login_or_register),
+                            onConfirm = {
+                                loginPromptVisible = false
+                                allCommentsVisible = false
+                                onRequestLogin()
+                            },
+                            dismissText = stringResource(R.string.watch_editor_cancel),
+                        )
+                    }
+                    }
                 }
             }
         }
@@ -4279,99 +4192,118 @@ private fun WatchStoreSocialDetailSection(
     }
 
     if (reportVisible && pageActive) {
-        FlueDialog(onDismissRequest = { reportVisible = false }) {
-            Text(
-                stringResource(R.string.watch_store_report),
-                color = style.titleColor,
-                fontWeight = FontWeight.SemiBold,
-            )
-            Spacer(Modifier.height(8.dp))
-            Text(stringResource(R.string.watch_store_report_reason_label), color = style.secondaryTextColor, fontSize = 11.sp)
-            WatchStoreReportReason.entries.forEach { reason ->
-                TextButton(onClick = { selectedReportReason = reason }, modifier = Modifier.fillMaxWidth()) {
+        FlueAlertDialog(
+            onDismissRequest = { reportVisible = false },
+            title = { Text(stringResource(R.string.watch_store_report)) },
+            text = {
+                Column(modifier = Modifier.fillMaxWidth()) {
                     Text(
-                        stringResource(
-                            when (reason) {
-                                WatchStoreReportReason.BROKEN -> R.string.watch_store_report_reason_broken
-                                WatchStoreReportReason.COPYRIGHT -> R.string.watch_store_report_reason_copyright
-                                WatchStoreReportReason.MALWARE -> R.string.watch_store_report_reason_malware
-                                WatchStoreReportReason.WRONG_PREVIEW -> R.string.watch_store_report_reason_wrong_preview
-                                WatchStoreReportReason.SPAM -> R.string.watch_store_report_reason_spam
-                            },
-                        ),
-                        color = if (selectedReportReason == reason) style.accentColor else style.bodyColor,
+                        stringResource(R.string.watch_store_report_reason_label),
+                        color = style.secondaryTextColor,
+                        fontSize = 11.sp,
+                    )
+                    WatchStoreReportReason.entries.forEach { reason ->
+                        TextButton(
+                            onClick = { selectedReportReason = reason },
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Text(
+                                stringResource(
+                                    when (reason) {
+                                        WatchStoreReportReason.BROKEN -> R.string.watch_store_report_reason_broken
+                                        WatchStoreReportReason.COPYRIGHT -> R.string.watch_store_report_reason_copyright
+                                        WatchStoreReportReason.MALWARE -> R.string.watch_store_report_reason_malware
+                                        WatchStoreReportReason.WRONG_PREVIEW -> R.string.watch_store_report_reason_wrong_preview
+                                        WatchStoreReportReason.SPAM -> R.string.watch_store_report_reason_spam
+                                    },
+                                ),
+                                color = if (selectedReportReason == reason) style.accentColor else style.bodyColor,
+                            )
+                        }
+                    }
+                    OutlinedTextField(
+                        value = reportMessage,
+                        onValueChange = { reportMessage = it.take(1_000) },
+                        modifier = Modifier.fillMaxWidth(),
+                        minLines = 2,
+                        label = { Text(stringResource(R.string.watch_store_report_message_hint)) },
+                        shape = style.rowShape,
                     )
                 }
-            }
-            OutlinedTextField(
-                value = reportMessage,
-                onValueChange = { reportMessage = it.take(1_000) },
-                modifier = Modifier.fillMaxWidth(),
-                minLines = 2,
-                label = { Text(stringResource(R.string.watch_store_report_message_hint)) },
-                shape = style.rowShape,
-            )
-            TextButton(
-                onClick = {
-                    selectedReportReason?.let { submitReport(it, reportMessage) }
-                },
-                enabled = selectedReportReason != null,
-                modifier = Modifier.fillMaxWidth(),
-            ) {
-                Text(stringResource(R.string.watch_store_send), color = style.accentColor)
-            }
-            TextButton(onClick = { reportVisible = false }, modifier = Modifier.fillMaxWidth()) {
-                Text(stringResource(R.string.watch_editor_cancel), color = style.secondaryTextColor)
-            }
-        }
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = { selectedReportReason?.let { submitReport(it, reportMessage) } },
+                    enabled = selectedReportReason != null,
+                ) {
+                    Text(
+                        stringResource(R.string.watch_store_send),
+                        color = style.accentColor,
+                    )
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { reportVisible = false }) {
+                    Text(stringResource(R.string.watch_editor_cancel), color = style.secondaryTextColor)
+                }
+            },
+            scrollableContent = true,
+        )
     }
 
     if (collectionPickerVisible && pageActive) {
-        FlueDialog(onDismissRequest = { collectionPickerVisible = false }) {
-            Text(
-                stringResource(R.string.watch_store_choose_collection),
-                color = style.titleColor,
-                fontWeight = FontWeight.SemiBold,
-            )
-            Spacer(Modifier.height(8.dp))
-            when {
-                collectionsLoading -> FlueLoadingIndicator(size = 24.dp, usage = FlueLoadingIndicatorUsage.WATCH_STORE)
-                collections.isEmpty() -> Text(
-                    stringResource(R.string.watch_store_no_collections_prompt),
-                    color = style.secondaryTextColor,
-                    fontSize = 12.sp,
-                )
-                else -> collections.forEach { collection ->
-                    TextButton(
-                        onClick = { addToCollection(collection) },
-                        enabled = !collectionBusy,
-                        modifier = Modifier.fillMaxWidth(),
-                    ) {
-                        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                            Icon(MiuixIcons.Album, contentDescription = null, tint = style.accentColor, modifier = Modifier.size(18.dp))
-                            Spacer(Modifier.width(8.dp))
-                            Text(collection.name, color = style.bodyColor, modifier = Modifier.weight(1f))
-                            Text(collection.itemCount.toString(), color = style.secondaryTextColor, fontSize = 10.sp)
+        FlueAlertDialog(
+            onDismissRequest = { collectionPickerVisible = false },
+            title = { Text(stringResource(R.string.watch_store_choose_collection)) },
+            text = {
+                Column(modifier = Modifier.fillMaxWidth()) {
+                    when {
+                        collectionsLoading -> FlueLoadingIndicator(
+                            size = 24.dp,
+                            usage = FlueLoadingIndicatorUsage.WATCH_STORE,
+                        )
+                        collections.isEmpty() -> Text(
+                            stringResource(R.string.watch_store_no_collections_prompt),
+                            color = style.secondaryTextColor,
+                            fontSize = 12.sp,
+                        )
+                        else -> collections.forEach { collection ->
+                            TextButton(
+                                onClick = { addToCollection(collection) },
+                                enabled = !collectionBusy,
+                                modifier = Modifier.fillMaxWidth(),
+                            ) {
+                                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                                    Icon(MiuixIcons.Album, contentDescription = null, tint = style.accentColor, modifier = Modifier.size(18.dp))
+                                    Spacer(Modifier.width(8.dp))
+                                    Text(collection.name, color = style.bodyColor, modifier = Modifier.weight(1f))
+                                    Text(collection.itemCount.toString(), color = style.secondaryTextColor, fontSize = 10.sp)
+                                }
+                            }
                         }
                     }
                 }
-            }
-            TextButton(
-                onClick = {
-                    collectionPickerVisible = false
-                    collectionNameVisible = true
-                },
-                enabled = !collectionBusy,
-                modifier = Modifier.fillMaxWidth(),
-            ) {
-                Icon(MiuixIcons.Album, contentDescription = null, tint = style.accentColor, modifier = Modifier.size(18.dp))
-                Spacer(Modifier.width(6.dp))
-                Text(stringResource(R.string.watch_store_create_collection_short), color = style.accentColor)
-            }
-            TextButton(onClick = { collectionPickerVisible = false }, modifier = Modifier.fillMaxWidth()) {
-                Text(stringResource(R.string.watch_editor_cancel), color = style.secondaryTextColor)
-            }
-        }
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        collectionPickerVisible = false
+                        collectionNameVisible = true
+                    },
+                    enabled = !collectionBusy,
+                ) {
+                    Icon(MiuixIcons.Album, contentDescription = null, tint = style.accentColor, modifier = Modifier.size(18.dp))
+                    Spacer(Modifier.width(6.dp))
+                    Text(stringResource(R.string.watch_store_create_collection_short), color = style.accentColor)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { collectionPickerVisible = false }) {
+                    Text(stringResource(R.string.watch_editor_cancel), color = style.secondaryTextColor)
+                }
+            },
+            scrollableContent = true,
+        )
     }
 
     if (collectionNameVisible && pageActive) {
@@ -4401,7 +4333,7 @@ private fun WatchStoreSocialDetailSection(
 
     // 未登录点收藏 / 加入合集 / 举报 / 评分：不静默、也不发必然 401 的请求，
     // 就在这里说清楚，并给一条直达登录表单的路。
-    if (loginPromptVisible && pageActive) {
+    if (loginPromptVisible && pageActive && !allCommentsVisible) {
         FlueAlertDialog(
             onDismissRequest = { loginPromptVisible = false },
             title = stringResource(R.string.watch_store_login_required),

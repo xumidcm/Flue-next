@@ -81,6 +81,8 @@ class WatchEditorSession private constructor(
     private var savedResourcePaths: Set<String>
     private var savedScriptBytes: ByteArray?
     private var closed = false
+    /** Monotonic content revision consumed by the Agent document adapter. */
+    private var agentRevisionCounter = 1L
     private var activeTransformGesture: TransformGesture? = null
     private var activeTranslationGesture: TranslationGesture? = null
 
@@ -89,6 +91,10 @@ class WatchEditorSession private constructor(
         val initial: WatchEditorTransform,
         val x: String?,
         val y: String?,
+        val scaleX: String?,
+        val scaleY: String?,
+        val scaleXBound: Boolean,
+        val scaleYBound: Boolean,
         val inverseParent: WatchEditorAffine,
     )
 
@@ -176,6 +182,100 @@ class WatchEditorSession private constructor(
         )
     }
 
+    /**
+     * Returns the smallest session-owned candidate needed by the Agent runner.
+     * The runner still needs a host adapter for writes and native previews; this
+     * method deliberately does not expose DOM nodes or invent a renderer.
+     */
+    @Synchronized
+    fun agentCandidate(): WatchEditorAgentCandidate {
+        ensureOpen()
+        return WatchEditorAgentCandidate(
+            revision = agentRevisionCounter,
+            watchXml = serializeDocument(document).toString(StandardCharsets.UTF_8),
+            globalScript = scriptBytesInternal()?.toString(StandardCharsets.UTF_8).orEmpty(),
+            resourcePaths = resourcePathsInternal().sorted(),
+            dirty = isDirty,
+        )
+    }
+
+    @Synchronized
+    fun agentRevision(): Long {
+        ensureOpen()
+        return agentRevisionCounter
+    }
+
+    /** Replaces one of the two documents after an Agent revision check. */
+    @Synchronized
+    fun replaceAgentDocument(
+        path: String,
+        content: String,
+        expectedRevision: Long,
+    ): WatchEditorAgentCandidate {
+        ensureOpen()
+        check(agentRevisionCounter == expectedRevision) {
+            "stale_revision: expected_revision=$expectedRevision current_revision=$agentRevisionCounter"
+        }
+        require(content.toByteArray(StandardCharsets.UTF_8).size <= MAX_AGENT_DOCUMENT_BYTES) {
+            "Agent 文档超过 ${MAX_AGENT_DOCUMENT_BYTES / 1024 / 1024} MiB UTF-8 限制"
+        }
+        when (path) {
+            "watch.xml" -> mutate {
+                val normalized = normalizeAgentWatchXmlPaths(content)
+                document = parseXml(ByteArrayInputStream(normalized.toByteArray(StandardCharsets.UTF_8)), limits)
+                rebindLayerKeys(layerKeys.takeIf { it.size == topLevelLayerElements().size })
+            }
+            GLOBAL_SCRIPT_RELATIVE_PATH -> updateGlobalScript(content)
+            else -> throw WatchEditorException("Agent 只支持 watch.xml 或 scripts/script.txt")
+        }
+        return agentCandidate()
+    }
+
+    /** Performs a unique text replacement through the same transactional path. */
+    @Synchronized
+    fun editAgentDocument(
+        path: String,
+        oldText: String,
+        newText: String,
+        expectedRevision: Long,
+    ): WatchEditorAgentCandidate {
+        require(oldText.isNotEmpty()) { "old_text 不能为空" }
+        val current = when (path) {
+            "watch.xml" -> agentCandidate().watchXml
+            GLOBAL_SCRIPT_RELATIVE_PATH -> globalScript()
+            else -> throw WatchEditorException("Agent 只支持 watch.xml 或 scripts/script.txt")
+        }
+        val first = current.indexOf(oldText)
+        require(first >= 0 && current.indexOf(oldText, first + oldText.length) < 0) {
+            "原文必须唯一匹配"
+        }
+        return replaceAgentDocument(
+            path = path,
+            content = current.replaceRange(first, first + oldText.length, newText),
+            expectedRevision = expectedRevision,
+        )
+    }
+
+    /** Restores a candidate as one editor mutation for an Agent undo group. */
+    @Synchronized
+    fun restoreAgentCandidate(candidate: WatchEditorAgentCandidate): WatchEditorAgentCandidate {
+        ensureOpen()
+        mutate {
+            document = parseXml(
+                ByteArrayInputStream(normalizeAgentWatchXmlPaths(candidate.watchXml).toByteArray(StandardCharsets.UTF_8)),
+                limits,
+            )
+            rebindLayerKeys(layerKeys.takeIf { it.size == topLevelLayerElements().size })
+            val scriptFile = globalScriptFile()
+            if (candidate.globalScript.isEmpty()) {
+                if (scriptFile.exists() && !scriptFile.delete()) throw WatchEditorException("无法恢复全局脚本")
+            } else {
+                writeAtomically(scriptFile, candidate.globalScript.toByteArray(StandardCharsets.UTF_8))
+            }
+        }
+        return agentCandidate()
+    }
+
     /** Returns scripts/script.txt as UTF-8, or an empty string when it is absent. */
     @Synchronized
     fun globalScript(): String {
@@ -248,7 +348,12 @@ class WatchEditorSession private constructor(
         updateLayerAttributes(key, changes.mapKeys { "Ambient.${it.key}" })
 
     private fun setAmbientAttributesDirect(layer: Element, changes: Map<String, String?>) {
-        require(changes.keys.all { it in setOf("color", "opacity", "x", "y", "width", "height", "rotation", "fontSize") })
+        require(changes.keys.all {
+            it in setOf(
+                "color", "opacity", "x", "y", "width", "height", "rotation", "fontSize",
+                TRANSFORM_SCALE_X, TRANSFORM_SCALE_Y,
+            )
+        })
         var ambient = layer.childNodes.elements().firstOrNull { it.tagName.equals("Ambient", true) }
         if (ambient == null && changes.values.any { it != null }) {
             ambient = document.createElement("Ambient").also(layer::appendChild)
@@ -283,9 +388,17 @@ class WatchEditorSession private constructor(
             }
             val layer = layers[index]
             val overrides = if (ambientMode && isStudioDefinition()) layer.ambientAttributes else emptyMap()
+            fun firstScaleValue(chain: List<String>): String? = chain.firstNotNullOfOrNull { name ->
+                overrides[name]?.takeIf(String::isNotBlank)
+                    ?: layer.attributes[name]?.takeIf(String::isNotBlank)
+            }
             TranslationTarget(
                 geometry.key, geometry.transform,
                 overrides["x"] ?: layer.attributes["x"], overrides["y"] ?: layer.attributes["y"],
+                overrides[TRANSFORM_SCALE_X] ?: layer.attributes[TRANSFORM_SCALE_X],
+                overrides[TRANSFORM_SCALE_Y] ?: layer.attributes[TRANSFORM_SCALE_Y],
+                isBoundTransformValue(firstScaleValue(SCALE_X_CHAIN)),
+                isBoundTransformValue(firstScaleValue(SCALE_Y_CHAIN)),
                 geometry.parentIndex?.let { matrices.getOrNull(it)?.inverted() } ?: WatchEditorAffine.IDENTITY,
             )
         }
@@ -309,6 +422,42 @@ class WatchEditorSession private constructor(
         }
     }
 
+    /** Uniformly scales the active multi-selection/AOD selection in the current gesture transaction. */
+    @Synchronized
+    fun updateLayerSelectionScalePreview(factor: Float): Map<WatchEditorLayerKey, WatchEditorTransform> {
+        ensureOpen()
+        require(factor.isFinite() && factor > 0f)
+        val gesture = activeTranslationGesture ?: throw WatchEditorException("没有活动的多选缩放手势")
+        return gesture.targets.associate { target ->
+            val nextScaleX = if (target.scaleXBound) target.initial.scaleX else {
+                (target.initial.scaleX * factor).coerceIn(MIN_TRANSFORM_SCALE, MAX_TRANSFORM_SCALE)
+            }
+            val nextScaleY = if (target.scaleYBound) target.initial.scaleY else {
+                (target.initial.scaleY * factor).coerceIn(MIN_TRANSFORM_SCALE, MAX_TRANSFORM_SCALE)
+            }
+            val changes = buildMap<String, String?> {
+                if (!target.scaleXBound) {
+                    put(
+                        TRANSFORM_SCALE_X,
+                        if (factor == 1f) target.scaleX
+                        else formatTransformNumber(nextScaleX * WATCHMAKER_SCALE_NORMAL),
+                    )
+                }
+                if (!target.scaleYBound) {
+                    put(
+                        TRANSFORM_SCALE_Y,
+                        if (factor == 1f) target.scaleY
+                        else formatTransformNumber(nextScaleY * WATCHMAKER_SCALE_NORMAL),
+                    )
+                }
+            }
+            val layer = findLayer(target.key)
+            if (gesture.ambient) setAmbientAttributesDirect(layer, changes)
+            else changes.forEach { (name, value) -> setOrRemoveAttribute(layer, name, value) }
+            target.key to target.initial.copy(scaleX = nextScaleX, scaleY = nextScaleY)
+        }
+    }
+
     private fun translatedExpression(original: String?, delta: Float): String? = when {
         delta == 0f -> original
         original.isNullOrBlank() -> formatTransformNumber(delta)
@@ -327,6 +476,7 @@ class WatchEditorSession private constructor(
                 pushUndo(gesture.before)
                 clearRedo()
                 pruneResourceStash()
+                agentRevisionCounter = agentRevisionCounter.inc()
                 true
             }
         } catch (error: Exception) {
@@ -437,6 +587,7 @@ class WatchEditorSession private constructor(
                 pushUndo(active.before)
                 clearRedo()
                 pruneResourceStash()
+                agentRevisionCounter = agentRevisionCounter.inc()
                 true
             }
         } catch (error: Exception) {
@@ -622,6 +773,7 @@ class WatchEditorSession private constructor(
         pushRedo(current)
         restoreState(target)
         pruneResourceStash()
+        agentRevisionCounter = agentRevisionCounter.inc()
         return true
     }
 
@@ -635,6 +787,7 @@ class WatchEditorSession private constructor(
         pushUndo(current)
         restoreState(target)
         pruneResourceStash()
+        agentRevisionCounter = agentRevisionCounter.inc()
         return true
     }
 
@@ -1376,6 +1529,7 @@ class WatchEditorSession private constructor(
                 pushUndo(before)
                 clearRedo()
                 pruneResourceStash()
+                agentRevisionCounter = agentRevisionCounter.inc()
             }
             result
         } catch (error: Exception) {
@@ -2174,6 +2328,7 @@ class WatchEditorSession private constructor(
         private const val PLACEHOLDER_PREVIEW_PX = 512
 
         const val MAX_WATCH_SCRIPT_BYTES: Int = 256 * 1024
+        private const val MAX_AGENT_DOCUMENT_BYTES: Int = 2 * 1024 * 1024
 
         /** Keeps memory and disk-history bounded while still allowing a useful edit chain. */
         const val MAX_HISTORY_STEPS: Int = 32
@@ -2498,6 +2653,30 @@ internal fun shouldDeleteWatchRevisionBackup(
     targetPublished: Boolean,
     backupRestored: Boolean,
 ): Boolean = !originalMoved || targetPublished || backupRestored
+
+data class WatchEditorAgentCandidate(
+    val revision: Long,
+    val watchXml: String,
+    val globalScript: String,
+    val resourcePaths: List<String>,
+    val dirty: Boolean,
+)
+
+private fun normalizeAgentWatchXmlPaths(xml: String): String =
+    Regex("(?is)<Layer\\b[^>]*>").replace(xml) { match ->
+        val layer = match.value
+        val path = Regex("(?i)(\\bpath\\s*=\\s*)([\\\"'])(.*?)\\2").find(layer)
+            ?: return@replace layer
+        val raw = path.groupValues[3]
+        if (!raw.contains("images/", ignoreCase = true)) return@replace layer
+        val normalized = raw.split('`').joinToString("`") { segment ->
+            watchXmlAssetPath(segment, "images")
+        }
+        layer.replaceRange(
+            path.range,
+            "${path.groupValues[1]}${path.groupValues[2]}$normalized${path.groupValues[2]}",
+        )
+    }
 
 data class WatchEditorTransform(
     val x: Float = 0f,

@@ -159,6 +159,19 @@ class SettingsScrollMemoryTest {
     }
 
     @Test
+    fun `从外观重新进入 AOD 必须回到顶部`() {
+        val nav = FakeSettingsNavigator()
+        nav.navigateTo(SettingsDestination.APPEARANCE)
+        nav.navigateTo(SettingsDestination.AOD)
+        nav.scrollTo(index = 5, offset = 20)
+        nav.back()
+
+        nav.navigateTo(SettingsDestination.AOD)
+
+        assertEquals(SavedScrollPosition(0, 0), nav.restoredPosition())
+    }
+
+    @Test
     fun `用 navigateTo 走回退那一格也不清位置`() {
         val nav = FakeSettingsNavigator()
         nav.navigateTo(SettingsDestination.FEATURE_TOGGLES)

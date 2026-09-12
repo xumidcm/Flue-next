@@ -1,0 +1,3 @@
+# Already present in the Codex bundled runtime. No automatic installation occurs.
+Pillow>=10.4,<13
+numpy>=1.26,<3

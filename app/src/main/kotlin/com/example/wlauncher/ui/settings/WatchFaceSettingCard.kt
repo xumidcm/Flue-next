@@ -55,13 +55,78 @@ import kotlinx.coroutines.withContext
 import top.yukonga.miuix.kmp.icon.MiuixIcons
 import top.yukonga.miuix.kmp.icon.extended.Delete
 import top.yukonga.miuix.kmp.icon.extended.Ok
-import top.yukonga.miuix.kmp.icon.extended.Settings
 
 private val BUILT_IN_WATCHFACE_IDS = setOf(
     BUILT_IN_WATCHFACE_ID,
     BUILT_IN_PHOTO_WATCHFACE_ID,
     BUILT_IN_VIDEO_WATCHFACE_ID,
 )
+
+/** Static preview shared by the settings list and the long-press card pager. */
+@Composable
+fun WatchFaceStaticPreview(
+    descriptor: WatchFaceDescriptor,
+    modifier: Modifier,
+    uiStyle: UiStyle = UiStyle.APPLE_WATCH,
+    builtInPhotoPath: String? = null,
+    builtInVideoPath: String? = null,
+    photoOptions: BuiltInWatchFaceOptions = BuiltInWatchFaceOptions(),
+    videoOptions: BuiltInWatchFaceOptions = BuiltInWatchFaceOptions(),
+    refreshToken: Int = 0,
+    showClock: Boolean = true,
+) {
+    if (descriptor.isBuiltin) {
+        BuiltInWatchFacePreview(
+            watchFaceId = descriptor.id,
+            photoPath = builtInPhotoPath,
+            videoPath = builtInVideoPath,
+            uiStyle = uiStyle,
+            photoOptions = photoOptions,
+            videoOptions = videoOptions,
+            showClock = showClock,
+            playVideo = false,
+            showBottomFade = false,
+            modifier = modifier,
+        )
+        return
+    }
+
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val previewFingerprint = remember(
+        descriptor.stableKey,
+        descriptor.previewFilePath,
+        refreshToken,
+    ) {
+        val previewFile = descriptor.previewFilePath?.let { java.io.File(it) }
+        if (previewFile != null && previewFile.isFile) {
+            "${previewFile.lastModified()}|${previewFile.length()}"
+        } else {
+            ""
+        }
+    }
+    val previewBitmap by produceState<ImageBitmap?>(
+        initialValue = null,
+        key1 = descriptor.stableKey,
+        key2 = previewFingerprint,
+    ) {
+        value = withContext(Dispatchers.Default) {
+            WatchFaceDescriptors.loadPreviewDrawable(context, descriptor)
+                ?.toBitmap(240, 240)
+                ?.asImageBitmap()
+        }
+    }
+    val bitmap = previewBitmap
+    if (bitmap != null) {
+        Image(
+            bitmap = bitmap,
+            contentDescription = null,
+            modifier = modifier,
+            contentScale = ContentScale.Crop,
+        )
+    } else {
+        Box(modifier = modifier.background(Color.White.copy(alpha = 0.08f)))
+    }
+}
 
 @Composable
 fun WatchFaceSettingCard(
@@ -74,7 +139,6 @@ fun WatchFaceSettingCard(
     photoOptions: BuiltInWatchFaceOptions = BuiltInWatchFaceOptions(),
     videoOptions: BuiltInWatchFaceOptions = BuiltInWatchFaceOptions(),
     onSelect: () -> Unit,
-    onOpenSettings: (() -> Unit)? = null,
     onDelete: (() -> Unit)? = null,
     /**
      * 表盘刷新令牌。编辑保存会原地覆盖 preview.jpg —— 路径和 stableKey 都
@@ -122,69 +186,19 @@ fun WatchFaceSettingCard(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        if (descriptor.isBuiltin) {
-            BuiltInWatchFacePreview(
-                watchFaceId = descriptor.id,
-                photoPath = builtInPhotoPath,
-                videoPath = builtInVideoPath,
-                uiStyle = uiStyle,
-                photoOptions = photoOptions,
-                videoOptions = videoOptions,
-                showClock = false,
-                playVideo = false,
-                showBottomFade = false,
-                modifier = Modifier
-                    .size(52.dp)
-                    .clip(launcherStyle.compactShape)
-            )
-        } else {
-            val context = androidx.compose.ui.platform.LocalContext.current
-            // 编辑保存会原地覆盖 preview.jpg：路径和 stableKey 都不变，只有
-            // 文件本身变了。单用 stableKey 做 key 会让 produceState 不重跑，
-            // 列表里永远显示原作者那张预览图（老师报的问题）。把文件指纹
-            // 一起算进 key，和 externalWatchFacePaletteCacheKey 同一口径。
-            val previewFingerprint = remember(
-                descriptor.stableKey,
-                descriptor.previewFilePath,
-                refreshToken,
-            ) {
-                val previewFile = descriptor.previewFilePath?.let { java.io.File(it) }
-                if (previewFile != null && previewFile.isFile) {
-                    "${previewFile.lastModified()}|${previewFile.length()}"
-                } else {
-                    ""
-                }
-            }
-            val previewBitmap by produceState<ImageBitmap?>(
-                initialValue = null,
-                key1 = descriptor.stableKey,
-                key2 = previewFingerprint,
-            ) {
-                value = withContext(Dispatchers.Default) {
-                    WatchFaceDescriptors.loadPreviewDrawable(context, descriptor)
-                        ?.toBitmap(120, 120)
-                        ?.asImageBitmap()
-                }
-            }
-            val bitmap = previewBitmap
-            if (bitmap != null) {
-                Image(
-                    bitmap = bitmap,
-                    contentDescription = null,
-                    modifier = Modifier
-                        .size(52.dp)
-                        .clip(launcherStyle.compactShape),
-                    contentScale = ContentScale.Crop
-                )
-            } else {
-                Box(
-                    modifier = Modifier
-                        .size(52.dp)
-                        .clip(launcherStyle.compactShape)
-                        .background(Color.White.copy(alpha = 0.08f))
-                )
-            }
-        }
+        WatchFaceStaticPreview(
+            descriptor = descriptor,
+            modifier = Modifier
+                .size(52.dp)
+                .clip(launcherStyle.compactShape),
+            uiStyle = uiStyle,
+            builtInPhotoPath = builtInPhotoPath,
+            builtInVideoPath = builtInVideoPath,
+            photoOptions = photoOptions,
+            videoOptions = videoOptions,
+            refreshToken = refreshToken,
+            showClock = false,
+        )
         Box(
             modifier = Modifier.fillMaxWidth(),
             contentAlignment = Alignment.CenterStart
@@ -229,17 +243,6 @@ fun WatchFaceSettingCard(
                         contentAlignment = Alignment.Center
                     ) {
                         Icon(MiuixIcons.Delete, contentDescription = null, tint = Color(0xFFFF6B6B))
-                    }
-                } else if (onOpenSettings != null && descriptor.supportsSettings) {
-                    Box(
-                        modifier = Modifier
-                            .clip(CircleShape)
-                            .background(launcherStyle.topBarChipColor)
-                            .clickable(onClick = onOpenSettings)
-                            .padding(8.dp),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Icon(MiuixIcons.Settings, contentDescription = null, tint = launcherStyle.accentColor)
                     }
                 }
                 if (selected) {

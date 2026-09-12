@@ -55,13 +55,19 @@ class FeedbackSurfaceContractTest {
     }
 
     @Test
-    fun aodSettingsUseFlueControlsInsteadOfRawMaterialControls() {
+    fun aodSettingsUseSharedSettingsRowsAndKeepSupplementalControls() {
         val source = sourceText("kotlin/com/flue/launcher/aod/AodSettingsSection.kt")
+        val settings = sourceText("kotlin/com/example/wlauncher/SettingsActivity.kt")
 
-        assertTrue(source.contains("FlueCard("))
-        assertTrue(source.contains("FlueSwitch("))
-        assertTrue(source.contains("FlueSlider("))
+        assertTrue(source.contains("rememberAodSettingsState"))
         assertTrue(source.contains("FlueOutlinedButton("))
+        assertTrue(settings.contains("SettingsDestination.AOD -> {"))
+        assertTrue(settings.contains("SettingsSwitchRow("))
+        assertTrue(settings.contains("SettingsSliderRow("))
+        assertFalse(settings.contains("\"aod_controls\""))
+        assertFalse(source.contains("FlueCard("))
+        assertFalse(source.contains("FlueSwitch("))
+        assertFalse(source.contains("FlueSlider("))
         assertFalse(source.contains("androidx.compose.material3.Card"))
         assertFalse(source.contains("androidx.compose.material3.Switch"))
         assertFalse(source.contains("androidx.compose.material3.Slider"))

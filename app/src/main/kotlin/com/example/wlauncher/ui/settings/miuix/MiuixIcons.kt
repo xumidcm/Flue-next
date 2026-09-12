@@ -351,6 +351,30 @@ object MiuixIcons {
         }
     }
 
+    /** 进入全屏：四角向外展开的 MIUIX 细线图标。 */
+    val Maximize: ImageVector by lazyIcon("Maximize") {
+        stroke {
+            moveTo(9.2f, 4.5f)
+            horizontalLineTo(4.5f)
+            verticalLineTo(9.2f)
+        }
+        stroke {
+            moveTo(14.8f, 4.5f)
+            horizontalLineTo(19.5f)
+            verticalLineTo(9.2f)
+        }
+        stroke {
+            moveTo(9.2f, 19.5f)
+            horizontalLineTo(4.5f)
+            verticalLineTo(14.8f)
+        }
+        stroke {
+            moveTo(14.8f, 19.5f)
+            horizontalLineTo(19.5f)
+            verticalLineTo(14.8f)
+        }
+    }
+
     /** 蓝牙。 */
     val Bluetooth: ImageVector by lazyIcon("Bluetooth") {
         stroke {
@@ -443,6 +467,74 @@ object MiuixIcons {
         stroke { roundedRect(13.3f, 4.3f, 6.4f, 6.4f, 2f) }
         stroke { roundedRect(4.3f, 13.3f, 6.4f, 6.4f, 2f) }
         stroke { roundedRect(13.3f, 13.3f, 6.4f, 6.4f, 2f) }
+    }
+
+    /** 铅笔 / 编辑。 */
+    val Edit: ImageVector by lazyIcon("Edit") {
+        stroke { moveTo(5f, 19f); lineTo(8.8f, 18.2f); lineTo(18.6f, 8.4f); lineTo(15.6f, 5.4f); lineTo(5.8f, 15.2f); close() }
+        stroke { moveTo(13.9f, 7.1f); lineTo(16.9f, 10.1f) }
+    }
+
+    /** 回形针 / 附件。 */
+    val Attachment: ImageVector by lazyIcon("Attachment") {
+        stroke { moveTo(8.2f, 12.9f); lineTo(14.8f, 6.3f); curveTo(16.4f, 4.7f, 19f, 4.7f, 20.5f, 6.2f); curveTo(22f, 7.7f, 22f, 10.3f, 20.4f, 11.9f); lineTo(11.1f, 21.2f); curveTo(8.7f, 23.6f, 4.7f, 23.6f, 2.3f, 21.2f); curveTo(-0.1f, 18.8f, -0.1f, 14.8f, 2.3f, 12.4f); lineTo(11.1f, 3.6f) }
+    }
+
+    /** 复制。 */
+    val Copy: ImageVector by lazyIcon("Copy") {
+        stroke { roundedRect(8f, 8f, 11f, 11f, 2.2f) }
+        stroke { moveTo(16f, 8f); verticalLineTo(6.5f); curveTo(16f, 5.1f, 14.9f, 4f, 13.5f, 4f); horizontalLineTo(6.5f); curveTo(5.1f, 4f, 4f, 5.1f, 4f, 6.5f); verticalLineTo(13.5f); curveTo(4f, 14.9f, 5.1f, 16f, 6.5f, 16f); horizontalLineTo(8f) }
+    }
+
+    /** 重试。 */
+    val Retry: ImageVector by lazyIcon("Retry") {
+        stroke { moveTo(7.2f, 7.2f); horizontalLineTo(3.8f); verticalLineTo(3.8f) }
+        stroke { moveTo(4.2f, 7.1f); curveTo(6.8f, 3.6f, 11.5f, 2.5f, 15.3f, 4.5f); curveTo(19.1f, 6.4f, 20.9f, 10.9f, 19.6f, 15f); curveTo(18.3f, 19.1f, 14.3f, 21.6f, 10f, 20.8f); curveTo(7.4f, 20.3f, 5.2f, 18.6f, 4f, 16.3f) }
+    }
+
+    /** 发送。 */
+    val Send: ImageVector by lazyIcon("Send") {
+        stroke { moveTo(3.2f, 4.2f); lineTo(21f, 12f); lineTo(3.2f, 19.8f); lineTo(6.1f, 12f); close() }
+        stroke { moveTo(6.1f, 12f); horizontalLineTo(14.5f) }
+    }
+
+    /** 停止。 */
+    val Stop: ImageVector by lazyIcon("Stop") { stroke { roundedRect(6f, 6f, 12f, 12f, 2.4f) } }
+
+    /** 显示 / 隐藏内容。 */
+    val Visibility: ImageVector by lazyIcon("Visibility") {
+        stroke { moveTo(2.7f, 12f); curveTo(5.1f, 7.8f, 8.2f, 5.7f, 12f, 5.7f); curveTo(15.8f, 5.7f, 18.9f, 7.8f, 21.3f, 12f); curveTo(18.9f, 16.2f, 15.8f, 18.3f, 12f, 18.3f); curveTo(8.2f, 18.3f, 5.1f, 16.2f, 2.7f, 12f); close() }
+        stroke { circle(12f, 12f, 2.7f) }
+    }
+
+    /** 更多操作。 */
+    val More: ImageVector by lazyIcon("More") { dot(5f, 12f); dot(12f, 12f); dot(19f, 12f) }
+
+    /** AI / 四角星。 */
+    val Sparkle: ImageVector by lazyIcon("Sparkle") {
+        stroke {
+            moveTo(12f, 2.8f)
+            curveTo(12.9f, 8.6f, 15.4f, 11.1f, 21.2f, 12f)
+            curveTo(15.4f, 12.9f, 12.9f, 15.4f, 12f, 21.2f)
+            curveTo(11.1f, 15.4f, 8.6f, 12.9f, 2.8f, 12f)
+            curveTo(8.6f, 11.1f, 11.1f, 8.6f, 12f, 2.8f)
+            close()
+        }
+        stroke {
+            moveTo(18.3f, 3.7f)
+            curveTo(18.6f, 5.4f, 19.3f, 6.1f, 21f, 6.4f)
+            curveTo(19.3f, 6.7f, 18.6f, 7.4f, 18.3f, 9.1f)
+            curveTo(18f, 7.4f, 17.3f, 6.7f, 15.6f, 6.4f)
+            curveTo(17.3f, 6.1f, 18f, 5.4f, 18.3f, 3.7f)
+            close()
+        }
+    }
+
+    /** Agent / 工具状态。 */
+    val Tool: ImageVector by lazyIcon("Tool") {
+        stroke { roundedRect(4f, 5.5f, 16f, 13f, 4f) }
+        stroke { moveTo(8f, 5.5f); verticalLineTo(3.5f); horizontalLineTo(16f); verticalLineTo(5.5f) }
+        dot(9f, 12f); dot(15f, 12f); stroke { moveTo(9f, 15.5f); horizontalLineTo(15f) }
     }
 }
 

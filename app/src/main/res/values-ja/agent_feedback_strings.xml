@@ -1,0 +1,18 @@
+<resources>
+    <string name="agent_conversation_actions">会話の操作</string>
+    <string name="agent_delete_conversation">この会話を削除しますか？</string>
+    <string name="agent_reasoning_depth">思考の深さ</string>
+    <string name="agent_reasoning_default">既定</string>
+    <string name="agent_reasoning_none">オフ</string>
+    <string name="agent_reasoning_low">軽め</string>
+    <string name="agent_reasoning_medium">標準</string>
+    <string name="agent_reasoning_high">深く</string>
+    <string name="agent_choose_workspace">ワークスペースを選択</string>
+    <string name="agent_search_models">取得済みモデルを検索</string>
+    <string name="agent_refresh_models">モデル一覧を更新</string>
+    <string name="agent_next_turn_setting">現在の返信は元のモデルを使用します。変更は次の送信から適用されます。</string>
+    <string name="agent_reasoning_compatibility">既定はモデル設定に従います。深さの指定には対応モデルが必要です。非対応の場合は既定を選択してください。</string>
+    <string name="agent_workspace_after_stop">ワークスペースを切り替える前に現在の返信を停止してください。</string>
+    <string name="agent_tool_read_image">画像を表示</string>
+    <string name="agent_tool_list_workspace">ファイルを参照</string>
+</resources>

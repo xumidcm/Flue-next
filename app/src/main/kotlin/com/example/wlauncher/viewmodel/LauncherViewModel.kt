@@ -4,6 +4,7 @@ import android.app.Application
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
+import android.content.pm.ShortcutInfo
 import android.net.Uri
 import android.os.Build
 import android.os.SystemClock
@@ -79,6 +80,7 @@ import com.flue.launcher.ui.notification.NotificationActionUi
 import com.flue.launcher.ui.notification.NotificationEntryUi
 import com.flue.launcher.ui.notification.NotificationGroupUi
 import com.flue.launcher.ui.notification.NotificationRevealTarget
+import com.flue.launcher.watchface.selection.WatchFaceLongPressMode
 import com.flue.launcher.ui.notification.alignNotificationPreviewOrder
 import com.flue.launcher.ui.notification.stabilizeNotificationGroupOrder
 import com.flue.launcher.service.NotifData
@@ -228,6 +230,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         val KEY_WATCHFACE_TEXT_EXIT_ANIMATION = booleanPreferencesKey("watchface_text_exit_animation")
         val KEY_WATCHFACE_STATUS_INDICATORS = booleanPreferencesKey("watchface_status_indicators")
         val KEY_WATCHFACE_BOTTOM_FADE = booleanPreferencesKey("watchface_bottom_fade_enabled")
+        val KEY_WATCHFACE_LONG_PRESS_MODE = stringPreferencesKey("watchface_long_press_mode")
         val KEY_WATCHMAKER_FORCE_FILL = booleanPreferencesKey("watchmaker_force_fill")
 
         /**
@@ -551,9 +554,8 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     val reduceDynamicEffects: StateFlow<Boolean> = _reduceDynamicEffects.asStateFlow()
     private val _screenShapeOverride = MutableStateFlow(FlueScreenShape.AUTO)
     val screenShapeOverride: StateFlow<FlueScreenShape> = _screenShapeOverride.asStateFlow()
-    // 甩尾入场默认**开**：图标从上排到下排依次向上浮出，这是老师点名要的观感。
-    // 以前默认关，机制虽然做好了却没人看得见（老师问「你那个做了吗」）。
-    private val _appListStaggerEnabled = MutableStateFlow(true)
+    // 甩尾入场默认关闭；已有 DataStore 值仍按用户选择读取。
+    private val _appListStaggerEnabled = MutableStateFlow(false)
     val appListStaggerEnabled: StateFlow<Boolean> = _appListStaggerEnabled.asStateFlow()
     // 默认档是「柔和」（Gentle），所有 UI 风格共用同一条曲线 —— 以前这里是「跟随风格」，
     // 初值要看当前风格，那一档已按老师要求删掉。
@@ -611,6 +613,8 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     // 表盘底部渐隐遮罩默认关闭；用户可在“更多表盘选项”里手动开启。
     private val _watchFaceBottomFadeEnabled = MutableStateFlow(false)
     val watchFaceBottomFadeEnabled: StateFlow<Boolean> = _watchFaceBottomFadeEnabled.asStateFlow()
+    private val _watchFaceLongPressMode = MutableStateFlow(WatchFaceLongPressMode.CARDS)
+    val watchFaceLongPressMode: StateFlow<WatchFaceLongPressMode> = _watchFaceLongPressMode.asStateFlow()
     /** App 级画布默认。没配过每表盘覆盖的表盘都用它。 */
     private val _watchfaceCanvasDefault = MutableStateFlow(WatchCanvasSettings.GLOBAL_DEFAULT)
     val watchfaceCanvasDefault: StateFlow<WatchCanvasSettings> = _watchfaceCanvasDefault.asStateFlow()
@@ -1166,7 +1170,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                     _screenShapeOverride.value = loadedScreenShape
                 }
 
-                val loadedStagger = prefs[KEY_APP_LIST_STAGGER] ?: true
+                val loadedStagger = prefs[KEY_APP_LIST_STAGGER] ?: false
                 if (_appListStaggerEnabled.value != loadedStagger) {
                     _appListStaggerEnabled.value = loadedStagger
                 }
@@ -1215,6 +1219,12 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                 val loadedWatchFaceBottomFade = prefs[KEY_WATCHFACE_BOTTOM_FADE] ?: false
                 if (_watchFaceBottomFadeEnabled.value != loadedWatchFaceBottomFade) {
                     _watchFaceBottomFadeEnabled.value = loadedWatchFaceBottomFade
+                }
+
+                val loadedWatchFaceLongPressMode =
+                    WatchFaceLongPressMode.decode(prefs[KEY_WATCHFACE_LONG_PRESS_MODE])
+                if (_watchFaceLongPressMode.value != loadedWatchFaceLongPressMode) {
+                    _watchFaceLongPressMode.value = loadedWatchFaceLongPressMode
                 }
 
                 // 画布默认优先级：新键 → 存量 force_fill 开关（用户**显式**动过才算）
@@ -2850,6 +2860,11 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         persist { store.edit { it[KEY_WATCHFACE_BOTTOM_FADE] = enabled } }
     }
 
+    fun setWatchFaceLongPressMode(mode: WatchFaceLongPressMode) {
+        _watchFaceLongPressMode.value = mode
+        persist { store.edit { it[KEY_WATCHFACE_LONG_PRESS_MODE] = mode.encode() } }
+    }
+
     /**
      * 当前生效的画布配置：**每表盘覆盖 → App 默认**。
      *
@@ -3709,6 +3724,20 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         }
     }
 
+    suspend fun querySideScreenAppShortcuts(app: AppInfo): List<ShortcutInfo> =
+        withContext(Dispatchers.IO) {
+            appRepository.queryLaunchableShortcuts(app.packageName)
+        }
+
+    suspend fun setSideScreenAppShortcut(slotIndex: Int, shortcutInfo: ShortcutInfo): Boolean {
+        if (slotIndex !in 0 until SIDE_SCREEN_SHORTCUT_SLOT_CAPACITY) return false
+        val componentKey = withContext(Dispatchers.IO) {
+            appRepository.pinAndAddShortcut(shortcutInfo)
+        } ?: return false
+        setSideScreenShortcut(slotIndex, componentKey)
+        return true
+    }
+
     fun removeSideScreenShortcut(slotIndex: Int) {
         setSideScreenShortcut(slotIndex, null)
     }
@@ -3897,7 +3926,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         _appListReturnIconFloatEnabled.value = false
         _reduceDynamicEffects.value = false
         _screenShapeOverride.value = FlueScreenShape.AUTO
-        _appListStaggerEnabled.value = true
+        _appListStaggerEnabled.value = false
         _motionProfiles.value = FlueMotionProfiles.builtIns
         _activeMotionProfile.value = FlueMotionProfiles.Gentle
         _showStepCount.value = false
@@ -3917,6 +3946,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         _watchFaceTextExitAnimation.value = true
         _watchFaceStatusIndicators.value = true
         _watchFaceBottomFadeEnabled.value = false
+        _watchFaceLongPressMode.value = WatchFaceLongPressMode.CARDS
         _watchfaceCanvasDefault.value = WatchCanvasSettings.GLOBAL_DEFAULT
         _watchfaceCanvasOverrides.value = emptyMap()
         // 这一项的写盘半区在下面的 store.edit 里，StateFlow 半区必须同步复位，
@@ -4032,7 +4062,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                 it[KEY_APP_LIST_RETURN_ICON_FLOAT] = false
                 it[KEY_REDUCE_DYNAMIC_EFFECTS] = false
                 it.remove(KEY_SCREEN_SHAPE_OVERRIDE)
-                it[KEY_APP_LIST_STAGGER] = true
+                it[KEY_APP_LIST_STAGGER] = false
                 it[KEY_MOTION_PROFILE_ID] = FlueMotionProfiles.GENTLE_ID
                 it[KEY_CUSTOM_MOTION_PROFILES] = FlueMotionProfileJson.encodeLibrary(emptyList())
                 it[KEY_SHOW_STEP_COUNT] = false
@@ -4053,6 +4083,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                 it[KEY_WATCHFACE_TEXT_EXIT_ANIMATION] = true
                 it[KEY_WATCHFACE_STATUS_INDICATORS] = true
                 it[KEY_WATCHFACE_BOTTOM_FADE] = false
+                it[KEY_WATCHFACE_LONG_PRESS_MODE] = WatchFaceLongPressMode.CARDS.encode()
                 it[KEY_WATCHMAKER_FORCE_FILL] = false
                 it.remove(KEY_WATCHFACE_CANVAS_DEFAULT)
                 it.remove(KEY_WATCHFACE_CANVAS_OVERRIDES)
