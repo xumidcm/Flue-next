@@ -137,8 +137,10 @@ fun WatchFaceCardSelector(
     LaunchedEffect(items.map { it.stableId }) {
         val restoredPage = items.indexOfFirst { it.stableId == focusedStableId }
             .takeIf { it >= 0 }
-            ?: pagerState.currentPage.coerceAtMost(items.lastIndex)
-        if (restoredPage != pagerState.currentPage) pagerState.scrollToPage(restoredPage)
+            ?: pagerState.currentPage.coerceIn(0, items.lastIndex.coerceAtLeast(0))
+        if (items.isNotEmpty() && restoredPage != pagerState.currentPage) {
+            pagerState.scrollToPage(restoredPage)
+        }
     }
 
     FlueFullScreenOverlay(
@@ -284,9 +286,12 @@ fun WatchFaceCardSelector(
                 pageSpacing = 10.dp,
                 pageSize = PageSize.Fixed(cardWidth),
                 beyondViewportPageCount = 0,
-                key = { page -> items[page].stableId },
+                // The face list can change while the pager is still composing its
+                // previous pages (for example immediately after a download). Keep
+                // stale pages renderable until Pager clamps its current page.
+                key = { page -> items.getOrNull(page)?.stableId ?: "stale-watchface-page-$page" },
             ) { page ->
-                val item = items[page]
+                val item = items.getOrNull(page) ?: return@HorizontalPager
                 val pageOffset = (
                     (pagerState.currentPage - page) + pagerState.currentPageOffsetFraction
                     ).absoluteValue.coerceIn(0f, 1f)
