@@ -95,15 +95,15 @@ private fun agentChromeMetrics(): AgentChromeMetrics = when (LauncherTheme.style
 @Composable
 internal fun AgentTopBar(
     title: String,
-    totalTokens: Long? = null,
+    totalTokens: String? = null,
     fullscreen: Boolean,
     expandRestoreDescription: String,
     settingsDescription: String,
-    closeDescription: String,
+    compressDescription: String,
     onToggleSurface: () -> Unit,
     onOpenSettings: () -> Unit,
     onOpenHistory: () -> Unit,
-    onMinimize: () -> Unit,
+    onCompressContext: () -> Unit,
 ) {
     val style = LauncherTheme.style
     val metrics = agentChromeMetrics()
@@ -145,10 +145,10 @@ internal fun AgentTopBar(
             Text(stringResource(R.string.agent_total_tokens, it), color = style.topBarTextColor, style = MaterialTheme.typography.labelSmall, maxLines = 1)
         }
         AgentChromeIconButton(
-            icon = MiuixIcons.Close,
-            contentDescription = closeDescription,
+            icon = MiuixIcons.Refresh,
+            contentDescription = compressDescription,
             size = metrics.actionSize,
-            onClick = onMinimize,
+            onClick = onCompressContext,
         )
     }
 }

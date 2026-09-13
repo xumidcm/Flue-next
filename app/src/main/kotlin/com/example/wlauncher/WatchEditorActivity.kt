@@ -225,6 +225,8 @@ import com.flue.launcher.watchface.editor.WatchEditorSession
 import com.flue.launcher.watchface.editor.watchXmlAssetPath
 import com.flue.launcher.watchface.agent.runtime.WatchAgentViewModel
 import com.flue.launcher.watchface.agent.storage.AgentFeatureSettingsStore
+import com.flue.launcher.watchface.agent.storage.WatchAgentContinuation
+import com.flue.launcher.watchface.agent.storage.WatchAgentContinuationStore
 import com.flue.launcher.watchface.agent.workspace.WorkspaceManager
 import com.flue.launcher.watchface.agent.tools.WatchAgentDisplayMode
 import com.flue.launcher.watchface.agent.tools.WatchAgentPreviewMode
@@ -315,6 +317,8 @@ import com.flue.launcher.watchface.store.WatchStoreScreenType
 import com.flue.launcher.watchface.store.WatchStoreRepository
 import java.io.File
 import java.io.FileInputStream
+import java.nio.file.Files
+import java.nio.file.LinkOption
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -438,6 +442,13 @@ private fun WatchEditorRoute(
 ) {
     val context = androidx.compose.ui.platform.LocalContext.current
     val scope = rememberCoroutineScope()
+    val agentViewModel: WatchAgentViewModel = viewModel()
+    val agentWorkspaceManager = remember(context) {
+        WorkspaceManager(File(context.filesDir, "agent-runtime").toPath())
+    }
+    val agentContinuationStore = remember(context) { WatchAgentContinuationStore(context) }
+    var pendingAgentContinuation by remember { mutableStateOf<WatchAgentContinuation?>(null) }
+    var showAgentContinuationDialog by remember { mutableStateOf(false) }
     val openAgentSettings = remember(context) {
         {
             context.startActivity(
@@ -1358,11 +1369,51 @@ private fun WatchEditorRoute(
 
     DisposableEffect(session) {
         val active = session
+        val scopeId = active?.let { it.logicalId ?: "draft:${it.draftDirectory.name}" }
         onDispose {
             if (active != null) {
                 // A draft may contain tens of MiB of images. Never delete it on
-                // the UI thread while this Activity is closing.
+                // the UI thread while this Activity is closing. Persist the
+                // Agent draft first; close() then removes only the disposable
+                // cache copy and leaves a durable workspace continuation.
                 Dispatchers.IO.dispatch(EmptyCoroutineContext) {
+                    runCatching {
+                        val scope = scopeId ?: return@runCatching
+                        val conversationId = agentViewModel.activeConversationId()
+                        if (conversationId != null && active.isDirty) {
+                            val binding = agentWorkspaceManager.bindingFor(scope)
+                                ?: agentWorkspaceManager.create(
+                                    displayName = "Flue ${scope.take(28)}",
+                                    watchScope = scope,
+                                ).binding
+                            val workspaceId = binding?.workspaceId
+                                ?: error("无法创建表盘绑定工作区")
+                            val candidate = active.agentCandidate()
+                            val resources = active.resourceInventory().associate { asset ->
+                                asset.relativePath to Files.readAllBytes(
+                                    active.draftDirectory.toPath().resolve(asset.relativePath),
+                                )
+                            }
+                            check(
+                                agentWorkspaceManager.syncFaceMirror(
+                                    workspaceId = workspaceId,
+                                    watchXml = candidate.watchXml,
+                                    globalScript = candidate.globalScript,
+                                    resources = resources,
+                                ),
+                            ) { "镜像同步失败" }
+                            agentContinuationStore.save(
+                                watchScope = scope,
+                                workspaceId = workspaceId,
+                                conversationId = conversationId,
+                                mirrorRevision = candidate.revision,
+                            )
+                        } else {
+                            agentContinuationStore.clear(scope)
+                        }
+                    }.onFailure { error ->
+                        Log.w("WatchEditor", "保存 Agent 工作区续接草稿失败", error)
+                    }
                     runCatching { active.close() }
                 }
             }
@@ -1382,6 +1433,17 @@ private fun WatchEditorRoute(
         pendingAuthorModified = false
         openUploadAfterSave = uploadAfterSave
         showSaveDialog = true
+    }
+
+    /** Keep the Bash mirror downstream from the live editor before any save/export. */
+    suspend fun syncAgentMirrorFromEditor(active: WatchEditorSession) {
+        val scope = active.logicalId ?: "draft:${active.draftDirectory.name}"
+        val workspaceId = agentWorkspaceManager.bindingFor(scope)?.workspaceId ?: return
+        val candidate = active.agentCandidate()
+        val resources = active.resourceInventory().associate { asset ->
+            asset.relativePath to Files.readAllBytes(active.draftDirectory.toPath().resolve(asset.relativePath))
+        }
+        agentWorkspaceManager.syncFaceMirror(workspaceId, candidate.watchXml, candidate.globalScript, resources)
     }
 
     BackHandler(onBack = ::requestClose)
@@ -1520,6 +1582,10 @@ private fun WatchEditorRoute(
                                         )
                                     }
                                     active.flushDraftForPreview()
+                                    // Save is editor -> installed face. Refresh the
+                                    // downstream mirror first so a later Agent/Bash
+                                    // action cannot resurrect an older script.
+                                    syncAgentMirrorFromEditor(active)
                                     if (!createNewLogicalId) {
                                         active.saveCurrentRevision()
                                         active.logicalId?.let { launcherId ->
@@ -1686,10 +1752,11 @@ private fun WatchEditorRoute(
                     }
                 }
                 Box(modifier = Modifier.fillMaxSize()) {
-                    val agentViewModel: WatchAgentViewModel = viewModel()
                     val agentScope = active.logicalId ?: "draft:${active.draftDirectory.name}"
-                    val agentWorkspaceManager = remember(context) {
-                        WorkspaceManager(File(context.filesDir, "agent-runtime").toPath())
+                    LaunchedEffect(agentScope) {
+                        pendingAgentContinuation = withContext(Dispatchers.IO) {
+                            agentContinuationStore.load(agentScope)
+                        }
                     }
                     LaunchedEffect(agentScope) { agentViewModel.onEditorEntered(agentScope) }
                     DisposableEffect(Unit) {
@@ -1752,6 +1819,14 @@ private fun WatchEditorRoute(
                                 scope.launch {
                                     val next = withContext(Dispatchers.IO) {
                                         active.flushDraftForPreview()
+                                        val candidate = active.agentCandidate()
+                                        val workspaceId = agentWorkspaceManager.bindingFor(agentScope)?.workspaceId
+                                        if (workspaceId != null) {
+                                            val resources = active.resourceInventory().associate { asset ->
+                                                asset.relativePath to Files.readAllBytes(active.draftDirectory.toPath().resolve(asset.relativePath))
+                                            }
+                                            agentWorkspaceManager.syncFaceMirror(workspaceId, candidate.watchXml, candidate.globalScript, resources)
+                                        }
                                         active.snapshot()
                                     }
                                     updateSnapshot(next)
@@ -1764,6 +1839,55 @@ private fun WatchEditorRoute(
                         agentViewModel.bindToolHost(agentToolHost)
                         onDispose { agentViewModel.unbindToolHost(agentToolHost) }
                     }
+                    fun openAgentFromEditor() {
+                        if (pendingAgentContinuation != null) {
+                            showAgentContinuationDialog = true
+                        } else {
+                            agentViewModel.openAgent()
+                        }
+                    }
+
+                    fun restoreAgentContinuation() {
+                        val continuation = pendingAgentContinuation ?: return
+                        showAgentContinuationDialog = false
+                        busyMessage = context.getString(R.string.watch_editor_status_restoring_agent_draft)
+                        errorMessage = null
+                        scope.launch {
+                            runCatching {
+                                val restored = withContext(Dispatchers.IO) {
+                                    val mirror = agentWorkspaceManager.readFaceMirror(continuation.workspaceId)
+                                        ?: error("续接镜像不存在")
+                                    require(mirror.watchXml.isNotBlank()) { "续接镜像缺少 watch.xml" }
+                                    val resources = mirror.resources.associateWith { relative ->
+                                        val path = agentWorkspaceManager.resolveWorkspaceFile(
+                                            continuation.workspaceId,
+                                            "face/$relative",
+                                        ) ?: error("续接资源不存在：$relative")
+                                        require(Files.isRegularFile(path, LinkOption.NOFOLLOW_LINKS)) {
+                                            "续接资源不是普通文件：$relative"
+                                        }
+                                        Files.readAllBytes(path)
+                                    }
+                                    active.restoreAgentMirror(mirror.watchXml, mirror.globalScript, resources)
+                                }
+                                updateSnapshot(restored)
+                                previewToken++
+                                withContext(Dispatchers.IO) {
+                                    agentContinuationStore.clear(agentScope)
+                                }
+                                pendingAgentContinuation = null
+                                agentViewModel.resumeConversation(continuation.conversationId)
+                                agentViewModel.openAgent()
+                            }.onFailure { error ->
+                                errorMessage = context.localizedEditorError(
+                                    R.string.watch_editor_error_restore_agent_draft,
+                                    error,
+                                )
+                            }
+                            busyMessage = null
+                        }
+                    }
+
                     WatchEditorScreen(
                         snapshot = current,
                         selectedLayer = selected,
@@ -2204,6 +2328,7 @@ private fun WatchEditorRoute(
                         },
                         onPreviewRendererChanged = { previewRenderer = it },
                         onOpenAgentSettings = openAgentSettings,
+                        onOpenAgent = ::openAgentFromEditor,
                         watchScope = agentScope,
                         agentViewModel = agentViewModel,
                         onPreviewRefreshReady = { loadedToken ->
@@ -2221,6 +2346,33 @@ private fun WatchEditorRoute(
                             }
                         },
                     )
+                    val continuation = pendingAgentContinuation
+                    if (showAgentContinuationDialog && continuation != null) {
+                        FlueAlertDialog(
+                            onDismissRequest = { showAgentContinuationDialog = false },
+                            title = { Text(stringResource(R.string.watch_editor_agent_resume_title)) },
+                            text = { Text(stringResource(R.string.watch_editor_agent_resume_message)) },
+                            confirmButton = {
+                                TextButton(onClick = ::restoreAgentContinuation) {
+                                    Text(stringResource(R.string.watch_editor_agent_resume))
+                                }
+                            },
+                            dismissButton = {
+                                TextButton(
+                                    onClick = {
+                                        showAgentContinuationDialog = false
+                                        pendingAgentContinuation = null
+                                        scope.launch(Dispatchers.IO) {
+                                            agentContinuationStore.clear(agentScope)
+                                        }
+                                        agentViewModel.openAgent()
+                                    },
+                                ) {
+                                    Text(stringResource(R.string.watch_editor_agent_start_fresh))
+                                }
+                            },
+                        )
+                    }
                     cropRequest?.let { request ->
                         EditorImageCropOverlay(
                             uri = request.uri,
@@ -2481,6 +2633,7 @@ private fun WatchEditorScreen(
     watchScope: String,
     agentViewModel: WatchAgentViewModel,
     onOpenAgentSettings: () -> Unit,
+    onOpenAgent: () -> Unit = { agentViewModel.openAgent() },
 ) {
     var panel by rememberSaveable { mutableStateOf(WatchEditorPanel.LAYERS) }
     var previousEditorPanel by rememberSaveable { mutableStateOf(WatchEditorPanel.LAYERS) }
@@ -2992,7 +3145,7 @@ private fun WatchEditorScreen(
                                 if (candidate == WatchEditorPanel.AGENT) {
                                     if (panel != WatchEditorPanel.AGENT) previousEditorPanel = panel
                                     editorLayout = WatchEditorLayout.SPLIT
-                                    agentViewModel.openAgent()
+                                    onOpenAgent()
                                 }
                                 panel = candidate
                             },

@@ -13,7 +13,7 @@ class AgentAssistantPanelUiContractTest {
 
         assertTrue(panel.contains("generationStatus = state.generationStatus"))
         assertTrue(panel.contains("inputTokens = state.inputTokens"))
-        assertTrue(panel.contains("outputTokens = state.outputTokens"))
+        assertTrue(panel.contains("outputTokens = state.turnTokens"))
         assertTrue(panel.contains("AgentGenerationStatus.THINKING"))
         assertTrue(panel.contains("AgentGenerationStatus.PROCESSING_FOLLOW_UP"))
     }
