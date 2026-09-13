@@ -380,6 +380,12 @@ fun AgentSettingsPage(onBack: () -> Unit) {
                             subtitle = stringResource(R.string.agent_overview_features_summary),
                             onClick = { destination = AgentSettingsDestination.FEATURES },
                             leading = { SettingsIcon(MiuixIcons.Sparkle, MiuixIcons.Sparkle) },
+                        )
+                        AgentSettingsEntry(
+                            title = stringResource(R.string.agent_bash_permissions),
+                            subtitle = stringResource(R.string.agent_bash_manual_summary),
+                            onClick = { destination = AgentSettingsDestination.BASH_PERMISSIONS },
+                            leading = { SettingsIcon(MiuixIcons.Tool, MiuixIcons.Tool) },
                             last = true,
                         )
                     }

@@ -421,7 +421,7 @@ class WorkspaceManager private constructor(
         }
         resources.forEach { (relativePath, bytes) ->
             val clean = WorkspacePathPolicy.sanitizeRelative(relativePath)
-            require(FACE_RESOURCE_PREFIXES.any { clean.startsWith(it) }) {
+            require(isAllowedFaceResource(clean)) {
                 "Face resource path is not allowed: $relativePath"
             }
             require(bytes.size <= MAX_FACE_MIRROR_FILE_BYTES) { "Face resource exceeds mirror file limit: $relativePath" }
@@ -631,6 +631,14 @@ class WorkspaceManager private constructor(
         const val DEFAULT_QUOTA_BYTES: Long = Long.MAX_VALUE
         private const val MAX_FACE_MIRROR_FILE_BYTES: Int = 20 * 1024 * 1024
         private val FACE_RESOURCE_PREFIXES = listOf("images/", "fonts/", "fonts_bm/")
+        private val FACE_ROOT_IMAGE_EXTENSIONS = setOf("png", "jpg", "jpeg", "webp", "gif", "bmp", "avif")
         private val ALLOWED_WORKSPACE_MOUNTS = setOf("workspace", "generated", "previews", "home", "face")
+
+        private fun isAllowedFaceResource(path: String): Boolean {
+            if (FACE_RESOURCE_PREFIXES.any { path.startsWith(it) }) return true
+            // Legacy .watch archives may keep bitmap assets beside watch.xml.
+            // Allow those files while refusing arbitrary root-level metadata.
+            return '/' !in path && path.substringAfterLast('.', "").lowercase() in FACE_ROOT_IMAGE_EXTENSIONS
+        }
     }
 }

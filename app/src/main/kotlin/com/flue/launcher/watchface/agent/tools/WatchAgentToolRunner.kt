@@ -272,7 +272,7 @@ private fun Any.toLongValue(): Long = when (this) {
 }
 
 private fun WatchAgentToolCall.documentPath(name: String): WatchAgentDocumentPath =
-    WatchAgentDocumentPath.fromWirePath(requiredString(name))
+    WatchAgentDocumentPath.fromWirePath(requiredString(name).removePrefix("face/"))
         ?: throw IllegalArgumentException("不支持的文档路径：${arguments[name]}")
 
 private fun WatchAgentToolCall.editRequest() = WatchAgentEditDocumentRequest(

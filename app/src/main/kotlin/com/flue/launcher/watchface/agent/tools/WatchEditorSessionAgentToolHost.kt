@@ -146,9 +146,10 @@ class WatchEditorSessionAgentToolHost(
         validateGlobalScript(mirror.globalScript)?.let { diagnostics += it }
         IMAGE_PATH_PATTERN.findAll(mirror.watchXml).forEach { match ->
             match.groupValues[2].split('`').map(String::trim).filter { it.isNotBlank() }.forEach { raw ->
-                val path = raw.removePrefix("/").let { if (it.startsWith("images/", true)) it else "images/$it" }
-                if (path !in mirror.resources) {
-                    diagnostics += WatchAgentDiagnostic(WatchAgentDiagnosticSeverity.ERROR, "missing_resource", "镜像缺少资源：$path")
+                val clean = raw.removePrefix("/")
+                val canonical = clean.let { if (it.startsWith("images/", true)) it else "images/$it" }
+                if (clean !in mirror.resources && canonical !in mirror.resources) {
+                    diagnostics += WatchAgentDiagnostic(WatchAgentDiagnosticSeverity.ERROR, "missing_resource", "镜像缺少资源：$clean")
                 }
             }
         }

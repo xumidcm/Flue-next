@@ -24,12 +24,15 @@ class AgentWorkspaceImageTools(private val manager: WorkspaceManager, private va
     private fun workspace() = manager.bindingFor(watchScope)?.let { manager.get(it.workspaceId) }
         ?: throw WatchAgentToolException("workspace_required", "请先在对话顶部选择工作区")
 
+    /** Lists every regular file in the managed workspace and bound face mirror.
+     * Image filtering belongs to [readImage]; this browser must also expose
+     * watch.xml, scripts, fonts and other text/resources so the model can pick
+     * the right follow-up tool.
+     */
     fun listFiles(): List<String> {
         val workspace = workspace()
         return buildList {
-            // `face/images` is the read-only view of the currently bound watch face;
-            // all other mounts remain scoped to this workspace.
-            for (directory in listOf("workspace", "generated", "previews", "home", "face/images")) {
+            for (directory in listOf("workspace", "generated", "previews", "home", "face")) {
                 val root = WorkspacePathPolicy.resolveInside(workspace.paths.root, directory)
                 if (!Files.isDirectory(root)) continue
                 Files.walk(root, 8).use { stream ->
@@ -43,15 +46,28 @@ class AgentWorkspaceImageTools(private val manager: WorkspaceManager, private va
                     }
                 }
             }
-        }
+        }.distinct().sorted()
     }
 
     fun readImage(path: String): WatchAgentImageResult {
         val workspace = workspace()
-        val relative = WorkspacePathPolicy.sanitizeRelative(path)
-        require(relative.substringBefore('/') in setOf("workspace", "generated", "previews", "home") || relative.startsWith("face/images/")) { "只能读取当前工作区或绑定表盘素材目录" }
-        val file = WorkspacePathPolicy.resolveInside(workspace.paths.root, relative).toFile()
-        return WatchAgentImageResult(relative, AgentImageInput.fromFile(file))
+        val requested = WorkspacePathPolicy.sanitizeRelative(path)
+        val candidates = buildList {
+            // inspect_face reports archive-relative paths such as images/foo.png;
+            // resolve those against the bound face mirror first. Explicit
+            // face/ paths remain accepted for list_workspace_files round trips.
+            if (!requested.startsWith("face/")) add("face/$requested")
+            add(requested)
+        }.distinct()
+        val resolved = candidates.firstNotNullOfOrNull { candidate ->
+            val root = candidate.substringBefore('/')
+            val allowedWorkspace = root in setOf("workspace", "generated", "previews", "home")
+            val allowedFace = candidate.startsWith("face/")
+            if ((!allowedWorkspace && !allowedFace) || !isImagePath(candidate)) return@firstNotNullOfOrNull null
+            val file = WorkspacePathPolicy.resolveInside(workspace.paths.root, candidate)
+            if (Files.isRegularFile(file, java.nio.file.LinkOption.NOFOLLOW_LINKS)) candidate to file else null
+        } ?: throw IllegalArgumentException("图片不存在或不属于当前工作区/表盘包：$path")
+        return WatchAgentImageResult(resolved.first, AgentImageInput.fromFile(resolved.second.toFile()))
     }
 
     /** Stores an API result atomically through WorkspaceManager quota and path checks. */
@@ -74,5 +90,12 @@ class AgentWorkspaceImageTools(private val manager: WorkspaceManager, private va
                 else -> throw WatchAgentToolException("workspace_write_failed", "无法保存生成图片")
             }
         } finally { Files.deleteIfExists(temporary) }
+    }
+
+    private fun isImagePath(path: String): Boolean =
+        path.substringAfterLast('.', "").lowercase() in IMAGE_EXTENSIONS
+
+    private companion object {
+        val IMAGE_EXTENSIONS = setOf("png", "jpg", "jpeg", "webp", "gif", "bmp", "avif")
     }
 }

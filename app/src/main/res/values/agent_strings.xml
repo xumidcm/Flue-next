@@ -156,7 +156,7 @@
     <string name="agent_bash_attachment_import">允许 Agent 导入附件</string>
     <string name="agent_bash_manual_summary">这些设置约束 Agent 工具。你在终端中点击“执行命令”本身视为一次明确的手动授权。</string>
     <string name="agent_rootfs">Rootfs、工作区和 Bash 审批</string>
-    <string name="agent_rootfs_summary">默认每次执行前确认；工具失败只展示摘要，不中断会话。</string>
+    <string name="agent_rootfs_summary">默认自动执行；可在权限管理中切换为逐条确认或仅高风险确认。</string>
     <string name="agent_data">数据管理、会话和缓存</string>
     <string name="agent_data_summary">会话按表盘隔离；API 密钥不会进入日志、聊天记录或 .watch。</string>
     <string name="agent_delete_provider_title">删除 Provider？</string>
@@ -179,6 +179,8 @@
     <string name="agent_status_follow_up">正在处理下一轮提示</string>
     <string name="agent_reasoning_active">正在思考…</string>
     <string name="agent_reasoning_title">思考过程</string>
+    <string name="agent_reasoning_expand">展开</string>
+    <string name="agent_reasoning_collapse">收起</string>
     <string name="agent_back_to_bottom">回到底部</string>
     <string name="agent_add_attachment">添加附件</string>
     <string name="agent_attachment_failed">附件导入失败：%1$s</string>
