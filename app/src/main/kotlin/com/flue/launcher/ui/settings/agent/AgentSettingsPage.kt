@@ -290,6 +290,7 @@ fun AgentSettingsPage(onBack: () -> Unit) {
             val saved = withContext(Dispatchers.IO) {
                 featureStore.save(
                     AgentFeatureSettings(
+                        enabled = agentEnabled,
                         imageBaseUrl = imageBaseUrl.trim(),
                         imageModelId = imageModel.trim(),
                         tavilyBaseUrl = tavilyBaseUrl.trim(),

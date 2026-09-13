@@ -197,6 +197,10 @@
     <string name="agent_tool_name_edit">精确编辑文档</string>
     <string name="agent_tool_name_write">写入表盘文档</string>
     <string name="agent_tool_name_bash">运行 Bash</string>
+    <string name="agent_tool_name_web_search">网络搜索</string>
+    <string name="agent_tool_name_fetch_web_page">抓取网页</string>
+    <string name="agent_tool_name_generate_image">生成图片</string>
+    <string name="agent_tool_name_edit_image">修改图片</string>
     <string name="agent_tool_name_generic">处理表盘</string>
     <string name="agent_tool_initialization_failed">工具初始化失败；会话与已完成结果已保留，可以重试。</string>
     <string name="agent_tool_failed_summary">工具执行失败</string>
@@ -208,6 +212,10 @@
     <string name="agent_tool_document_read">已读取 %1$s · revision %2$d</string>
     <string name="agent_tool_document_updated">已更新 %1$s · revision %2$d</string>
     <string name="agent_tool_search_summary">找到 %1$d 条相关知识</string>
+    <string name="agent_tool_web_search_summary">找到 %1$d 条网页结果</string>
+    <string name="agent_tool_web_fetch_summary">已抓取 %1$s（%2$d 个字符）</string>
+    <string name="agent_tool_image_generated_summary">已生成图片：%1$s</string>
+    <string name="agent_tool_image_edited_summary">已保存修改后的图片：%1$s</string>
     <string name="agent_tool_bash_summary">命令：%1$s\n输出：%2$s</string>
     <string name="agent_tool_bash_exit_code">退出码：%1$d</string>
     <string name="agent_tool_bash_truncated">输出超过限制，已截断</string>
@@ -235,6 +243,12 @@
     <string name="agent_tool_detail_query">检索内容：%1$s</string>
     <string name="agent_tool_detail_hits">命中：%1$d 条</string>
     <string name="agent_tool_detail_hit">%1$s：%2$s</string>
+    <string name="agent_tool_detail_web_hit">%1$s · %2$s：%3$s</string>
+    <string name="agent_tool_detail_url">网址：%1$s</string>
+    <string name="agent_tool_detail_source">来源：%1$s</string>
+    <string name="agent_tool_detail_truncated">正文截断：%1$s</string>
+    <string name="agent_tool_detail_requested_size">请求尺寸：%1$s</string>
+    <string name="agent_tool_detail_timing">耗时：%1$d ms（%2$d → %3$d）</string>
     <string name="agent_copy">复制</string>
     <string name="agent_edit">编辑</string>
     <string name="agent_retry">重试</string>

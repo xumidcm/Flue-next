@@ -15,6 +15,10 @@ import com.flue.launcher.watchface.agent.tools.WatchAgentDocumentResult
 import com.flue.launcher.watchface.agent.tools.WatchAgentInspectFaceResult
 import com.flue.launcher.watchface.agent.tools.WatchAgentKnowledgeHit
 import com.flue.launcher.watchface.agent.tools.WatchAgentKnowledgeResult
+import com.flue.launcher.watchface.agent.tools.WatchAgentWebSearchResult
+import com.flue.launcher.watchface.agent.tools.WatchAgentWebSearchHit
+import com.flue.launcher.watchface.agent.tools.WatchAgentWebPageResult
+import com.flue.launcher.watchface.agent.tools.WatchAgentGeneratedImageResult
 import com.flue.launcher.watchface.agent.tools.WatchAgentLayerSummary
 import com.flue.launcher.watchface.agent.tools.WatchAgentPreviewResult
 import com.flue.launcher.watchface.agent.tools.WatchAgentToolCall
@@ -196,6 +200,9 @@ class WatchAgentLoop(
             buildMap {
                 put("ok", result.succeeded)
                 put("revision", result.revision)
+                result.startedAt?.let { put("started_at", it) }
+                result.completedAt?.let { put("completed_at", it) }
+                result.durationMs?.let { put("duration_ms", it) }
                 result.error?.let { error -> put("error", mapOf("code" to error.code, "message" to error.message)) }
                 if (result.content != null) put("result", jsonValue(result.content))
             },
@@ -206,6 +213,11 @@ class WatchAgentLoop(
         is JSONObject, is JSONArray -> value.toString()
         is String, is Number, is Boolean -> value
         is com.flue.launcher.watchface.agent.tools.WatchAgentImageResult -> mapOf("path" to value.path, "mime_type" to value.image.mimeType, "image_available" to true)
+        is WatchAgentGeneratedImageResult -> mapOf(
+            "path" to value.path, "mime_type" to value.image.mimeType, "image_available" to true,
+            "action" to value.action, "format" to value.format, "size" to value.size,
+            "byte_count" to value.byteCount,
+        )
         is ByteArray -> mapOf("byte_count" to value.size)
         is Enum<*> -> value.name.lowercase()
         is Map<*, *> -> value.entries.associate { it.key.toString() to jsonValue(it.value) }
@@ -225,6 +237,9 @@ class WatchAgentLoop(
         is WatchAgentDocumentMutationResult -> mapOf("path" to value.path.wirePath, "revision" to value.revision, "content" to value.content)
         is WatchAgentKnowledgeResult -> mapOf("query" to value.query, "hits" to jsonValue(value.hits))
         is WatchAgentKnowledgeHit -> mapOf("title" to value.title, "snippet" to value.snippet, "source" to value.source, "score" to value.score)
+        is WatchAgentWebSearchResult -> mapOf("query" to value.query, "hits" to jsonValue(value.hits))
+        is WatchAgentWebSearchHit -> mapOf("title" to value.title, "url" to value.url, "snippet" to value.snippet, "score" to value.score)
+        is WatchAgentWebPageResult -> mapOf("url" to value.url, "title" to value.title, "content" to value.content, "source" to value.source, "truncated" to value.truncated)
         is WatchAgentValidationResult -> mapOf(
             "revision" to value.revision, "valid" to value.valid,
             "diagnostics" to jsonValue(value.diagnostics), "expression_counts" to jsonValue(value.expressionCounts),
@@ -247,6 +262,7 @@ class WatchAgentLoop(
 
     private fun imageResult(result: WatchAgentToolResult): com.flue.launcher.watchface.agent.provider.AgentRequestImage? = when (val value = result.content) {
         is com.flue.launcher.watchface.agent.tools.WatchAgentImageResult -> value.image
+        is WatchAgentGeneratedImageResult -> value.image
         is WatchAgentPreviewResult -> value.imageBytes?.let {
             runCatching { com.flue.launcher.watchface.agent.provider.AgentImageInput.fromBytes(it) }.getOrNull()
         }
