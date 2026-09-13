@@ -41,6 +41,29 @@ class AgentConversationRepository(context: Context) {
         return message
     }
 
+    /**
+     * Replaces a message without changing its position in the conversation.
+     *
+     * Streaming assistant messages are rendered by a stable LazyColumn key. Moving
+     * the same id to the end on every persistence update makes the reply jump from
+     * the top of the viewport to the bottom when a tool turn completes.
+     */
+    @Synchronized
+    fun updateMessage(message: AgentMessage): AgentMessage {
+        val all = messages(message.conversationId)
+        val index = all.indexOfFirst { it.id == message.id }
+        if (index < 0) return appendMessage(message.conversationId, message)
+        val next = all.toMutableList().apply { set(index, message) }
+        preferences.edit().putString(
+            messagesKey(message.conversationId),
+            JSONArray().apply { next.forEach { put(messageJson(it)) } }.toString(),
+        ).apply()
+        getConversation(message.conversationId)?.let { current ->
+            writeConversation(current.copy(updatedAt = maxOf(current.updatedAt, message.createdAt)))
+        }
+        return message
+    }
+
     @Synchronized
     fun listMessages(conversationId: String): List<AgentMessage> = messages(conversationId)
 

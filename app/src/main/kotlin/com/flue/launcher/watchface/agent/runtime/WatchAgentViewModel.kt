@@ -254,10 +254,7 @@ class WatchAgentViewModel(application: Application) : AndroidViewModel(applicati
         titleJobs[conversation.id] = viewModelScope.launch {
             try {
                 val completion = providerClient.send(profile.copy(reasoningEffort = null), apiKey,
-                    AgentProviderRequest(messages = listOf(
-                        AgentRequestMessage(AgentMessageRole.SYSTEM, "你是会话标题生成器。根据对话主题生成唯一一行标题。严格只输出标题正文，不加引号、Markdown、编号、前缀、解释或结尾标点；使用用户主要语言；中文最多6个汉字，其他语言最多24个字符。标题概括用户正在解决的事情。"),
-                        AgentRequestMessage(AgentMessageRole.USER, "用户：${prompt.take(1500)}\n助手：${answer.take(1500)}"),
-                    ), maxOutputTokens = 512))
+                    AgentConversationTitlePrompt.request(prompt, answer))
                 val title = completion.text.lineSequence().firstOrNull().orEmpty()
                     .replace(Regex("""^[\s\"'“”‘’`#：:、-]+|[\s\"'“”‘’`。.!！?？]+$"""), "")
                     .trim()
@@ -418,7 +415,11 @@ class WatchAgentViewModel(application: Application) : AndroidViewModel(applicati
         _conversations.value = repository.listConversations(_state.value.watchScope)
         refresh(conversation.id)
         _state.update { it.copy(inputDraft = "", attachments = emptyList(), editingMessageId = null, attachmentError = null, isGenerating = true) }
-        val assistantId = java.util.UUID.randomUUID().toString()
+        // Keep one stable placeholder for each provider turn. A tool turn updates
+        // the placeholder in place, then the next turn gets a new placeholder
+        // after the tool results. This preserves the provider's timeline while
+        // keeping LazyColumn item identity stable during streaming.
+        var assistantId = java.util.UUID.randomUUID().toString()
         repository.appendMessage(
             conversation.id,
             AgentMessage(
@@ -544,25 +545,17 @@ class WatchAgentViewModel(application: Application) : AndroidViewModel(applicati
                                     },
                                 )
                             }
-                            repository.appendMessage(
-                                conversation.id,
-                                AgentMessage(
-                                    id = java.util.UUID.randomUUID().toString(),
-                                    conversationId = conversation.id,
-                                    role = AgentMessageRole.ASSISTANT,
-                                    content = content,
-                                    createdAt = System.currentTimeMillis(),
-                                    toolCalls = calls,
-                                    reasoningContent = reasoningAccumulator.snapshot().takeIf(String::isNotBlank),
-                                ),
+                            updateAssistant(
+                                generation = generation,
+                                messageId = assistantId,
+                                content = content,
+                                status = AgentMessageStatus.COMPLETE,
+                                reasoningContent = reasoningAccumulator.snapshot(),
+                                toolCalls = calls,
                             )
                             pendingToolCalls.recordCalls(calls)
                             streamAccumulator.reset()
                             reasoningAccumulator.reset()
-                            publishGeneration(generation) {
-                                updateAssistantPreview(assistantId, "")
-                                refresh(conversation.id)
-                            }
                         },
                         onToolResults = { results ->
                             results.forEach { result ->
@@ -581,6 +574,21 @@ class WatchAgentViewModel(application: Application) : AndroidViewModel(applicati
                                 )
                                 pendingToolCalls.recordResults(listOf(result))
                             }
+                            // Reserve the exact position where the next provider
+                            // turn will stream. It is appended only after all
+                            // results, so no text can be reinserted above them.
+                            assistantId = java.util.UUID.randomUUID().toString()
+                            repository.appendMessage(
+                                conversation.id,
+                                AgentMessage(
+                                    id = assistantId,
+                                    conversationId = conversation.id,
+                                    role = AgentMessageRole.ASSISTANT,
+                                    content = "",
+                                    createdAt = System.currentTimeMillis(),
+                                    status = AgentMessageStatus.STREAMING,
+                                ),
+                            )
                             publishGeneration(generation) { refresh(conversation.id) }
                             updateGenerationState(generation) { it.copy(generationStatus = AgentGenerationStatus.THINKING) }
                         },
@@ -716,18 +724,19 @@ class WatchAgentViewModel(application: Application) : AndroidViewModel(applicati
         content: String,
         status: AgentMessageStatus,
         reasoningContent: String? = null,
+        toolCalls: List<AgentToolCallRecord> = emptyList(),
     ) {
-        repository.appendMessage(
-            generation.conversationId,
+        val existing = repository.listMessages(generation.conversationId).firstOrNull { it.id == messageId }
+        repository.updateMessage(
             AgentMessage(
                 id = messageId,
                 conversationId = generation.conversationId,
                 role = AgentMessageRole.ASSISTANT,
                 content = content,
-                createdAt = repository.listMessages(generation.conversationId).firstOrNull { it.id == messageId }?.createdAt
-                    ?: System.currentTimeMillis(),
+                createdAt = existing?.createdAt ?: System.currentTimeMillis(),
                 status = status,
                 reasoningContent = reasoningContent?.takeIf(String::isNotBlank),
+                toolCalls = toolCalls,
             ),
         )
         publishGeneration(generation) { refresh(generation.conversationId) }
