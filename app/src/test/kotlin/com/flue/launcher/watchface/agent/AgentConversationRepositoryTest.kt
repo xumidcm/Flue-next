@@ -154,6 +154,39 @@ class AgentConversationRepositoryTest {
     }
 
     @Test
+    fun `streaming assistant updates preserve the original timeline position`() {
+        val conversation = repository.createConversation("face-a", now = 10L)
+        val user = AgentMessage.user(conversation.id, "检查表盘", 20L)
+        val assistant = AgentMessage(
+            id = "assistant-stream",
+            conversationId = conversation.id,
+            role = AgentMessageRole.ASSISTANT,
+            content = "先读取表盘。",
+            createdAt = 21L,
+            status = AgentMessageStatus.STREAMING,
+        )
+        val tool = AgentMessage(
+            id = "tool-result",
+            conversationId = conversation.id,
+            role = AgentMessageRole.TOOL,
+            content = "{\"ok\":true}",
+            createdAt = 22L,
+            toolName = "inspect_face",
+        )
+        repository.appendMessage(conversation.id, user)
+        repository.appendMessage(conversation.id, assistant)
+        repository.appendMessage(conversation.id, tool)
+
+        repository.updateMessage(assistant.copy(content = "读取完成。", status = AgentMessageStatus.COMPLETE))
+
+        assertEquals(
+            listOf(user.id, assistant.id, tool.id),
+            repository.listMessages(conversation.id).map { it.id },
+        )
+        assertEquals("读取完成。", repository.listMessages(conversation.id)[1].content)
+    }
+
+    @Test
     fun `persisted tool round keeps user assistant reasoning and tool payload in separate channels`() {
         val conversation = repository.createConversation("face-a", now = 10L)
         repository.appendMessage(

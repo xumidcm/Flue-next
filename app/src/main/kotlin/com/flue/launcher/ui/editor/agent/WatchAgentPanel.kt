@@ -56,6 +56,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.zIndex
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.AnnotatedString
@@ -177,7 +178,14 @@ private fun AgentSurfaceContent(viewModel: WatchAgentViewModel, messages: List<A
         )
         AgentQuickControls(viewModel)
         Box(Modifier.weight(1f).fillMaxWidth()) {
-            LazyColumn(Modifier.fillMaxSize().padding(horizontal = 10.dp), state = listState, verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            LazyColumn(
+                Modifier.fillMaxSize().padding(horizontal = 10.dp),
+                state = listState,
+                // Keep the floating return affordance clear of the last tool card
+                // and composer while retaining a compact timeline.
+                contentPadding = PaddingValues(bottom = 64.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
                 if (displayItems.isEmpty()) item { EmptyAgentState() }
                 items(displayItems, key = AgentConversationItem::key) { item ->
                     when (item) {
@@ -222,7 +230,7 @@ private fun AgentSurfaceContent(viewModel: WatchAgentViewModel, messages: List<A
                 // appear and disappear every frame. It becomes visible again as
                 // soon as the user scrolls away (followOutput=false).
                 visible = !nearBottom && displayItems.isNotEmpty() && (!state.isGenerating || !followOutput),
-                modifier = Modifier.align(Alignment.BottomCenter),
+                modifier = Modifier.align(Alignment.BottomCenter).zIndex(2f),
                 enter = androidx.compose.animation.slideInVertically { it } + androidx.compose.animation.fadeIn(),
                 exit = androidx.compose.animation.slideOutVertically { it } + androidx.compose.animation.fadeOut(),
             ) {
@@ -360,7 +368,7 @@ private fun AgentAssistantTurn(
             .fillMaxWidth()
             .animateContentSize()
             .padding(horizontal = 4.dp, vertical = 2.dp),
-        verticalArrangement = Arrangement.spacedBy(7.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Icon(
@@ -400,7 +408,12 @@ private fun AgentAssistantTurn(
             }
             if (agentMessageLayout(message) == AgentMessageLayout.ASSISTANT_FLOW && message.content.isNotBlank()) {
                 AgentTextMessageContent(
-                    message, actionsEnabled, onCopy, {}, onRetry, outputTokens,
+                    message,
+                    actionsEnabled,
+                    { onCopy(messages.filter { it.role == AgentMessageRole.ASSISTANT && it.content.isNotBlank() }.joinToString("\n\n") { it.content }) },
+                    {},
+                    onRetry,
+                    outputTokens,
                     showActions = message.id == finalAssistantId && message.status == AgentMessageStatus.COMPLETE,
                 )
             }
@@ -408,19 +421,23 @@ private fun AgentAssistantTurn(
                 message.toolCalls.forEach { call ->
                     val result = toolResults.firstOrNull { it.id !in consumedResults && it.toolCallId == call.id }
                     result?.let { consumedResults += it.id }
+                    // Provider fallback ids can repeat between turns. Scope the
+                    // expansion key to the owning assistant message so one card
+                    // never opens or closes another card.
+                    val toolKey = "${message.id}:${call.id}"
                     AgentToolInvocationStep(
                         call = call,
                         result = result,
-                        showDetails = call.id in expandedToolIds,
-                        detailsExpanded = call.id in expandedToolDetailIds,
-                        onToggle = { onToggleTool(call.id) },
-                        onToggleDetails = { onToggleToolDetails(call.id) },
+                        showDetails = toolKey in expandedToolIds,
+                        detailsExpanded = toolKey in expandedToolDetailIds,
+                        onToggle = { onToggleTool(toolKey) },
+                        onToggleDetails = { onToggleToolDetails(toolKey) },
                     )
                 }
             }
             if (agentMessageLayout(message) == AgentMessageLayout.TOOL_STEP && message.id !in consumedResults) {
                 consumedResults += message.id
-                val toolId = message.toolCallId ?: message.id
+                val toolId = "tool-result:${message.id}"
                 AgentToolResultStep(
                     result = message,
                     showDetails = toolId in expandedToolIds,
@@ -643,8 +660,9 @@ private fun AgentTextMessageContent(
         }
         message.content.takeIf(String::isNotBlank)?.let { content ->
             SafeMarkdownText(content, LauncherTheme.style.bodyColor)
-            val canCopyWholeTurn = message.role == AgentMessageRole.ASSISTANT && message.status == AgentMessageStatus.COMPLETE && showActions
+            val canCopyWholeTurn = message.role == AgentMessageRole.ASSISTANT && message.status == AgentMessageStatus.COMPLETE && showActions && actionsEnabled
             val canShowStreamingMeta = message.role == AgentMessageRole.ASSISTANT && message.status == AgentMessageStatus.STREAMING
+            val canRetry = showActions && actionsEnabled && (message.role == AgentMessageRole.ASSISTANT || isUser)
             if (canCopyWholeTurn || canShowStreamingMeta || isUser) Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
                 if (message.role == AgentMessageRole.ASSISTANT && message.status == AgentMessageStatus.STREAMING && outputTokens != null) {
                     Text(
@@ -656,7 +674,7 @@ private fun AgentTextMessageContent(
                 }
                 if (canCopyWholeTurn) IconButton(onClick = { onCopy(content) }, modifier = Modifier.size(28.dp)) { Icon(MiuixIcons.Copy, stringResource(R.string.agent_copy), modifier = Modifier.size(15.dp)) }
                 if (isUser) IconButton(enabled = actionsEnabled, onClick = onEdit, modifier = Modifier.size(28.dp)) { Icon(MiuixIcons.Edit, stringResource(R.string.agent_edit), modifier = Modifier.size(15.dp)) }
-                if (message.role == AgentMessageRole.ASSISTANT || isUser) IconButton(enabled = actionsEnabled, onClick = onRetry, modifier = Modifier.size(28.dp)) { Icon(MiuixIcons.Retry, stringResource(R.string.agent_retry), modifier = Modifier.size(15.dp)) }
+                if (canRetry) IconButton(onClick = onRetry, modifier = Modifier.size(28.dp)) { Icon(MiuixIcons.Retry, stringResource(R.string.agent_retry), modifier = Modifier.size(15.dp)) }
             }
         }
     }

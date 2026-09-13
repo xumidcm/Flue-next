@@ -9,6 +9,7 @@ class WatchAgentPromptTest {
     fun `baseline names native preview and workspace gating`() {
         assertTrue(WatchAgentPrompt.baseline.contains("validate_face"))
         assertTrue(WatchAgentPrompt.baseline.contains("未安装 Rootfs 或未绑定工作区"))
+        assertTrue(WatchAgentPrompt.baseline.contains("只有用户明确要求修改且已有可编辑来源时"))
         assertTrue(WatchAgentPrompt.promptVersion.isNotBlank())
         assertTrue(WatchAgentPrompt.toolSchemaVersion.isNotBlank())
     }
