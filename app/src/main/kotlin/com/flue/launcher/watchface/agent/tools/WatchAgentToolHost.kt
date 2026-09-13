@@ -15,6 +15,13 @@ interface WatchAgentToolHost {
     fun writeDocument(request: WatchAgentWriteDocumentRequest): WatchAgentDocumentMutationResult
 
     fun syncFaceMirror(): Any = throw WatchAgentToolException("mirror_unavailable", "当前宿主未绑定表盘镜像")
+    /**
+     * Establishes an editor-to-mirror baseline immediately before Bash runs.
+     * Hosts without a bound face may keep the default no-op implementation.
+     * This prevents a first Bash call from treating an old mirror as the
+     * source of truth after the editor draft has changed.
+     */
+    fun prepareBashMirror() = Unit
     fun validateFaceMirror(): Any = throw WatchAgentToolException("mirror_unavailable", "当前宿主未绑定表盘镜像")
     fun commitFaceMirror(expectedRevision: Long): Any = throw WatchAgentToolException("mirror_unavailable", "当前宿主未绑定表盘镜像")
     fun importFaceResource(path: String): Any = throw WatchAgentToolException("mirror_unavailable", "当前宿主未绑定表盘镜像")

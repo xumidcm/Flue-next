@@ -39,11 +39,18 @@ fun interface AgentCompletionExecutor {
     ): AgentCompletion
 }
 
-/** Runs provider turns until the model returns text without another tool batch. */
+/**
+ * Runs provider turns until the model returns text without another tool batch.
+ *
+ * The normal Agent session has no tool-turn cap. Cancellation, provider
+ * failure, and the existing duplicate/stale protections remain the ways to
+ * stop a run. A finite value can still be injected by tests or a host that
+ * deliberately wants a bounded loop.
+ */
 class WatchAgentLoop(
     private val completionExecutor: AgentCompletionExecutor,
     private val toolRunner: WatchAgentToolRunner,
-    private val maxTurns: Int = DEFAULT_MAX_TURNS,
+    private val maxTurns: Int? = null,
     private val acceptsImages: Boolean = true,
 ) {
     suspend fun run(
@@ -59,7 +66,8 @@ class WatchAgentLoop(
         // running read-only tools. Start the transaction at the first write.
         var transaction: com.flue.launcher.watchface.agent.tools.WatchAgentUndoGroup? = null
         try {
-            repeat(maxTurns) { turn ->
+            var turn = 0
+            while (maxTurns == null || turn < maxTurns) {
                 currentCoroutineContext().ensureActive()
                 if (turn > 0) onBeforeNextTurn()?.let(messages::add)
                 val completion = completionExecutor.complete(
@@ -121,6 +129,7 @@ class WatchAgentLoop(
                         images = images.map { it.second },
                     )
                 }
+                turn++
             }
             throw IllegalStateException("Agent 工具循环超过 $maxTurns 轮，已停止以避免重复调用")
         } catch (error: Throwable) {
@@ -272,10 +281,6 @@ class WatchAgentLoop(
             "image_byte_count" to (value.imageBytes?.size ?: 0), "diagnostics" to jsonValue(value.diagnostics),
         )
         else -> value.toString()
-    }
-
-    companion object {
-        const val DEFAULT_MAX_TURNS = 50
     }
 
     private fun imageResult(result: WatchAgentToolResult): com.flue.launcher.watchface.agent.provider.AgentRequestImage? = when (val value = result.content) {
