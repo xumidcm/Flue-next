@@ -60,12 +60,11 @@ class WatchEditorSessionAgentToolHostTest {
     }
 
     @Test
-    fun `adapter rolls back a failed request and keeps native preview explicit`() = runBlocking {
+    fun `adapter keeps successful live writes when a later request fails`() = runBlocking {
         withTemporaryDirectory { root ->
             WatchEditorSession.createBlank(File(root, "cache")).use { session ->
                 val host = WatchEditorSessionAgentToolHost(session)
                 val runner = com.flue.launcher.watchface.agent.tools.WatchAgentToolRunner(host)
-                val before = session.agentCandidate().watchXml
                 val revision = session.agentRevision()
                 val results = runner.execute(
                     listOf(
@@ -82,7 +81,7 @@ class WatchEditorSessionAgentToolHostTest {
                     ),
                 )
                 assertEquals("stale_revision", results[1].error?.code)
-                assertEquals(before, session.agentCandidate().watchXml)
+                assertTrue(session.agentCandidate().watchXml.contains("Transient"))
 
                 val unavailable = runner.execute(WatchAgentToolCall("preview", "preview_face"))
                 assertEquals("preview_unavailable", unavailable.error?.code)

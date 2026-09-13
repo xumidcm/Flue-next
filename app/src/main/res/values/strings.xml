@@ -887,6 +887,12 @@
     <string name="watch_editor_discard_message">尚未另存或导出的修改会被删除，已安装的原表盘不会受到影响。</string>
     <string name="watch_editor_discard">放弃</string>
     <string name="watch_editor_continue">继续编辑</string>
+    <string name="watch_editor_agent_resume_title">继续 AI 编辑？</string>
+    <string name="watch_editor_agent_resume_message">检测到上次退出时未保存的 AI 编辑草稿。要恢复工作区内容并回到上次会话吗？</string>
+    <string name="watch_editor_agent_resume">恢复并继续</string>
+    <string name="watch_editor_agent_start_fresh">从当前表盘开始</string>
+    <string name="watch_editor_status_restoring_agent_draft">正在恢复 AI 工作区草稿</string>
+    <string name="watch_editor_error_restore_agent_draft">恢复 AI 工作区草稿失败</string>
     <string name="watch_editor_save_as_title">另存为新表盘</string>
     <string name="watch_editor_save_title">保存表盘</string>
     <string name="watch_editor_face_name">表盘名称</string>

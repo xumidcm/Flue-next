@@ -258,7 +258,7 @@ class WatchAgentToolContractsTest {
     }
 
     @Test
-    fun `in-memory host keeps revision monotonic and restores a failed request`() = runBlocking {
+    fun `in-memory host keeps successful live writes when a later request is stale`() = runBlocking {
         val host = InMemoryWatchAgentToolHost("<Watch name=\"Demo\"/>")
         val runner = WatchAgentToolRunner(host)
 
@@ -287,7 +287,7 @@ class WatchAgentToolContractsTest {
             ),
         )
         assertEquals("stale_revision", failed[1].error?.code)
-        assertEquals("Changed", host.inspectFace(WatchAgentInspectFaceRequest()).name)
+        assertEquals("Transient", host.inspectFace(WatchAgentInspectFaceRequest()).name)
     }
 
     @Test

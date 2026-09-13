@@ -177,15 +177,15 @@ private fun AgentSurfaceContent(viewModel: WatchAgentViewModel, messages: List<A
     Column(modifier.then(Modifier.fillMaxSize())) {
         AgentTopBar(
             title = title,
-            totalTokens = ((state.inputTokens ?: 0L) + (state.outputTokens ?: 0L)).takeIf { state.inputTokens != null || state.outputTokens != null },
+            totalTokens = state.conversationTokens.takeIf { it > 0L }?.let(::formatTokenCount),
             fullscreen = state.surface == AgentSurface.FULLSCREEN,
             expandRestoreDescription = stringResource(R.string.agent_expand_restore),
             settingsDescription = stringResource(R.string.agent_open_settings),
-            closeDescription = stringResource(R.string.agent_close),
+            compressDescription = stringResource(R.string.agent_compress_context),
             onToggleSurface = onMaximize,
             onOpenSettings = onOpenSettings,
             onOpenHistory = { viewModel.toggleHistory(true) },
-            onMinimize = onMinimize,
+            onCompressContext = viewModel::compressContext,
         )
         AgentQuickControls(viewModel)
         Box(Modifier.weight(1f).fillMaxWidth()) {
@@ -218,7 +218,7 @@ private fun AgentSurfaceContent(viewModel: WatchAgentViewModel, messages: List<A
                                 actionsEnabled = !state.isGenerating,
                                 generationStatus = state.generationStatus,
                                 inputTokens = state.inputTokens,
-                                outputTokens = state.outputTokens,
+                                outputTokens = state.turnTokens,
                                 expandedToolIds = state.expandedToolIds,
                                 expandedToolDetailIds = state.expandedToolDetailIds,
                                 expandedReasoningIds = state.expandedReasoningIds,
@@ -399,7 +399,7 @@ private fun AgentAssistantTurn(
                 fontWeight = FontWeight.SemiBold,
             )
         }
-        if (generationStatus != null && messages.any { it.status == AgentMessageStatus.STREAMING }) {
+        if (generationStatus != null && (generationStatus == AgentGenerationStatus.COMPRESSING || messages.any { it.status == AgentMessageStatus.STREAMING })) {
             Surface(shape = RoundedCornerShape(50), color = LauncherTheme.style.topBarChipColor, modifier = Modifier.padding(start = 8.dp)) {
                 Text(
                     stringResource(generationStatus.labelResource()),
@@ -709,15 +709,18 @@ private fun AgentTextMessageContent(
         message.content.takeIf(String::isNotBlank)?.let { content ->
             SafeMarkdownText(content, LauncherTheme.style.bodyColor)
             val canCopyWholeTurn = message.role == AgentMessageRole.ASSISTANT && message.status == AgentMessageStatus.COMPLETE && showActions && actionsEnabled
-            val canShowStreamingMeta = message.role == AgentMessageRole.ASSISTANT && message.status == AgentMessageStatus.STREAMING
+            // The turn total belongs to the single final assistant message. Keep
+            // it visible after completion so the bottom metadata reports the
+            // complete request cost instead of only showing it while streaming.
+            val canShowTurnMeta = message.role == AgentMessageRole.ASSISTANT && showActions && outputTokens != null
             // User bubbles expose editing only. Copy/retry belong to the one
             // completed assistant answer for this turn; showing them on every
             // user/tool fragment is what caused duplicate action rows.
             val canRetry = showActions && actionsEnabled && message.role == AgentMessageRole.ASSISTANT
-            if (canCopyWholeTurn || canShowStreamingMeta || isUser) Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
-                if (message.role == AgentMessageRole.ASSISTANT && message.status == AgentMessageStatus.STREAMING && outputTokens != null) {
+            if (canCopyWholeTurn || canShowTurnMeta || isUser) Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+                if (canShowTurnMeta) {
                     Text(
-                        stringResource(R.string.agent_output_tokens, outputTokens),
+                        stringResource(R.string.agent_turn_tokens, formatTokenCount(outputTokens)),
                         modifier = Modifier.padding(horizontal = 6.dp).align(Alignment.CenterVertically),
                         style = MaterialTheme.typography.labelSmall,
                         color = LauncherTheme.style.secondaryTextColor,
@@ -1057,13 +1060,32 @@ private fun AgentGenerationStatus.labelResource(): Int = when (this) {
     AgentGenerationStatus.CALLING_TOOL -> R.string.agent_status_calling_tool
     AgentGenerationStatus.PROCESSING_PREVIEW -> R.string.agent_status_processing_preview
     AgentGenerationStatus.PROCESSING_FOLLOW_UP -> R.string.agent_status_follow_up
+    AgentGenerationStatus.COMPRESSING -> R.string.agent_status_compressing
 }
 
 private fun copyToClipboard(context: Context, content: String) { (context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager)?.setPrimaryClip(ClipData.newPlainText("Agent", content)) }
 
 @Composable private fun AttachmentStrip(attachments: List<AgentAttachment>, onRemove: (String) -> Unit) {
-    Column(Modifier.fillMaxWidth().padding(horizontal = 10.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) { attachments.forEach { attachment -> Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) { Icon(MiuixIcons.Attachment, null, Modifier.size(16.dp)); Text(" ${attachment.displayName} · ${attachment.sizeBytes} B", Modifier.weight(1f), style = MaterialTheme.typography.labelSmall); TextButton(onClick = { onRemove(attachment.id) }) { Text(stringResource(R.string.agent_remove)) } } } }
+    Column(Modifier.fillMaxWidth().padding(horizontal = 10.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) { attachments.forEach { attachment -> Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) { Icon(MiuixIcons.Attachment, null, Modifier.size(16.dp)); Text(" ${attachment.displayName} · ${formatByteCount(attachment.sizeBytes)}", Modifier.weight(1f), style = MaterialTheme.typography.labelSmall); TextButton(onClick = { onRemove(attachment.id) }) { Text(stringResource(R.string.agent_remove)) } } } }
 }
+
+private fun formatTokenCount(value: Long): String = formatCompactCount(value)
+
+private fun formatByteCount(value: Long): String = when {
+    value < 1_000L -> "$value B"
+    value < 1_000_000L -> "${formatCompactDecimal(value / 1_000.0)} KB"
+    value < 1_000_000_000L -> "${formatCompactDecimal(value / 1_000_000.0)} MB"
+    else -> "${formatCompactDecimal(value / 1_000_000_000.0)} GB"
+}
+
+private fun formatCompactCount(value: Long): String = when {
+    value < 1_000L -> value.toString()
+    value < 1_000_000L -> "${formatCompactDecimal(value / 1_000.0)}K"
+    else -> "${formatCompactDecimal(value / 1_000_000.0)}M"
+}
+
+private fun formatCompactDecimal(value: Double): String =
+    if (value >= 100.0 || value % 1.0 == 0.0) value.toInt().toString() else "%.1f".format(java.util.Locale.US, value)
 
 @Composable private fun EmptyAgentState() { Box(Modifier.fillMaxWidth().padding(32.dp), contentAlignment = Alignment.Center) { Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(8.dp)) { Icon(MiuixIcons.Sparkle, null, Modifier.size(52.dp), tint = MaterialTheme.colorScheme.primary); Text(stringResource(R.string.agent_empty), color = MaterialTheme.colorScheme.onSurfaceVariant) } } }
 

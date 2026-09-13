@@ -108,6 +108,27 @@ class WatchAgentLoopTest {
         assertEquals("After", host.inspectFace(com.flue.launcher.watchface.agent.tools.WatchAgentInspectFaceRequest()).name)
     }
 
+    @Test
+    fun `nested provider arguments are normalized before document tools run`() = runBlocking {
+        val host = InMemoryWatchAgentToolHost("<Watch name=\"Before\"/>")
+        var turn = 0
+        val executor = AgentCompletionExecutor { _, _ ->
+            if (turn++ == 0) completion(
+                AgentStreamEvent.ToolCallDelta(
+                    id = "edit-nested",
+                    name = "edit_document",
+                    jsonDelta = "{\"arguments\":{\"path\":\"watch.xml\",\"old_text\":\"Before\",\"new_text\":\"After\",\"expected_revision\":1}}",
+                ),
+            ) else AgentCompletion("完成", listOf(AgentStreamEvent.TextDelta("完成")))
+        }
+
+        WatchAgentLoop(executor, WatchAgentToolRunner(host)).run(
+            listOf(AgentRequestMessage(AgentMessageRole.USER, "修改")),
+        )
+
+        assertEquals("After", host.inspectFace(com.flue.launcher.watchface.agent.tools.WatchAgentInspectFaceRequest()).name)
+    }
+
     private fun completion(vararg events: AgentStreamEvent) = AgentCompletion(
         text = events.filterIsInstance<AgentStreamEvent.TextDelta>().joinToString("") { it.text },
         events = events.toList(),
