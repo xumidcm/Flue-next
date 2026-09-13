@@ -4,6 +4,8 @@ import com.flue.launcher.watchface.agent.prompt.WatchAgentPrompt
 import com.flue.launcher.watchface.agent.workspace.WorkspacePermissionSettings
 import com.flue.launcher.watchface.agent.workspace.ProotShellRunner
 import com.flue.launcher.watchface.agent.workspace.ShellCommandRequest
+import com.flue.launcher.watchface.agent.provider.AgentImageGenerationClient
+import com.flue.launcher.watchface.agent.provider.ImageGenerationOptions
 
 /** Executes provider tool calls against a host-owned editor session. */
 class WatchAgentToolRunner(
@@ -14,15 +16,24 @@ class WatchAgentToolRunner(
     private val shellRunner: ProotShellRunner? = null,
     private val workspaceId: String = "",
     private val workspaceIdProvider: () -> String = { workspaceId },
+    private val imageClient: AgentImageGenerationClient? = null,
+    private val webClient: WatchAgentWebResearchClient? = null,
+    private val imageDefaults: ImageGenerationOptions = ImageGenerationOptions(),
+    private val webMaxResults: Int = 5,
+    private val webSearchDepth: String = "basic",
+    private val webFetchEnabled: Boolean = true,
 ) {
     val promptVersion: String get() = WatchAgentPrompt.promptVersion
     val toolSchemaVersion: String get() = WatchAgentToolContracts.schemaVersion
     val toolContracts: List<WatchAgentToolContract>
         get() {
             val permissions = currentPermissions()
-            return (WatchAgentToolContracts.all + WatchAgentToolContracts.mirror).filter { permissions.allows(it.access) &&
+            return (WatchAgentToolContracts.all + WatchAgentToolContracts.mirror + WatchAgentToolContracts.optional).filter { permissions.allows(it.access) &&
                 (workspaceImages != null || it.name !in setOf(WatchAgentToolName.LIST_WORKSPACE_FILES, WatchAgentToolName.READ_IMAGE)) &&
-                (shellRunner?.capability(workspaceIdProvider())?.bashAvailable == true || it.name != WatchAgentToolName.RUN_BASH) }
+                (shellRunner?.capability(workspaceIdProvider())?.bashAvailable == true || it.name != WatchAgentToolName.RUN_BASH) &&
+                (imageClient != null || it.name !in setOf(WatchAgentToolName.GENERATE_IMAGE, WatchAgentToolName.EDIT_IMAGE)) &&
+                (webClient != null || it.name !in setOf(WatchAgentToolName.WEB_SEARCH, WatchAgentToolName.FETCH_WEB_PAGE)) &&
+                (webFetchEnabled || it.name != WatchAgentToolName.FETCH_WEB_PAGE) }
         }
 
     private val scheduler = WatchAgentToolScheduler(::executeOne, maxParallel)
@@ -47,7 +58,18 @@ class WatchAgentToolRunner(
 
     suspend fun execute(call: WatchAgentToolCall): WatchAgentToolResult = execute(listOf(call)).first()
 
-    private fun executeOne(call: WatchAgentToolCall): WatchAgentToolResult = try {
+    private fun executeOne(call: WatchAgentToolCall): WatchAgentToolResult {
+        val startedAt = System.currentTimeMillis()
+        val result = executeOneUntimed(call)
+        val completedAt = System.currentTimeMillis()
+        return result.copy(
+            startedAt = startedAt,
+            completedAt = completedAt,
+            durationMs = (completedAt - startedAt).coerceAtLeast(0L),
+        )
+    }
+
+    private fun executeOneUntimed(call: WatchAgentToolCall): WatchAgentToolResult = try {
         val name = call.toolName
         if (name != null && !currentPermissions().allows(name.access)) {
             return failure(call, "permission_denied", "工作区权限不允许执行此工具")
@@ -115,6 +137,50 @@ class WatchAgentToolRunner(
                     WatchAgentSearchKnowledgeRequest(call.requiredString("query")),
                 )
                 success(call, host.currentRevision, result)
+            }
+            WatchAgentToolName.WEB_SEARCH -> {
+                val client = requireNotNull(webClient) { "网络搜索尚未配置" }
+                val result = client.search(
+                    WatchAgentWebSearchRequest(
+                        query = call.requiredString("query"),
+                        maxResults = call.arguments["max_results"]?.toLongValue()?.toInt() ?: webMaxResults,
+                        searchDepth = call.arguments["search_depth"]?.toString() ?: webSearchDepth,
+                    ),
+                )
+                success(call, host.currentRevision, result)
+            }
+            WatchAgentToolName.FETCH_WEB_PAGE -> {
+                val client = requireNotNull(webClient) { "网页抓取尚未配置" }
+                val result = client.fetchPage(
+                    call.requiredString("url"),
+                    call.arguments["max_chars"]?.toLongValue()?.toInt() ?: WatchAgentWebResearchClient.DEFAULT_MAX_PAGE_CHARS,
+                )
+                success(call, host.currentRevision, result)
+            }
+            WatchAgentToolName.GENERATE_IMAGE -> {
+                val client = requireNotNull(imageClient) { "图片生成尚未配置" }
+                val options = call.imageOptions(imageDefaults)
+                val output = client.generate(call.requiredString("prompt"), options)
+                val stored = requireNotNull(workspaceImages) { "未绑定工作区图片工具" }
+                    .saveGeneratedImage(output.bytes, output.format, "generate", output.size)
+                success(call, host.currentRevision, stored)
+            }
+            WatchAgentToolName.EDIT_IMAGE -> {
+                val client = requireNotNull(imageClient) { "图片修改尚未配置" }
+                val images = requireNotNull(workspaceImages) { "未绑定工作区图片工具" }
+                val input = images.readImage(call.requiredString("input_path"))
+                val mask = call.arguments["mask_path"]?.toString()?.takeIf { it.isNotBlank() }?.let(images::readImage)
+                val options = call.imageOptions(imageDefaults)
+                val output = client.edit(
+                    prompt = call.requiredString("prompt"),
+                    input = java.util.Base64.getDecoder().decode(input.image.base64),
+                    inputName = input.path,
+                    mask = mask?.let { java.util.Base64.getDecoder().decode(it.image.base64) },
+                    maskName = mask?.path,
+                    options = options,
+                )
+                val stored = images.saveGeneratedImage(output.bytes, output.format, "edit", output.size)
+                success(call, host.currentRevision, stored)
             }
             WatchAgentToolName.VALIDATE_FACE -> {
                 val result = host.validateFace(WatchAgentValidateFaceRequest(call.optionalRevision()))
@@ -239,3 +305,35 @@ private fun WatchAgentToolCall.previewRequest() = WatchAgentPreviewRequest(
     },
     expectedRevision = optionalRevision(),
 )
+
+private fun WatchAgentToolCall.imageOptions(defaults: ImageGenerationOptions): ImageGenerationOptions {
+    fun text(name: String, fallback: String?): String? = arguments[name]?.toString()?.trim()?.takeIf { it.isNotEmpty() } ?: fallback
+    fun enum(name: String, allowed: Set<String>, fallback: String?): String? {
+        val value = text(name, fallback) ?: return null
+        require(value in allowed) { "$name 参数无效" }
+        return value
+    }
+    fun dimension(name: String, fallback: String?): String? {
+        val value = text(name, fallback) ?: return null
+        if (value == "auto") return value
+        val match = Regex("^(\\d{1,5})x(\\d{1,5})$").matchEntire(value)
+            ?: throw IllegalArgumentException("$name 必须是 auto 或正整数宽x高")
+        val width = match.groupValues[1].toIntOrNull() ?: 0
+        val height = match.groupValues[2].toIntOrNull() ?: 0
+        require(width > 0 && height > 0 && width % 16 == 0 && height % 16 == 0) {
+            "$name 的宽和高必须是正整数且为 16 的倍数"
+        }
+        require(width <= 16_384 && height <= 16_384) { "$name 尺寸过大" }
+        return value
+    }
+    val compression = arguments["output_compression"]?.toLongValue()?.toInt()?.also { require(it in 0..100) { "output_compression 必须是 0 到 100" } }
+    return ImageGenerationOptions(
+        size = dimension("size", defaults.size),
+        quality = enum("quality", setOf("auto", "low", "medium", "high", "xhigh", "max"), defaults.quality),
+        background = enum("background", setOf("auto", "opaque", "transparent"), defaults.background),
+        outputFormat = enum("output_format", setOf("png", "jpeg", "webp"), defaults.outputFormat),
+        outputCompression = compression ?: defaults.outputCompression,
+        inputFidelity = enum("input_fidelity", setOf("low", "high"), defaults.inputFidelity),
+        moderation = defaults.moderation,
+    )
+}

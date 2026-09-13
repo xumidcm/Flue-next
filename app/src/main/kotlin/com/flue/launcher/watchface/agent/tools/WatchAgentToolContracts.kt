@@ -19,6 +19,10 @@ enum class WatchAgentToolName(
     VALIDATE_FACE_MIRROR("validate_face_mirror", WatchAgentToolAccess.READ_ONLY),
     COMMIT_FACE_MIRROR("commit_face_mirror", WatchAgentToolAccess.WRITE),
     IMPORT_FACE_RESOURCE("import_face_resource", WatchAgentToolAccess.WRITE),
+    WEB_SEARCH("web_search", WatchAgentToolAccess.READ_ONLY),
+    FETCH_WEB_PAGE("fetch_web_page", WatchAgentToolAccess.READ_ONLY),
+    GENERATE_IMAGE("generate_image", WatchAgentToolAccess.WRITE),
+    EDIT_IMAGE("edit_image", WatchAgentToolAccess.WRITE),
     ;
 
     val isReadOnly: Boolean get() = access == WatchAgentToolAccess.READ_ONLY
@@ -49,7 +53,7 @@ data class WatchAgentToolContract(
 
 /** Versioned schema metadata is intentionally available without a runner instance. */
 object WatchAgentToolContracts {
-    const val schemaVersion: String = "watch-agent-tools-v1"
+    const val schemaVersion: String = "watch-agent-tools-v2"
 
     val all: List<WatchAgentToolContract> = listOf(
         WatchAgentToolContract(WatchAgentToolName.LIST_WORKSPACE_FILES, "列出当前绑定工作区的文件，包括 workspace、generated、previews 和 home。图片路径可用于 read_image。"),
@@ -113,11 +117,59 @@ object WatchAgentToolContracts {
         WatchAgentToolContract(WatchAgentToolName.IMPORT_FACE_RESOURCE, "导入工作区表盘资源。", listOf(WatchAgentToolParameter("path", "string", true))),
     )
 
+    /** Optional network/image tools. They are only exposed when a configured client is present. */
+    val optional: List<WatchAgentToolContract> = listOf(
+        WatchAgentToolContract(
+            WatchAgentToolName.WEB_SEARCH,
+            "使用已配置的网络搜索 API 查询实时网页，返回标题、摘要、来源和 URL。",
+            listOf(
+                WatchAgentToolParameter("query", "string", required = true),
+                WatchAgentToolParameter("max_results", "integer"),
+                WatchAgentToolParameter("search_depth", "string", enumValues = listOf("basic", "advanced")),
+            ),
+        ),
+        WatchAgentToolContract(
+            WatchAgentToolName.FETCH_WEB_PAGE,
+            "抓取指定 HTTP(S) 页面并提取正文文本；只有用户需要网页细节时调用。",
+            listOf(
+                WatchAgentToolParameter("url", "string", required = true),
+                WatchAgentToolParameter("max_chars", "integer"),
+            ),
+        ),
+        WatchAgentToolContract(
+            WatchAgentToolName.GENERATE_IMAGE,
+            "通过已配置的 OpenAI Images API 生成图片并保存到当前工作区。",
+            listOf(
+                WatchAgentToolParameter("prompt", "string", required = true),
+                WatchAgentToolParameter("size", "string"),
+                WatchAgentToolParameter("quality", "string", enumValues = listOf("auto", "low", "medium", "high", "xhigh", "max")),
+                WatchAgentToolParameter("background", "string", enumValues = listOf("auto", "opaque", "transparent")),
+                WatchAgentToolParameter("output_format", "string", enumValues = listOf("png", "jpeg", "webp")),
+                WatchAgentToolParameter("output_compression", "integer"),
+            ),
+        ),
+        WatchAgentToolContract(
+            WatchAgentToolName.EDIT_IMAGE,
+            "使用 OpenAI Images API 修改当前表盘或工作区中的图片，并将结果保存到当前工作区。",
+            listOf(
+                WatchAgentToolParameter("prompt", "string", required = true),
+                WatchAgentToolParameter("input_path", "string", required = true),
+                WatchAgentToolParameter("mask_path", "string"),
+                WatchAgentToolParameter("size", "string"),
+                WatchAgentToolParameter("quality", "string", enumValues = listOf("auto", "low", "medium", "high", "xhigh", "max")),
+                WatchAgentToolParameter("background", "string", enumValues = listOf("auto", "opaque", "transparent")),
+                WatchAgentToolParameter("output_format", "string", enumValues = listOf("png", "jpeg", "webp")),
+                WatchAgentToolParameter("output_compression", "integer"),
+                WatchAgentToolParameter("input_fidelity", "string", enumValues = listOf("low", "high")),
+            ),
+        ),
+    )
+
     fun find(name: String): WatchAgentToolContract? =
         WatchAgentToolName.fromWireName(name)?.let(::find)
 
     fun find(name: WatchAgentToolName): WatchAgentToolContract? =
-        all.firstOrNull { it.name == name }
+        (all + mirror + optional).firstOrNull { it.name == name }
 }
 
 data class WatchAgentToolCall(
@@ -142,6 +194,10 @@ data class WatchAgentToolResult(
     val revision: Long,
     val content: Any? = null,
     val error: WatchAgentToolError? = null,
+    /** Wall-clock lifecycle metadata kept with the result for expandable UI details. */
+    val startedAt: Long? = null,
+    val completedAt: Long? = null,
+    val durationMs: Long? = null,
 ) {
     val succeeded: Boolean get() = error == null
 }

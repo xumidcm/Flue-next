@@ -37,6 +37,28 @@ object AgentEndpointResolver {
     fun models(baseUrl: String, protocol: AiProtocol, override: String? = null): String? =
         modelList(baseUrl, protocol, override)
 
+    /** Resolves an OpenAI Images API base or endpoint to `/images/generations`. */
+    fun imageGeneration(baseUrl: String): String = imageEndpoint(baseUrl, "/images/generations")
+
+    /** Resolves an OpenAI Images API base or endpoint to `/images/edits`. */
+    fun imageEdit(baseUrl: String): String = imageEndpoint(baseUrl, "/images/edits")
+
+    private fun imageEndpoint(baseUrl: String, suffix: String): String {
+        val normalized = normalize(baseUrl)
+        val uri = parse(normalized) ?: return when {
+            normalized.endsWith("/images/generations") -> normalized.removeSuffix("/images/generations") + suffix
+            normalized.endsWith("/images/edits") -> normalized.removeSuffix("/images/edits") + suffix
+            normalized.endsWith("/v1") -> normalized + suffix
+            else -> normalized + "/v1" + suffix
+        }
+        val path = uri.path.orEmpty().trimEnd('/')
+        val known = listOf("/images/generations", "/images/edits").firstOrNull { path.endsWith(it) }
+        if (known != null) return withPath(uri, path.removeSuffix(known) + suffix)
+        if (path.endsWith("/v1")) return withPath(uri, path + suffix)
+        if (path.isEmpty()) return withPath(uri, "/v1$suffix")
+        return withPath(uri, path + suffix)
+    }
+
     private fun normalize(value: String): String = value.trim().trimEnd('/')
 
     private fun parse(value: String): URI? = runCatching { URI(value) }.getOrNull()

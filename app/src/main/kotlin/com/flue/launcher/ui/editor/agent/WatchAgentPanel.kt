@@ -602,6 +602,22 @@ private fun AgentToolStepContent(
                                     Text("参数: $rawArguments", style = MaterialTheme.typography.labelSmall, color = LauncherTheme.style.secondaryTextColor, fontFamily = FontFamily.Monospace)
                                 }
                                 details.forEach { detail -> Text("• $detail", style = MaterialTheme.typography.labelMedium, color = LauncherTheme.style.secondaryTextColor) }
+                                result?.content?.let { raw ->
+                                    runCatching { org.json.JSONObject(raw) }.getOrNull()?.let { payload ->
+                                        if (payload.has("started_at") && payload.has("completed_at")) {
+                                            Text(
+                                                stringResource(
+                                                    R.string.agent_tool_detail_timing,
+                                                    payload.optLong("duration_ms", 0L),
+                                                    payload.optLong("started_at", 0L),
+                                                    payload.optLong("completed_at", 0L),
+                                                ),
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = LauncherTheme.style.secondaryTextColor,
+                                            )
+                                        }
+                                    }
+                                }
                                 result?.let { Text("返回: ${it.content}", style = MaterialTheme.typography.labelSmall, color = LauncherTheme.style.secondaryTextColor, fontFamily = FontFamily.Monospace) }
                             }
                         }
@@ -662,7 +678,10 @@ private fun AgentTextMessageContent(
             SafeMarkdownText(content, LauncherTheme.style.bodyColor)
             val canCopyWholeTurn = message.role == AgentMessageRole.ASSISTANT && message.status == AgentMessageStatus.COMPLETE && showActions && actionsEnabled
             val canShowStreamingMeta = message.role == AgentMessageRole.ASSISTANT && message.status == AgentMessageStatus.STREAMING
-            val canRetry = showActions && actionsEnabled && (message.role == AgentMessageRole.ASSISTANT || isUser)
+            // User bubbles expose editing only. Copy/retry belong to the one
+            // completed assistant answer for this turn; showing them on every
+            // user/tool fragment is what caused duplicate action rows.
+            val canRetry = showActions && actionsEnabled && message.role == AgentMessageRole.ASSISTANT
             if (canCopyWholeTurn || canShowStreamingMeta || isUser) Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
                 if (message.role == AgentMessageRole.ASSISTANT && message.status == AgentMessageStatus.STREAMING && outputTokens != null) {
                     Text(
@@ -707,6 +726,10 @@ private fun toolTitleResource(toolName: String?): Int = when (toolName) {
     "preview_face" -> R.string.agent_tool_name_preview
     "edit_document" -> R.string.agent_tool_name_edit
     "write_document" -> R.string.agent_tool_name_write
+    "web_search" -> R.string.agent_tool_name_web_search
+    "fetch_web_page" -> R.string.agent_tool_name_fetch_web_page
+    "generate_image" -> R.string.agent_tool_name_generate_image
+    "edit_image" -> R.string.agent_tool_name_edit_image
     else -> R.string.agent_tool_name_generic
 }
 
@@ -812,6 +835,52 @@ private fun parseToolPresentation(toolName: String?, raw: String): ToolCardPrese
                     details += ToolSummarySpec(R.string.agent_tool_detail_hit, listOf(titleText.ifBlank { "—" }, snippet.ifBlank { "—" }))
                 }
                 ToolCardPresentation(title, ToolSummarySpec(R.string.agent_tool_search_summary, listOf(hitCount)), details)
+            }
+            "web_search" -> {
+                val hits = result?.optJSONArray("hits")
+                val hitCount = hits?.length() ?: 0
+                val details = mutableListOf<ToolSummarySpec>()
+                result?.optString("query")?.takeIf(String::isNotBlank)?.let { details += ToolSummarySpec(R.string.agent_tool_detail_query, listOf(it.toHumanSummary())) }
+                details += ToolSummarySpec(R.string.agent_tool_detail_hits, listOf(hitCount))
+                if (hits != null) (0 until minOf(hits.length(), 4)).forEach { index ->
+                    val hit = hits.optJSONObject(index) ?: return@forEach
+                    val hitTitle = hit.optString("title").toHumanSummary().ifBlank { "—" }
+                    val url = hit.optString("url").toHumanSummary().ifBlank { "—" }
+                    val snippet = hit.optString("snippet").toHumanSummary().ifBlank { "—" }
+                    details += ToolSummarySpec(R.string.agent_tool_detail_web_hit, listOf(hitTitle, url, snippet))
+                }
+                ToolCardPresentation(title, ToolSummarySpec(R.string.agent_tool_web_search_summary, listOf(hitCount)), details)
+            }
+            "fetch_web_page" -> {
+                val url = result?.optString("url").orEmpty().toHumanSummary().ifBlank { "—" }
+                val source = result?.optString("source").orEmpty().toHumanSummary().ifBlank { "—" }
+                val content = result?.optString("content").orEmpty()
+                ToolCardPresentation(
+                    title,
+                    ToolSummarySpec(R.string.agent_tool_web_fetch_summary, listOf(url, content.length)),
+                    listOf(
+                        ToolSummarySpec(R.string.agent_tool_detail_url, listOf(url)),
+                        ToolSummarySpec(R.string.agent_tool_detail_source, listOf(source)),
+                        ToolSummarySpec(R.string.agent_tool_detail_document_size, listOf(content.length)),
+                        ToolSummarySpec(R.string.agent_tool_detail_truncated, listOf(result?.optBoolean("truncated", false) == true)),
+                    ),
+                )
+            }
+            "generate_image", "edit_image" -> {
+                val path = result?.optString("path").orEmpty().toHumanSummary().ifBlank { "—" }
+                val format = result?.optString("format").orEmpty().toHumanSummary().ifBlank { "—" }
+                val size = result?.optString("size").orEmpty().toHumanSummary().ifBlank { "auto" }
+                ToolCardPresentation(
+                    title,
+                    ToolSummarySpec(if (toolName == "edit_image") R.string.agent_tool_image_edited_summary else R.string.agent_tool_image_generated_summary, listOf(path)),
+                    listOf(
+                        ToolSummarySpec(R.string.agent_tool_detail_path, listOf(path)),
+                        ToolSummarySpec(R.string.agent_tool_detail_format, listOf(format)),
+                        ToolSummarySpec(R.string.agent_tool_detail_requested_size, listOf(size)),
+                        ToolSummarySpec(R.string.agent_tool_detail_image_size, listOf(result?.optInt("byte_count", 0) ?: 0)),
+                        ToolSummarySpec(R.string.agent_tool_detail_revision, listOf(revision)),
+                    ),
+                )
             }
             else -> ToolCardPresentation(
                 title,

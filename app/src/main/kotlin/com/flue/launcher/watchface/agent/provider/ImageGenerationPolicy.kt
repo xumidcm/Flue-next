@@ -5,6 +5,10 @@ data class ImageGenerationOptions(
     val size: String? = null,
     val background: String? = null,
     val quality: String? = null,
+    val outputFormat: String? = null,
+    val outputCompression: Int? = null,
+    val inputFidelity: String? = null,
+    val moderation: String? = null,
 )
 
 /**

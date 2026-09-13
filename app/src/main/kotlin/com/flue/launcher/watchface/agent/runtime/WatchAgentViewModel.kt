@@ -28,6 +28,9 @@ import com.flue.launcher.watchface.agent.workspace.BashApprovalStrategy
 import com.flue.launcher.watchface.agent.workspace.BashApproval
 import com.flue.launcher.watchface.agent.prompt.WatchAgentPrompt
 import com.flue.launcher.watchface.agent.provider.AgentProviderClient
+import com.flue.launcher.watchface.agent.provider.ImageGenerationOptions
+import com.flue.launcher.watchface.agent.provider.OpenAiImageClient
+import com.flue.launcher.watchface.agent.tools.TavilyWebResearchClient
 import com.flue.launcher.watchface.agent.provider.AgentRequestMessage
 import com.flue.launcher.watchface.agent.provider.AgentStreamEvent
 import com.flue.launcher.watchface.agent.provider.AgentProviderRequest
@@ -487,7 +490,34 @@ class WatchAgentViewModel(application: Application) : AndroidViewModel(applicati
                     val workspaceId = workspaceManager.bindingFor(generation.watchScope)?.workspaceId.orEmpty()
                     val capability = workspaceManager.capability(workspaceId)
                     val permissions = permissionStore.load()
-                    val capabilityPrompt = WatchAgentPrompt.availableCapabilities(capability, permissions.networkAllowed)
+                    val feature = featureSettings.load()
+                    val imageClient = feature.imageBaseUrl.trim().takeIf { it.isNotBlank() }
+                        ?.let { baseUrl ->
+                            feature.imageModelId.trim().takeIf { it.isNotBlank() }?.let { model ->
+                                featureSettings.imageApiKey()?.takeIf { it.isNotBlank() }?.let { key ->
+                                    runCatching { OpenAiImageClient(baseUrl, key, model) }.getOrNull()
+                                }
+                            }
+                        }
+                    val webClient = feature.tavilyBaseUrl.trim().takeIf { it.isNotBlank() }
+                        ?.let { baseUrl -> featureSettings.tavilyApiKey()?.takeIf { it.isNotBlank() }?.let { key ->
+                            runCatching {
+                                TavilyWebResearchClient(
+                                    baseUrl = baseUrl,
+                                    apiKey = key,
+                                    defaultMaxResults = feature.searchMaxResults,
+                                    defaultSearchDepth = feature.searchDepth,
+                                    fetchEnabled = feature.webFetchEnabled,
+                                )
+                            }.getOrNull()
+                        } }
+                    val capabilityPrompt = WatchAgentPrompt.availableCapabilities(
+                        capability = capability,
+                        networkAllowed = permissions.networkAllowed,
+                        imageAvailable = imageClient != null,
+                        webSearchAvailable = webClient != null,
+                        webFetchAvailable = webClient != null && feature.webFetchEnabled,
+                    )
                     val requestMessages = listOf(
                         AgentRequestMessage(AgentMessageRole.SYSTEM, WatchAgentPrompt.baseline + capabilityPrompt),
                     ) + history
@@ -510,6 +540,16 @@ class WatchAgentViewModel(application: Application) : AndroidViewModel(applicati
                             workspaceIdProvider = {
                                 workspaceManager.bindingFor(generation.watchScope)?.workspaceId.orEmpty()
                             },
+                            imageClient = imageClient,
+                            webClient = webClient,
+                            imageDefaults = ImageGenerationOptions(
+                                size = feature.imageSize.trim().takeIf { it.isNotBlank() },
+                                quality = feature.imageQuality.trim().takeIf { it.isNotBlank() },
+                                background = feature.imageBackground.trim().takeIf { it.isNotBlank() },
+                            ),
+                            webMaxResults = feature.searchMaxResults,
+                            webSearchDepth = feature.searchDepth,
+                            webFetchEnabled = feature.webFetchEnabled,
                         ),
                     )
                     encodeToolResult = loop::encodeToolResult
