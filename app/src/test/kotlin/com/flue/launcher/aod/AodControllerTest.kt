@@ -22,9 +22,7 @@ class AodControllerTest {
         foreground: ((Intent) -> Unit)? = null,
         block: (Activity, AodController) -> Unit,
     ) {
-        shadowOf(RuntimeEnvironment.getApplication()).grantPermissions(
-            "${com.flue.launcher.BuildConfig.APPLICATION_ID}.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION",
-        )
+        shadowOf(RuntimeEnvironment.getApplication()).grantPermissions("com.flue.launcher.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION")
         val activity = Robolectric.buildActivity(Activity::class.java).setup().get()
         AodPreferences.preferences(activity).edit().clear().putBoolean("enabled", true).commit()
         val controller = AodController(activity, {}, screenInteractive = interactive,

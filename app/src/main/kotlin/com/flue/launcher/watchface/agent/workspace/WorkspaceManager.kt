@@ -630,10 +630,7 @@ class WorkspaceManager private constructor(
         /** Workspaces are storage-managed; the app no longer imposes an artificial quota. */
         const val DEFAULT_QUOTA_BYTES: Long = Long.MAX_VALUE
         private const val MAX_FACE_MIRROR_FILE_BYTES: Int = 20 * 1024 * 1024
-        private val FACE_RESOURCE_PREFIXES = listOf(
-            "images/", "fonts/", "fonts_bm/", "videos/", "sfx/", "sounds/",
-            "audio/", "shaders/", "scripts/", "assets/",
-        )
+        private val FACE_RESOURCE_PREFIXES = listOf("images/", "fonts/", "fonts_bm/")
         private val FACE_ROOT_IMAGE_EXTENSIONS = setOf("png", "jpg", "jpeg", "webp", "gif", "bmp", "avif")
         private val ALLOWED_WORKSPACE_MOUNTS = setOf("workspace", "generated", "previews", "home", "face")
 

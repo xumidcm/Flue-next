@@ -44,7 +44,7 @@ android {
     compileSdk = 36
 
     defaultConfig {
-        applicationId = "com.dw.launcher"
+        applicationId = "com.flue.launcher"
         minSdk = 27
         targetSdk = 36
         versionCode = 26

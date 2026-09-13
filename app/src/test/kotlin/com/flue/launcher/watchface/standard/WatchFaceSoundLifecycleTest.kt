@@ -31,9 +31,7 @@ class WatchFaceSoundLifecycleTest {
     @get:Rule val temporaryFolder = TemporaryFolder()
 
     private fun withView(block: (Activity, WatchmakerWatchFaceView, WatchFaceSoundPlayback) -> Unit) {
-        shadowOf(RuntimeEnvironment.getApplication()).grantPermissions(
-            "${com.flue.launcher.BuildConfig.APPLICATION_ID}.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION",
-        )
+        shadowOf(RuntimeEnvironment.getApplication()).grantPermissions("com.flue.launcher.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION")
         val controller = Robolectric.buildActivity(Activity::class.java).setup()
         val activity = controller.get()
         shadowOf(activity.getSystemService(Context.POWER_SERVICE) as PowerManager).setIsInteractive(true)

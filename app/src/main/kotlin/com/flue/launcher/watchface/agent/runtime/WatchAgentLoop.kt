@@ -92,12 +92,7 @@ class WatchAgentLoop(
                 val results = toolRunner.execute(calls, manageUndoGroup = false)
                 currentCoroutineContext().ensureActive()
                 if (results.any { !it.succeeded }) {
-                    // A later stale/invalid call must not erase writes that
-                    // already succeeded earlier in this Agent turn. Each
-                    // document mutation is applied to the live editor draft;
-                    // keep those changes visible and let the provider repair
-                    // only the failed operation on the next turn.
-                    transaction?.commit()
+                    transaction?.rollback()
                     transaction = null
                 }
                 onToolResults(results)
@@ -124,9 +119,7 @@ class WatchAgentLoop(
             }
             throw IllegalStateException("Agent 工具循环超过 $maxTurns 轮，已停止以避免重复调用")
         } catch (error: Throwable) {
-            // Preserve successful live edits even when the provider stream is
-            // cancelled or fails after a tool has completed.
-            transaction?.commit()
+            transaction?.rollback()
             throw error
         }
     }
@@ -169,20 +162,9 @@ class WatchAgentLoop(
     }
 
     private fun parseArguments(json: String): Map<String, Any?> {
-        var root = com.flue.launcher.watchface.agent.provider.AgentJsonParser.parse(json)
+        val root = com.flue.launcher.watchface.agent.provider.AgentJsonParser.parse(json)
             as? com.flue.launcher.watchface.agent.provider.AgentJsonValue.Obj
             ?: throw IllegalArgumentException("工具参数必须是 JSON 对象")
-        // A few OpenAI-compatible providers serialize the function payload as
-        // {"arguments":{...}} (and some use input/parameters) even though the
-        // wire schema already expects the inner object. Normalize these wrappers
-        // once at the loop boundary so every tool sees the same argument map.
-        repeat(2) {
-            val wrapper = root.fields.keys.singleOrNull()
-            if (wrapper !in setOf("arguments", "input", "parameters")) return@repeat
-            root.fields[wrapper]?.let { nested ->
-                root = nested as? com.flue.launcher.watchface.agent.provider.AgentJsonValue.Obj ?: return@repeat
-            }
-        }
         return root.fields.mapValues { (_, value) -> value.toKotlinValue() }
     }
 

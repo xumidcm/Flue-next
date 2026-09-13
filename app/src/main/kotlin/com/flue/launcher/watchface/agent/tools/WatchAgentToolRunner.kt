@@ -28,7 +28,7 @@ class WatchAgentToolRunner(
     val toolContracts: List<WatchAgentToolContract>
         get() {
             val permissions = currentPermissions()
-            return (WatchAgentToolContracts.all + WatchAgentToolContracts.mirror + WatchAgentToolContracts.optional).filter { it.name != WatchAgentToolName.COMMIT_FACE_MIRROR && permissions.allows(it.access) &&
+            return (WatchAgentToolContracts.all + WatchAgentToolContracts.mirror + WatchAgentToolContracts.optional).filter { permissions.allows(it.access) &&
                 (workspaceImages != null || it.name !in setOf(WatchAgentToolName.LIST_WORKSPACE_FILES, WatchAgentToolName.READ_IMAGE)) &&
                 (shellRunner?.capability(workspaceIdProvider())?.bashAvailable == true || it.name != WatchAgentToolName.RUN_BASH) &&
                 (imageClient != null || it.name !in setOf(WatchAgentToolName.GENERATE_IMAGE, WatchAgentToolName.EDIT_IMAGE)) &&
@@ -48,12 +48,7 @@ class WatchAgentToolRunner(
         val undoGroup = if (manageUndoGroup) beginRequestUndoGroup() else null
         return try {
             val results = scheduler.execute(calls)
-            // Keep mutations that completed before a later stale/invalid call;
-            // a failed operation has no right to erase visible live edits.
-            val wrote = results.any { result ->
-                result.succeeded && WatchAgentToolName.fromWireName(result.name)?.isWrite == true
-            }
-            if (wrote) undoGroup?.commit() else undoGroup?.rollback()
+            if (results.any { !it.succeeded }) undoGroup?.rollback() else undoGroup?.commit()
             results
         } catch (error: Throwable) {
             runCatching { undoGroup?.rollback() }
@@ -100,34 +95,14 @@ class WatchAgentToolRunner(
                         failure(call, "workspace_not_found", "工作区 ${result.workspaceId} 不存在或未绑定当前表盘")
                     is com.flue.launcher.watchface.agent.workspace.ShellRunResult.RuntimeUnavailable ->
                         failure(call, "runtime_unavailable", "工作区 ${result.workspaceId} 的 Bash 运行时不可用，请检查 Rootfs 自检和 Proot native 文件")
-                    is com.flue.launcher.watchface.agent.workspace.ShellRunResult.Completed -> {
-                        // Bash is mounted against the current face mirror.
-                        // Publish valid mirror edits immediately so the editor
-                        // and preview reflect the command without a second
-                        // model-authored commit_face_mirror call. Resolve the
-                        // revision *after* this synchronization: a mirror
-                        // write can advance the live editor revision.
-                        var faceMirror: Any? = null
-                        var faceMirrorSyncError: String? = null
-                        runCatching { host.commitFaceMirror(host.currentRevision) }
-                            .onSuccess { faceMirror = it }
-                            .onFailure { error ->
-                                // A command that did not touch face/ (or a
-                                // workspace without a mirror) remains a valid
-                                // Bash result; expose the sync issue as data so
-                                // the Agent can act on it when relevant.
-                                faceMirrorSyncError = error.message ?: error.javaClass.simpleName
-                            }
-                        success(call, host.currentRevision, buildMap {
-                            put("command", command)
-                            put("stdout", result.stdout)
-                            put("exit_code", result.exitCode)
-                            put("truncated", result.truncated)
-                            put("run_id", result.runId)
-                            faceMirror?.let { put("face_mirror", it) }
-                            faceMirrorSyncError?.let { put("face_mirror_sync_error", it) }
-                        })
-                    }
+                    is com.flue.launcher.watchface.agent.workspace.ShellRunResult.Completed ->
+                        success(call, host.currentRevision, mapOf(
+                            "command" to command,
+                            "stdout" to result.stdout,
+                            "exit_code" to result.exitCode,
+                            "truncated" to result.truncated,
+                            "run_id" to result.runId,
+                        ))
                     is com.flue.launcher.watchface.agent.workspace.ShellRunResult.DryRun ->
                         success(call, host.currentRevision, mapOf(
                             "command" to command,

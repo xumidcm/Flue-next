@@ -92,7 +92,7 @@ object WatchAgentToolContracts {
         ),
         WatchAgentToolContract(
             WatchAgentToolName.EDIT_DOCUMENT,
-            "按唯一 old_text 精确替换当前 revision 中的文档片段；写入立即更新当前编辑器草稿。必须使用最近一次 read_document 或成功写入返回的 revision，不能复用旧 revision。",
+            "按唯一 old_text 精确替换当前 revision 中的文档片段。",
             listOf(
                 WatchAgentToolParameter("path", "string", required = true),
                 WatchAgentToolParameter("old_text", "string", required = true),
@@ -102,7 +102,7 @@ object WatchAgentToolContracts {
         ),
         WatchAgentToolContract(
             WatchAgentToolName.WRITE_DOCUMENT,
-            "以 expected_revision 为基础立即替换当前编辑器草稿中的完整文档。只能使用最近一次读取或成功写入返回的 revision；不要与其他写入并发。",
+            "以 expected_revision 为基础提交完整文档。",
             listOf(
                 WatchAgentToolParameter("path", "string", required = true),
                 WatchAgentToolParameter("content", "string", required = true),

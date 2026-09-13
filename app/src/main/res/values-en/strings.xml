@@ -546,7 +546,6 @@
 
     <!-- About and Donate -->
     <string name="settings_about_title">About</string>
-    <string name="about_custom_edition">CYTJ OS Custom Edition</string>
     <string name="settings_donate_title">Support development</string>
     <string name="settings_donate_tip">Thank you so much for supporting Flue Next! Tap a QR code below to view it full screen.</string>
     <string name="settings_donate_wechat">WeChat</string>

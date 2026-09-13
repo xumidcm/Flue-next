@@ -168,10 +168,8 @@
     <string name="agent_open_settings">Agent 设置</string>
     <string name="agent_rename_conversation">重命名会话</string>
     <string name="agent_input_tokens">输入 %1$d tokens</string>
-    <string name="agent_output_tokens">本轮总消耗 %1$s</string>
-    <string name="agent_turn_tokens">本轮总消耗 %1$s</string>
-    <string name="agent_total_tokens">总计 %1$s</string>
-    <string name="agent_compress_context">压缩上下文</string>
+    <string name="agent_output_tokens">输出 %1$d tokens</string>
+    <string name="agent_total_tokens">总计 %1$d tokens</string>
     <string name="agent_pending_next">已排队下一轮</string>
     <string name="agent_pending_preview">下一轮：%1$s</string>
     <string name="agent_cancel_pending">取消排队</string>
@@ -179,7 +177,6 @@
     <string name="agent_status_calling_tool">工具调用</string>
     <string name="agent_status_processing_preview">正在处理预览</string>
     <string name="agent_status_follow_up">正在处理下一轮提示</string>
-    <string name="agent_status_compressing">正在压缩上下文</string>
     <string name="agent_reasoning_active">正在思考…</string>
     <string name="agent_reasoning_title">思考过程</string>
     <string name="agent_reasoning_expand">展开</string>

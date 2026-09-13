@@ -6761,13 +6761,6 @@ private fun AboutCard(
                     )
                     .padding(horizontal = 6.dp, vertical = 2.dp)
             )
-            Text(
-                stringResource(R.string.about_custom_edition),
-                color = launcherStyle.accentColor,
-                fontSize = 12.sp,
-                fontWeight = FontWeight.SemiBold,
-                modifier = Modifier.padding(top = 5.dp),
-            )
             Spacer(modifier = Modifier.height(22.dp))
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Image(

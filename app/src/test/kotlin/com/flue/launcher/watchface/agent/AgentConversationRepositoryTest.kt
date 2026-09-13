@@ -102,18 +102,6 @@ class AgentConversationRepositoryTest {
     }
 
     @Test
-    fun `conversation token usage is persisted and compact replacement removes tool records`() {
-        val conversation = repository.createConversation("face-a", now = 10L)
-        repository.appendMessage(conversation.id, AgentMessage.user(conversation.id, "目标", 20L))
-        repository.appendMessage(conversation.id, AgentMessage(conversation.id + "-tool", conversation.id, AgentMessageRole.TOOL, "{tool}", 21L, toolName = "inspect_face"))
-        repository.addTokenUsage(conversation.id, 1234L)
-        repository.replaceMessages(conversation.id, listOf(AgentMessage.assistant(conversation.id, "摘要", 30L)))
-
-        assertEquals(1234L, repository.getConversation(conversation.id)?.tokenCount)
-        assertEquals(listOf("摘要"), repository.listMessages(conversation.id).map { it.content })
-    }
-
-    @Test
     fun `editing a user message replaces it and truncates the following branch`() {
         val conversation = repository.createConversation("face-a", now = 10L)
         val user = AgentMessage.user(conversation.id, "旧问题", 20L)

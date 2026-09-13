@@ -68,26 +68,6 @@ class AgentConversationRepository(context: Context) {
     fun listMessages(conversationId: String): List<AgentMessage> = messages(conversationId)
 
     @Synchronized
-    fun replaceMessages(conversationId: String, replacement: List<AgentMessage>) {
-        require(replacement.all { it.conversationId == conversationId }) { "消息不属于当前会话" }
-        require(getConversation(conversationId) != null) { "会话不存在" }
-        preferences.edit().putString(
-            messagesKey(conversationId),
-            JSONArray().apply { replacement.forEach { put(messageJson(it)) } }.toString(),
-        ).commit()
-        getConversation(conversationId)?.let { current ->
-            writeConversation(current.copy(updatedAt = System.currentTimeMillis()))
-        }
-    }
-
-    @Synchronized
-    fun addTokenUsage(conversationId: String, delta: Long): AgentConversation {
-        val current = requireNotNull(getConversation(conversationId))
-        if (delta <= 0L) return current
-        return current.copy(tokenCount = current.tokenCount + delta).also(::writeConversation)
-    }
-
-    @Synchronized
     fun applyUserTitle(conversationId: String, content: String, now: Long = System.currentTimeMillis()): AgentConversation {
         val current = requireNotNull(getConversation(conversationId))
         val updated = current.withFirstUserMessage(content).copy(updatedAt = now)
@@ -149,11 +129,6 @@ class AgentConversationRepository(context: Context) {
         getConversation(conversationId)?.let { writeConversation(it.copy(endedAt = now, updatedAt = now)) }
     }
 
-    @Synchronized
-    fun markResumed(conversationId: String, now: Long = System.currentTimeMillis()) {
-        getConversation(conversationId)?.let { writeConversation(it.copy(endedAt = null, updatedAt = now)) }
-    }
-
     private fun conversations(): List<AgentConversation> {
         val array = JSONArray(preferences.getString(CONVERSATIONS_KEY, "[]"))
         return buildList(array.length()) {
@@ -182,7 +157,6 @@ class AgentConversationRepository(context: Context) {
         put("updatedAt", value.updatedAt)
         put("endedAt", value.endedAt ?: JSONObject.NULL)
         put("titleFinalized", value.titleFinalized)
-        put("tokenCount", value.tokenCount)
     }
 
     private fun conversationFrom(value: JSONObject) = AgentConversation(
@@ -190,7 +164,6 @@ class AgentConversationRepository(context: Context) {
         createdAt = value.getLong("createdAt"), updatedAt = value.getLong("updatedAt"),
         endedAt = value.optLong("endedAt").takeIf { !value.isNull("endedAt") && it > 0L },
         titleFinalized = value.optBoolean("titleFinalized", false),
-        tokenCount = value.optLong("tokenCount", 0L),
     )
 
     private fun messageJson(value: AgentMessage) = JSONObject().apply {
@@ -200,7 +173,6 @@ class AgentConversationRepository(context: Context) {
         put("toolCallId", value.toolCallId ?: JSONObject.NULL)
         put("reasoningContent", value.reasoningContent ?: JSONObject.NULL)
         put("thinkingDurationMs", value.thinkingDurationMs ?: JSONObject.NULL)
-        put("turnTokens", value.turnTokens ?: JSONObject.NULL)
         put("toolCalls", JSONArray().apply {
             value.toolCalls.forEach { call ->
                 put(JSONObject().put("id", call.id).put("name", call.name).put("argumentsJson", call.argumentsJson))
@@ -221,7 +193,6 @@ class AgentConversationRepository(context: Context) {
         toolCallId = value.nullableString("toolCallId"),
         reasoningContent = value.nullableString("reasoningContent"),
         thinkingDurationMs = value.optLong("thinkingDurationMs").takeIf { !value.isNull("thinkingDurationMs") && it >= 0L },
-        turnTokens = value.optLong("turnTokens").takeIf { !value.isNull("turnTokens") && it >= 0L },
         toolCalls = buildList {
             val calls = value.optJSONArray("toolCalls") ?: return@buildList
             for (index in 0 until calls.length()) {
