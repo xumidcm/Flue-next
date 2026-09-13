@@ -18,6 +18,8 @@ data class AgentMessage(
     val toolCalls: List<AgentToolCallRecord> = emptyList(),
     val attachments: List<AgentAttachment> = emptyList(),
     val reasoningContent: String? = null,
+    /** Measured provider thinking phase; null while the turn is still active. */
+    val thinkingDurationMs: Long? = null,
 ) {
     companion object {
         fun user(conversationId: String, content: String, now: Long): AgentMessage =
@@ -82,6 +84,7 @@ data class WatchAgentUiState(
     val inputDraft: String = "",
     val expandedToolIds: Set<String> = emptySet(),
     val expandedToolDetailIds: Set<String> = emptySet(),
+    val expandedReasoningIds: Set<String> = emptySet(),
     val showHistory: Boolean = false,
     val showSettings: Boolean = false,
     val isGenerating: Boolean = false,
@@ -103,6 +106,10 @@ data class WatchAgentUiState(
 
     fun toggleToolDetails(toolId: String): WatchAgentUiState = copy(
         expandedToolDetailIds = if (toolId in expandedToolDetailIds) expandedToolDetailIds - toolId else expandedToolDetailIds + toolId,
+    )
+
+    fun toggleReasoning(messageId: String): WatchAgentUiState = copy(
+        expandedReasoningIds = if (messageId in expandedReasoningIds) expandedReasoningIds - messageId else expandedReasoningIds + messageId,
     )
 
     companion object {

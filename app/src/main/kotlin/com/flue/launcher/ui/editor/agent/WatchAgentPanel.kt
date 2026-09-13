@@ -128,6 +128,7 @@ private fun AgentSurfaceContent(viewModel: WatchAgentViewModel, messages: List<A
         }
     }
     var followOutput by remember(state.activeConversationId) { mutableStateOf(true) }
+    var autoScrollInProgress by remember(state.activeConversationId) { mutableStateOf(false) }
     // Capture the user's position when a generation starts. Only a session that
     // was already pinned to the bottom should follow streaming output; a reader
     // who is looking at older messages must stay at that position.
@@ -137,11 +138,16 @@ private fun AgentSurfaceContent(viewModel: WatchAgentViewModel, messages: List<A
     }
     LaunchedEffect(listState, state.activeConversationId) {
         snapshotFlow { listState.isScrollInProgress to nearBottom }.collect { (scrolling, atBottom) ->
-            if (scrolling && !atBottom) followOutput = false
+            // A programmatic correction briefly reports an intermediate position;
+            // do not mistake that transient state for a user drag.
+            if (scrolling && !atBottom && !autoScrollInProgress) followOutput = false
         }
     }
     suspend fun scrollToEnd(animated: Boolean) {
         if (displayItems.isEmpty()) return
+        if (autoScrollInProgress) return
+        autoScrollInProgress = true
+        try {
         // An assistant turn can be taller than the whole viewport. Its item index
         // alone identifies the beginning of the reply, not the conversation end.
         if (listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index != displayItems.lastIndex) {
@@ -150,8 +156,13 @@ private fun AgentSurfaceContent(viewModel: WatchAgentViewModel, messages: List<A
         val info = listState.layoutInfo
         val last = info.visibleItemsInfo.lastOrNull()
         val remaining = last?.let { (it.offset.toLong() + it.size - info.viewportEndOffset).coerceAtLeast(0L).toFloat() } ?: 0f
-        if (animated) listState.animateScrollBy(remaining) else listState.scrollBy(remaining)
+        if (remaining > 0f) {
+            if (animated) listState.animateScrollBy(remaining) else listState.scrollBy(remaining)
+        }
         followOutput = true
+        } finally {
+            autoScrollInProgress = false
+        }
     }
     LaunchedEffect(
         messages.size,
@@ -184,7 +195,7 @@ private fun AgentSurfaceContent(viewModel: WatchAgentViewModel, messages: List<A
                 // Keep the floating return affordance clear of the last tool card
                 // and composer while retaining a compact timeline.
                 contentPadding = PaddingValues(bottom = 64.dp),
-                verticalArrangement = Arrangement.spacedBy(4.dp),
+                verticalArrangement = Arrangement.spacedBy(2.dp),
             ) {
                 if (displayItems.isEmpty()) item { EmptyAgentState() }
                 items(displayItems, key = AgentConversationItem::key) { item ->
@@ -210,8 +221,10 @@ private fun AgentSurfaceContent(viewModel: WatchAgentViewModel, messages: List<A
                                 outputTokens = state.outputTokens,
                                 expandedToolIds = state.expandedToolIds,
                                 expandedToolDetailIds = state.expandedToolDetailIds,
+                                expandedReasoningIds = state.expandedReasoningIds,
                                 onToggleTool = viewModel::toggleTool,
                                 onToggleToolDetails = viewModel::toggleToolDetails,
+                                onToggleReasoning = viewModel::toggleReasoning,
                                 onCopy = { copyToClipboard(context, it) },
                                 onRetry = {
                                     val firstIndex = messages.indexOfFirst { message -> message.id == item.messages.first().id }
@@ -355,8 +368,10 @@ private fun AgentAssistantTurn(
     outputTokens: Long? = null,
     expandedToolIds: Set<String> = emptySet(),
     expandedToolDetailIds: Set<String> = emptySet(),
+    expandedReasoningIds: Set<String> = emptySet(),
     onToggleTool: (String) -> Unit = {},
     onToggleToolDetails: (String) -> Unit = {},
+    onToggleReasoning: (String) -> Unit = {},
     onCopy: (String) -> Unit,
     onRetry: () -> Unit,
 ) {
@@ -366,9 +381,8 @@ private fun AgentAssistantTurn(
     Column(
         Modifier
             .fillMaxWidth()
-            .animateContentSize()
             .padding(horizontal = 4.dp, vertical = 2.dp),
-        verticalArrangement = Arrangement.spacedBy(4.dp),
+        verticalArrangement = Arrangement.spacedBy(2.dp),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Icon(
@@ -404,7 +418,11 @@ private fun AgentAssistantTurn(
         thoughtSteps.forEach { _ -> }
         messages.forEach { message ->
             message.reasoningContent?.takeIf(String::isNotBlank)?.let { reasoning ->
-                AgentReasoningStep(AgentThoughtStep.Reasoning(message, reasoning), showDetails = true)
+                AgentReasoningStep(
+                    step = AgentThoughtStep.Reasoning(message, reasoning),
+                    showDetails = message.id in expandedReasoningIds,
+                    onToggle = { onToggleReasoning(message.id) },
+                )
             }
             if (agentMessageLayout(message) == AgentMessageLayout.ASSISTANT_FLOW && message.content.isNotBlank()) {
                 AgentTextMessageContent(
@@ -492,7 +510,7 @@ private fun AgentThoughtStepContent(
     onToggle: () -> Unit = {},
 ) {
     when (step) {
-        is AgentThoughtStep.Reasoning -> AgentReasoningStep(step, showDetails)
+        is AgentThoughtStep.Reasoning -> AgentReasoningStep(step, showDetails, onToggle)
         is AgentThoughtStep.Tool -> {
             val call = step.call
             if (call != null) {
@@ -505,22 +523,36 @@ private fun AgentThoughtStepContent(
 }
 
 @Composable
-private fun AgentReasoningStep(step: AgentThoughtStep.Reasoning, showDetails: Boolean) {
+private fun AgentReasoningStep(
+    step: AgentThoughtStep.Reasoning,
+    showDetails: Boolean,
+    onToggle: () -> Unit = {},
+) {
     val active = step.message.status == AgentMessageStatus.STREAMING
-    AgentThoughtStepFrame(icon = MiuixIcons.Sparkle) {
+    val duration = step.message.thinkingDurationMs?.let(::formatThinkingDuration)
+    AgentThoughtStepFrame(icon = MiuixIcons.Sparkle, onClick = onToggle) {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             Text(
-                stringResource(if (active) R.string.agent_reasoning_active else R.string.agent_reasoning_title) +
-                    " · " + if (active) "…" else "1s",
+                buildString {
+                    append(stringResource(if (active) R.string.agent_reasoning_active else R.string.agent_reasoning_title))
+                    if (!active && duration != null) append(" · ").append(duration)
+                },
                 modifier = Modifier.weight(1f),
                 style = MaterialTheme.typography.labelMedium,
                 color = LauncherTheme.style.titleColor,
                 fontWeight = FontWeight.SemiBold,
             )
+            Text(
+                stringResource(if (showDetails) R.string.agent_reasoning_collapse else R.string.agent_reasoning_expand),
+                style = MaterialTheme.typography.labelSmall,
+                color = LauncherTheme.style.secondaryTextColor,
+            )
         }
-        if (showDetails) {
-            SafeMarkdownText(step.content, LauncherTheme.style.secondaryTextColor)
-        }
+        SafeMarkdownText(
+            markdown = step.content,
+            color = LauncherTheme.style.secondaryTextColor,
+            maxLines = if (showDetails) Int.MAX_VALUE else 3,
+        )
     }
 }
 
@@ -650,7 +682,7 @@ private fun AgentThoughtStepFrame(
         }
         Column(
             modifier = Modifier.weight(1f).padding(start = 8.dp),
-            verticalArrangement = Arrangement.spacedBy(4.dp),
+            verticalArrangement = Arrangement.spacedBy(2.dp),
             content = content,
         )
     }
@@ -935,13 +967,28 @@ private fun countSeverity(items: org.json.JSONArray?, severity: String): Int {
 }
 
 @Composable
-private fun SafeMarkdownText(markdown: String, color: Color) {
+private fun SafeMarkdownText(markdown: String, color: Color, maxLines: Int = Int.MAX_VALUE) {
     val linkColor = MaterialTheme.colorScheme.primary
     Text(
         text = remember(markdown, color, linkColor) { safeMarkdown(markdown, color, linkColor) },
         color = color,
         style = MaterialTheme.typography.bodyMedium,
+        maxLines = maxLines,
+        overflow = if (maxLines == Int.MAX_VALUE) TextOverflow.Clip else TextOverflow.Ellipsis,
     )
+}
+
+private fun formatThinkingDuration(durationMs: Long): String {
+    val seconds = durationMs.coerceAtLeast(0L) / 1_000.0
+    return when {
+        seconds < 1.0 -> "<1s"
+        seconds < 60.0 -> "%.1f".format(seconds).removeSuffix(".0") + "s"
+        else -> {
+            val minutes = (seconds / 60.0).toInt()
+            val remainder = seconds - minutes * 60
+            "${minutes}m %.0fs".format(remainder)
+        }
+    }
 }
 
 private fun safeMarkdown(source: String, color: Color, linkColor: Color): AnnotatedString = buildAnnotatedString {

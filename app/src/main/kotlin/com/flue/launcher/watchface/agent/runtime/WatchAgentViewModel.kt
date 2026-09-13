@@ -363,6 +363,10 @@ class WatchAgentViewModel(application: Application) : AndroidViewModel(applicati
         it.toggleToolDetails(toolId)
     }
 
+    fun toggleReasoning(messageId: String) = _state.update {
+        it.toggleReasoning(messageId)
+    }
+
     fun selectConversation(id: String) {
         val conversation = _conversations.value.firstOrNull { it.id == id } ?: return
         invalidateGeneration()
@@ -423,6 +427,7 @@ class WatchAgentViewModel(application: Application) : AndroidViewModel(applicati
         // after the tool results. This preserves the provider's timeline while
         // keeping LazyColumn item identity stable during streaming.
         var assistantId = java.util.UUID.randomUUID().toString()
+        var assistantThinkingStartedAt = SystemClock.uptimeMillis()
         repository.appendMessage(
             conversation.id,
             AgentMessage(
@@ -514,6 +519,7 @@ class WatchAgentViewModel(application: Application) : AndroidViewModel(applicati
                     val capabilityPrompt = WatchAgentPrompt.availableCapabilities(
                         capability = capability,
                         networkAllowed = permissions.networkAllowed,
+                        approvalMode = permissions.approvalMode,
                         imageAvailable = imageClient != null,
                         webSearchAvailable = webClient != null,
                         webFetchAvailable = webClient != null && feature.webFetchEnabled,
@@ -592,6 +598,7 @@ class WatchAgentViewModel(application: Application) : AndroidViewModel(applicati
                                 status = AgentMessageStatus.COMPLETE,
                                 reasoningContent = reasoningAccumulator.snapshot(),
                                 toolCalls = calls,
+                                thinkingDurationMs = elapsedThinkingMs(assistantThinkingStartedAt),
                             )
                             pendingToolCalls.recordCalls(calls)
                             streamAccumulator.reset()
@@ -618,6 +625,7 @@ class WatchAgentViewModel(application: Application) : AndroidViewModel(applicati
                             // turn will stream. It is appended only after all
                             // results, so no text can be reinserted above them.
                             assistantId = java.util.UUID.randomUUID().toString()
+                            assistantThinkingStartedAt = SystemClock.uptimeMillis()
                             repository.appendMessage(
                                 conversation.id,
                                 AgentMessage(
@@ -656,7 +664,14 @@ class WatchAgentViewModel(application: Application) : AndroidViewModel(applicati
                     val finalText = completion.text.ifBlank {
                         streamAccumulator.snapshot()
                     }
-                    updateAssistant(generation, assistantId, finalText, AgentMessageStatus.COMPLETE, reasoningAccumulator.snapshot())
+                    updateAssistant(
+                        generation,
+                        assistantId,
+                        finalText,
+                        AgentMessageStatus.COMPLETE,
+                        reasoningAccumulator.snapshot(),
+                        thinkingDurationMs = elapsedThinkingMs(assistantThinkingStartedAt),
+                    )
                     repository.markGeneratedTitlePending(conversation.id)
                     generateTitle(conversation, profile, apiKey, prompt, finalText)
                 }
@@ -668,7 +683,14 @@ class WatchAgentViewModel(application: Application) : AndroidViewModel(applicati
                     encoder = encodeToolResult,
                 )
                 val partial = streamAccumulator.snapshot()
-                updateAssistant(generation, assistantId, partial, AgentMessageStatus.CANCELLED, reasoningAccumulator.snapshot())
+                updateAssistant(
+                    generation,
+                    assistantId,
+                    partial,
+                    AgentMessageStatus.CANCELLED,
+                    reasoningAccumulator.snapshot(),
+                    thinkingDurationMs = elapsedThinkingMs(assistantThinkingStartedAt),
+                )
                 throw cancellation
             } catch (error: Throwable) {
                 persistCancelledToolResults(
@@ -679,7 +701,14 @@ class WatchAgentViewModel(application: Application) : AndroidViewModel(applicati
                 )
                 val partial = streamAccumulator.snapshot()
                 val suffix = error.displayableMessage()
-                updateAssistant(generation, assistantId, listOf(partial, "Agent 请求失败：$suffix").filter { it.isNotBlank() }.joinToString("\n\n"), AgentMessageStatus.FAILED, reasoningAccumulator.snapshot())
+                updateAssistant(
+                    generation,
+                    assistantId,
+                    listOf(partial, "Agent 请求失败：$suffix").filter { it.isNotBlank() }.joinToString("\n\n"),
+                    AgentMessageStatus.FAILED,
+                    reasoningAccumulator.snapshot(),
+                    thinkingDurationMs = elapsedThinkingMs(assistantThinkingStartedAt),
+                )
             } finally {
                 completeGeneration(generation) {
                     generationJob = null
@@ -765,6 +794,7 @@ class WatchAgentViewModel(application: Application) : AndroidViewModel(applicati
         status: AgentMessageStatus,
         reasoningContent: String? = null,
         toolCalls: List<AgentToolCallRecord> = emptyList(),
+        thinkingDurationMs: Long? = null,
     ) {
         val existing = repository.listMessages(generation.conversationId).firstOrNull { it.id == messageId }
         repository.updateMessage(
@@ -777,10 +807,14 @@ class WatchAgentViewModel(application: Application) : AndroidViewModel(applicati
                 status = status,
                 reasoningContent = reasoningContent?.takeIf(String::isNotBlank),
                 toolCalls = toolCalls,
+                thinkingDurationMs = thinkingDurationMs ?: existing?.thinkingDurationMs,
             ),
         )
         publishGeneration(generation) { refresh(generation.conversationId) }
     }
+
+    private fun elapsedThinkingMs(startedAt: Long): Long =
+        (SystemClock.uptimeMillis() - startedAt).coerceAtLeast(0L)
 
     private fun persistCancelledToolResults(
         generation: AgentGenerationScope,

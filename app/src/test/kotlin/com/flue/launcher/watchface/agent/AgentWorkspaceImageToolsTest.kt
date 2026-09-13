@@ -11,15 +11,19 @@ import org.junit.rules.TemporaryFolder
 class AgentWorkspaceImageToolsTest {
     @get:Rule val temporary = TemporaryFolder()
 
-    @Test fun `list exposes generated and attachment files only in the selected workspace`() {
+    @Test fun `list exposes every file in the selected workspace and face mirror`() {
         val manager = WorkspaceManager(temporary.newFolder().toPath())
         val selected = manager.create("Selected", watchScope = "face")
         val other = manager.create("Other")
         Files.write(selected.paths.generated.resolve("image.png"), byteArrayOf(1))
         Files.write(selected.paths.workspace.resolve("attachment.jpg"), byteArrayOf(2))
+        Files.write(selected.paths.face.resolve("preview.png"), byteArrayOf(3))
+        Files.write(selected.paths.face.resolve("watch.xml"), byteArrayOf(4))
+        Files.createDirectories(selected.paths.face.resolve("scripts"))
+        Files.write(selected.paths.face.resolve("scripts/script.txt"), byteArrayOf(5))
         Files.write(other.paths.generated.resolve("private.png"), byteArrayOf(3))
         val files = AgentWorkspaceImageTools(manager, "face").listFiles()
-        assertEquals(setOf("generated/image.png", "workspace/attachment.jpg"), files.toSet())
+        assertEquals(setOf("generated/image.png", "workspace/attachment.jpg", "face/preview.png", "face/watch.xml", "face/scripts/script.txt"), files.toSet())
     }
 
     @Test fun `image paths reject traversal and Linux or metadata reads before decoding`() {

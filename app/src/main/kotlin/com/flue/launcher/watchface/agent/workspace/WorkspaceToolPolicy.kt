@@ -12,7 +12,7 @@ enum class BashRisk {
 }
 
 class WorkspaceToolPolicy(
-    private val mode: BashApprovalMode = BashApprovalMode.EACH_COMMAND,
+    private val mode: BashApprovalMode = BashApprovalMode.AUTOMATIC,
 ) : BashApprovalStrategy {
     override fun decide(request: ShellCommandRequest): BashApproval = when (mode) {
         BashApprovalMode.EACH_COMMAND -> BashApproval.REQUIRE_CONFIRMATION

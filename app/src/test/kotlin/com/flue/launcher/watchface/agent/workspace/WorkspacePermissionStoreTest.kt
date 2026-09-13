@@ -27,11 +27,21 @@ class WorkspacePermissionStoreTest {
     fun `missing preferences load the safe defaults`() {
         val settings = WorkspacePermissionStore(context).load()
 
-        assertEquals(BashApprovalMode.EACH_COMMAND, settings.approvalMode)
+        assertEquals(BashApprovalMode.AUTOMATIC, settings.approvalMode)
         assertTrue(settings.networkAllowed)
         assertTrue(settings.readAllowed)
         assertTrue(settings.writeAllowed)
         assertFalse(settings.attachmentImportAllowed)
+    }
+
+    @Test
+    fun `legacy implicit command confirmation migrates to automatic execution`() {
+        context.getSharedPreferences("agent_workspace_permissions", Context.MODE_PRIVATE)
+            .edit()
+            .putString("approval_mode", BashApprovalMode.EACH_COMMAND.name)
+            .commit()
+
+        assertEquals(BashApprovalMode.AUTOMATIC, WorkspacePermissionStore(context).load().approvalMode)
     }
 
     @Test

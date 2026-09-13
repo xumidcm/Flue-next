@@ -172,6 +172,7 @@ class AgentConversationRepository(context: Context) {
         put("toolName", value.toolName ?: JSONObject.NULL)
         put("toolCallId", value.toolCallId ?: JSONObject.NULL)
         put("reasoningContent", value.reasoningContent ?: JSONObject.NULL)
+        put("thinkingDurationMs", value.thinkingDurationMs ?: JSONObject.NULL)
         put("toolCalls", JSONArray().apply {
             value.toolCalls.forEach { call ->
                 put(JSONObject().put("id", call.id).put("name", call.name).put("argumentsJson", call.argumentsJson))
@@ -191,6 +192,7 @@ class AgentConversationRepository(context: Context) {
         toolName = value.nullableString("toolName"),
         toolCallId = value.nullableString("toolCallId"),
         reasoningContent = value.nullableString("reasoningContent"),
+        thinkingDurationMs = value.optLong("thinkingDurationMs").takeIf { !value.isNull("thinkingDurationMs") && it >= 0L },
         toolCalls = buildList {
             val calls = value.optJSONArray("toolCalls") ?: return@buildList
             for (index in 0 until calls.length()) {
