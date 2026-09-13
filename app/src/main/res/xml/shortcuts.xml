@@ -8,7 +8,7 @@
         android:shortcutLongLabel="@string/shortcut_settings">
         <intent
             android:action="android.intent.action.MAIN"
-            android:targetPackage="com.flue.launcher"
+            android:targetPackage="${applicationId}"
             android:targetClass="com.flue.launcher.SettingsActivity" />
     </shortcut>
 </shortcuts>

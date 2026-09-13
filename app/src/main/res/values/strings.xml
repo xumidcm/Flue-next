@@ -552,6 +552,7 @@
 
     <!-- About 与 Donate -->
     <string name="settings_about_title">关于</string>
+    <string name="about_custom_edition">CYTJ OS 定制版</string>
     <string name="settings_donate_title">捐赠支持</string>
     <string name="settings_donate_tip">真的很感谢你能支持 Flue Next 开发！点开下方二维码可全屏查看</string>
     <string name="settings_donate_wechat">微信</string>

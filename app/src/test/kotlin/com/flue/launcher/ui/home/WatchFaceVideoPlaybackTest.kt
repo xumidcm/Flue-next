@@ -50,7 +50,7 @@ class WatchFaceVideoPlaybackTest {
             ShadowMediaPlayer.MediaInfo(60_000, 0),
         )
         shadowOf(RuntimeEnvironment.getApplication()).grantPermissions(
-            "com.flue.launcher.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION",
+            "${com.flue.launcher.BuildConfig.APPLICATION_ID}.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION",
         )
         val controller = Robolectric.buildActivity(ComponentActivity::class.java).setup().visible()
         val activity = controller.get()
