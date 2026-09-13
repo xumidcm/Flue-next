@@ -357,12 +357,20 @@ class WorkspaceRuntimeTest {
     @Test
     fun `face mirror sync read and path policy are revision safe`() {
         val workspace = manager.create("mirror")
-        assertTrue(manager.syncFaceMirror(workspace.id, "<watch/>", "print('ok')", mapOf("images/hero.png" to byteArrayOf(1, 2))))
+        assertTrue(
+            manager.syncFaceMirror(
+                workspace.id,
+                "<watch/>",
+                "print('ok')",
+                mapOf("images/hero.png" to byteArrayOf(1, 2), "preview.jpg" to byteArrayOf(3, 4)),
+            ),
+        )
         val snapshot = manager.readFaceMirror(workspace.id) ?: error("mirror missing")
         assertEquals("<watch/>", snapshot.watchXml)
         assertEquals("print('ok')", snapshot.globalScript)
-        assertEquals(listOf("images/hero.png"), snapshot.resources)
+        assertEquals(listOf("images/hero.png", "preview.jpg"), snapshot.resources)
         assertTrue(Files.isRegularFile(manager.resolveWorkspaceFile(workspace.id, "face/images/hero.png")))
+        assertTrue(Files.isRegularFile(manager.resolveWorkspaceFile(workspace.id, "face/preview.jpg")))
         try {
             manager.resolveWorkspaceFile(workspace.id, "../other/secret")
             fail("path traversal must be rejected")

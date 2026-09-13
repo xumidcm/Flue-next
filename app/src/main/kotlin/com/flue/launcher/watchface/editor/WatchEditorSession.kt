@@ -276,6 +276,78 @@ class WatchEditorSession private constructor(
         return agentCandidate()
     }
 
+    /**
+     * Restores the complete face mirror into this editor draft as one
+     * undoable mutation. The installed face remains the save baseline, so the
+     * restored draft is intentionally reported as dirty until the user saves
+     * it explicitly.
+     */
+    @Synchronized
+    fun restoreAgentMirror(
+        watchXml: String,
+        globalScript: String,
+        resources: Map<String, ByteArray>,
+    ): WatchEditorSnapshot {
+        ensureOpen()
+        require(watchXml.isNotBlank()) { "镜像缺少 watch.xml" }
+        require(watchXml.toByteArray(StandardCharsets.UTF_8).size <= MAX_AGENT_DOCUMENT_BYTES) {
+            "镜像 watch.xml 超过 ${MAX_AGENT_DOCUMENT_BYTES / 1024 / 1024} MiB UTF-8 限制"
+        }
+        require(globalScript.toByteArray(StandardCharsets.UTF_8).size <= MAX_WATCH_SCRIPT_BYTES) {
+            "镜像全局脚本超过 $MAX_WATCH_SCRIPT_BYTES 字节限制"
+        }
+        mutate {
+            val normalized = normalizeAgentWatchXmlPaths(watchXml)
+            document = parseXml(
+                ByteArrayInputStream(normalized.toByteArray(StandardCharsets.UTF_8)),
+                limits,
+            )
+            rebindLayerKeys(layerKeys.takeIf { it.size == topLevelLayerElements().size })
+
+            val desired = resources.keys.map { path ->
+                validateRelativePath(path).also { clean ->
+                    require(clean != watchXmlRelativePath && clean != GLOBAL_SCRIPT_RELATIVE_PATH) {
+                        "镜像资源不能覆盖编辑器文档"
+                    }
+                }
+            }.toSet()
+            resourcePathsInternal().filterNot { it in desired }.forEach { path ->
+                val file = resolveDraftPath(path)
+                if (file.exists() && !file.delete()) {
+                    throw WatchEditorException("无法恢复镜像资源：$path")
+                }
+            }
+            resources.forEach { (path, bytes) ->
+                val clean = validateRelativePath(path)
+                require(bytes.size <= limits.maxFileBytes) {
+                    "镜像资源超过 ${limits.maxFileBytes} 字节限制：$clean"
+                }
+                val target = resolveDraftPath(clean)
+                target.parentFile?.let { parent ->
+                    if (!parent.exists() && !parent.mkdirs()) {
+                        throw WatchEditorException("无法创建镜像资源目录：$clean")
+                    }
+                }
+                writeAtomically(target, bytes)
+            }
+            updateGlobalScriptDirect(globalScript)
+        }
+        return snapshot()
+    }
+
+    private fun updateGlobalScriptDirect(script: String) {
+        val bytes = script.toByteArray(StandardCharsets.UTF_8)
+        val scriptFile = globalScriptFile()
+        if (bytes.isEmpty()) {
+            if (scriptFile.exists() && !scriptFile.delete()) {
+                throw WatchEditorException("无法恢复全局脚本")
+            }
+        } else {
+            scriptFile.parentFile?.let { parent -> if (!parent.exists()) parent.mkdirs() }
+            writeAtomically(scriptFile, bytes)
+        }
+    }
+
     /** Returns scripts/script.txt as UTF-8, or an empty string when it is absent. */
     @Synchronized
     fun globalScript(): String {

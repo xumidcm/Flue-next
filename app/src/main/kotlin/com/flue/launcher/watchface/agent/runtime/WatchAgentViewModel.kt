@@ -14,6 +14,7 @@ import com.flue.launcher.watchface.agent.model.AgentMessageRole
 import com.flue.launcher.watchface.agent.model.AgentMessageStatus
 import com.flue.launcher.watchface.agent.model.AgentSurface
 import com.flue.launcher.watchface.agent.model.AgentGenerationStatus
+import com.flue.launcher.watchface.agent.model.AiModelDescriptor
 import com.flue.launcher.watchface.agent.model.AgentToolCallRecord
 import com.flue.launcher.watchface.agent.model.WatchAgentUiState
 import com.flue.launcher.watchface.agent.storage.AgentConversationRepository
@@ -367,6 +368,13 @@ class WatchAgentViewModel(application: Application) : AndroidViewModel(applicati
         it.toggleReasoning(messageId)
     }
 
+    fun activeConversationId(): String? = _state.value.activeConversationId
+
+    fun resumeConversation(id: String) {
+        repository.markResumed(id)
+        selectConversation(id)
+    }
+
     fun selectConversation(id: String) {
         val conversation = _conversations.value.firstOrNull { it.id == id } ?: return
         invalidateGeneration()
@@ -380,6 +388,8 @@ class WatchAgentViewModel(application: Application) : AndroidViewModel(applicati
                 isGenerating = false,
                 pendingFollowUp = null,
                 generationStatus = null,
+                turnTokens = null,
+                conversationTokens = conversation.tokenCount,
             )
         }
         _messages.value = repository.listMessages(conversation.id)
@@ -397,6 +407,8 @@ class WatchAgentViewModel(application: Application) : AndroidViewModel(applicati
                 attachments = emptyList(),
                 pendingFollowUp = null,
                 generationStatus = null,
+                turnTokens = null,
+                conversationTokens = 0L,
             )
         }
         _messages.value = emptyList()
@@ -421,7 +433,7 @@ class WatchAgentViewModel(application: Application) : AndroidViewModel(applicati
         else repository.appendMessage(conversation.id, user)
         _conversations.value = repository.listConversations(_state.value.watchScope)
         refresh(conversation.id)
-        _state.update { it.copy(inputDraft = "", attachments = emptyList(), editingMessageId = null, attachmentError = null, isGenerating = true) }
+        _state.update { it.copy(inputDraft = "", attachments = emptyList(), editingMessageId = null, attachmentError = null, isGenerating = true, turnTokens = null, conversationTokens = conversation.tokenCount) }
         // Keep one stable placeholder for each provider turn. A tool turn updates
         // the placeholder in place, then the next turn gets a new placeholder
         // after the tool results. This preserves the provider's timeline while
@@ -446,6 +458,9 @@ class WatchAgentViewModel(application: Application) : AndroidViewModel(applicati
         val pendingToolCalls = AgentPendingToolCallLedger()
         val generationHost = toolHost ?: EmptyWatchAgentToolHost
         var encodeToolResult: ((WatchAgentToolResult) -> String)? = null
+        var turnInputTokens = 0L
+        var turnOutputTokens = 0L
+        var usageCommitted = false
         val job = viewModelScope.launch(start = CoroutineStart.LAZY) {
             try {
                 val configured = withContext(Dispatchers.IO) {
@@ -467,14 +482,24 @@ class WatchAgentViewModel(application: Application) : AndroidViewModel(applicati
                     if (!acceptsImages && attachments.any { it.mimeType?.startsWith("image/") == true }) {
                         error("当前模型不支持图片输入，请在对话顶部选择支持视觉的模型后重试。")
                     }
-                    val storedMessages = repository.listMessages(conversation.id)
+                    var storedMessages = repository.listMessages(conversation.id)
+                    val descriptor = providerStore.cachedModels(profile.id).firstOrNull { it.id == profile.modelId }
+                        ?: AiModelDescriptor(profile.modelId.orEmpty())
+                    val contextWindow = com.flue.launcher.watchface.agent.provider.AgentModelContextResolver.contextWindow(profile, descriptor)
+                    val estimatedTokens = estimateMessageTokens(storedMessages) + estimateTextTokens(WatchAgentPrompt.baseline)
+                    if (estimatedTokens >= (contextWindow * 0.8).toLong()) {
+                        updateGenerationState(generation) { it.copy(generationStatus = AgentGenerationStatus.COMPRESSING) }
+                        compressConversation(conversation, profile, apiKey, storedMessages)
+                        storedMessages = repository.listMessages(conversation.id)
+                        publishGeneration(generation) { refresh(conversation.id) }
+                    }
                     val recentImageIds = storedMessages.flatMap { it.attachments }.filter { it.mimeType?.startsWith("image/") == true }.takeLast(4).map { it.id }.toSet()
                     val history = withContext(Dispatchers.IO) { storedMessages
                         .filter { it.id != assistantId && it.role in setOf(AgentMessageRole.USER, AgentMessageRole.ASSISTANT, AgentMessageRole.TOOL) }
                         .map { message ->
                             AgentRequestMessage(
                                 role = message.role,
-                                content = message.content + message.attachments.joinToString("", prefix = if (message.attachments.isEmpty()) "" else "\n\n附件：\n") { "- ${it.displayName} (${it.mimeType ?: "未知类型"}, ${it.sizeBytes} B, sha256=${it.sha256.orEmpty()})" },
+                                content = message.content + message.attachments.joinToString("", prefix = if (message.attachments.isEmpty()) "" else "\n\n附件：\n") { "- ${it.displayName} (${it.mimeType ?: "未知类型"}, ${formatByteCountForPrompt(it.sizeBytes)}, sha256=${it.sha256.orEmpty()})" },
                                 name = message.toolName,
                                 images = if (acceptsImages && message.role == AgentMessageRole.USER) message.attachments
                                     .filter { it.id in recentImageIds }
@@ -576,8 +601,11 @@ class WatchAgentViewModel(application: Application) : AndroidViewModel(applicati
                                 }
                             }
                             if (event is AgentStreamEvent.Usage) {
+                                turnInputTokens += event.input ?: 0L
+                                turnOutputTokens += event.output ?: 0L
+                                val turnTotal = turnInputTokens + turnOutputTokens
                                 updateGenerationState(generation) {
-                                    it.copy(inputTokens = event.input, outputTokens = event.output)
+                                    it.copy(inputTokens = event.input, outputTokens = event.output, turnTokens = turnTotal, conversationTokens = conversation.tokenCount + turnTotal)
                                 }
                             }
                         },
@@ -664,6 +692,8 @@ class WatchAgentViewModel(application: Application) : AndroidViewModel(applicati
                     val finalText = completion.text.ifBlank {
                         streamAccumulator.snapshot()
                     }
+                    val turnTotal = turnInputTokens + turnOutputTokens
+                    updateGenerationState(generation) { it.copy(turnTokens = turnTotal, conversationTokens = conversation.tokenCount + turnTotal) }
                     updateAssistant(
                         generation,
                         assistantId,
@@ -671,7 +701,9 @@ class WatchAgentViewModel(application: Application) : AndroidViewModel(applicati
                         AgentMessageStatus.COMPLETE,
                         reasoningAccumulator.snapshot(),
                         thinkingDurationMs = elapsedThinkingMs(assistantThinkingStartedAt),
+                        turnTokens = turnTotal,
                     )
+                    commitUsage(conversation.id, turnTotal).also { usageCommitted = true }
                     repository.markGeneratedTitlePending(conversation.id)
                     generateTitle(conversation, profile, apiKey, prompt, finalText)
                 }
@@ -690,7 +722,9 @@ class WatchAgentViewModel(application: Application) : AndroidViewModel(applicati
                     AgentMessageStatus.CANCELLED,
                     reasoningAccumulator.snapshot(),
                     thinkingDurationMs = elapsedThinkingMs(assistantThinkingStartedAt),
+                    turnTokens = turnInputTokens + turnOutputTokens,
                 )
+                commitUsage(conversation.id, turnInputTokens + turnOutputTokens).also { usageCommitted = true }
                 throw cancellation
             } catch (error: Throwable) {
                 persistCancelledToolResults(
@@ -708,8 +742,14 @@ class WatchAgentViewModel(application: Application) : AndroidViewModel(applicati
                     AgentMessageStatus.FAILED,
                     reasoningAccumulator.snapshot(),
                     thinkingDurationMs = elapsedThinkingMs(assistantThinkingStartedAt),
+                    turnTokens = turnInputTokens + turnOutputTokens,
                 )
+                commitUsage(conversation.id, turnInputTokens + turnOutputTokens).also { usageCommitted = true }
             } finally {
+                if (!usageCommitted) {
+                    commitUsage(conversation.id, turnInputTokens + turnOutputTokens)
+                    usageCommitted = true
+                }
                 completeGeneration(generation) {
                     generationJob = null
                     refresh(conversation.id)
@@ -731,6 +771,36 @@ class WatchAgentViewModel(application: Application) : AndroidViewModel(applicati
     fun stop() {
         invalidateGeneration()
         _state.update { it.copy(isGenerating = false, pendingFollowUp = null, generationStatus = null) }
+    }
+
+    /** Manually compacts the visible conversation without sending any tool schema. */
+    fun compressContext() {
+        if (_state.value.isGenerating) return
+        val conversationId = _state.value.activeConversationId ?: return
+        val conversation = repository.getConversation(conversationId) ?: return
+        val scope = _state.value.watchScope
+        _state.update { it.copy(isGenerating = true, generationStatus = AgentGenerationStatus.COMPRESSING) }
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val profile = providerStore.active()
+                val apiKey = profile?.let { providerStore.apiKey(it.id) }
+                if (profile != null && !apiKey.isNullOrBlank()) {
+                    compressConversation(conversation, profile, apiKey, repository.listMessages(conversation.id))
+                }
+            } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                throw cancelled
+            } catch (_: Throwable) {
+                // Keep the full conversation when a provider cannot perform a manual compaction.
+            } finally {
+                if (_state.value.watchScope == scope && _state.value.activeConversationId == conversation.id) {
+                    withContext(Dispatchers.Main.immediate) {
+                        refresh(conversation.id)
+                        _conversations.value = repository.listConversations(scope)
+                        _state.update { it.copy(isGenerating = false, generationStatus = null, conversationTokens = repository.getConversation(conversation.id)?.tokenCount ?: it.conversationTokens) }
+                    }
+                }
+            }
+        }
     }
 
     fun renameConversation(title: String) {
@@ -769,6 +839,49 @@ class WatchAgentViewModel(application: Application) : AndroidViewModel(applicati
 
     private fun refresh(conversationId: String) { _messages.value = repository.listMessages(conversationId) }
 
+    private fun commitUsage(conversationId: String, tokens: Long) {
+        if (tokens > 0L) repository.addTokenUsage(conversationId, tokens)
+    }
+
+    private suspend fun compressConversation(
+        conversation: AgentConversation,
+        profile: com.flue.launcher.watchface.agent.model.AiProviderProfile,
+        apiKey: String,
+        messages: List<AgentMessage>,
+    ): Boolean {
+        val visible = messages.filter { it.role == AgentMessageRole.USER || it.role == AgentMessageRole.ASSISTANT }
+            .filter { it.content.isNotBlank() }
+        if (visible.size < 2) return false
+        val generatedSummary = try {
+            withContext(Dispatchers.IO) {
+                providerClient.send(profile.copy(reasoningEffort = null), apiKey, AgentConversationCompressionPrompt.request(visible))
+                    .text.trim()
+            }
+        } catch (cancelled: kotlinx.coroutines.CancellationException) {
+            throw cancelled
+        } catch (_: Throwable) {
+            return false
+        }
+        val summary = generatedSummary.takeIf { it.isNotBlank() } ?: return false
+        val keep = visible.takeLast(6)
+        val summaryMessage = AgentMessage(
+            id = java.util.UUID.randomUUID().toString(),
+            conversationId = conversation.id,
+            role = AgentMessageRole.ASSISTANT,
+            content = "上下文摘要：$summary",
+            createdAt = System.currentTimeMillis(),
+            status = AgentMessageStatus.COMPLETE,
+        )
+        repository.replaceMessages(conversation.id, listOf(summaryMessage) + keep)
+        return true
+    }
+
+    private fun estimateMessageTokens(messages: List<AgentMessage>): Long =
+        messages.sumOf { estimateTextTokens(it.content) + it.attachments.sumOf { attachment -> estimateTextTokens(attachment.displayName) } }
+
+    private fun estimateTextTokens(text: String): Long =
+        kotlin.math.ceil(text.length / 4.0).toLong().coerceAtLeast(0L)
+
     private fun updateAssistantPreview(messageId: String, content: String) {
         _messages.update { messages ->
             messages.map { message ->
@@ -795,6 +908,7 @@ class WatchAgentViewModel(application: Application) : AndroidViewModel(applicati
         reasoningContent: String? = null,
         toolCalls: List<AgentToolCallRecord> = emptyList(),
         thinkingDurationMs: Long? = null,
+        turnTokens: Long? = null,
     ) {
         val existing = repository.listMessages(generation.conversationId).firstOrNull { it.id == messageId }
         repository.updateMessage(
@@ -808,6 +922,7 @@ class WatchAgentViewModel(application: Application) : AndroidViewModel(applicati
                 reasoningContent = reasoningContent?.takeIf(String::isNotBlank),
                 toolCalls = toolCalls,
                 thinkingDurationMs = thinkingDurationMs ?: existing?.thinkingDurationMs,
+                turnTokens = turnTokens ?: existing?.turnTokens,
             ),
         )
         publishGeneration(generation) { refresh(generation.conversationId) }
@@ -888,6 +1003,13 @@ private fun Throwable.displayableMessage(): String {
         !root.message.isNullOrBlank() -> root.message.orEmpty().take(500)
         else -> root.javaClass.simpleName
     }
+}
+
+private fun formatByteCountForPrompt(value: Long): String = when {
+    value < 1_000L -> "$value B"
+    value < 1_000_000L -> "${"%.1f".format(java.util.Locale.US, value / 1_000.0).trimEnd('0').trimEnd('.')} KB"
+    value < 1_000_000_000L -> "${"%.1f".format(java.util.Locale.US, value / 1_000_000.0).trimEnd('0').trimEnd('.')} MB"
+    else -> "${"%.1f".format(java.util.Locale.US, value / 1_000_000_000.0).trimEnd('0').trimEnd('.')} GB"
 }
 
 /** A generation without an editor binding can still show a useful configuration error. */

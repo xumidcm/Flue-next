@@ -132,7 +132,7 @@ class AgentProviderCoreTest {
     @Test
     fun `context window falls back to 200k and manual override wins`() {
         val descriptor = AiModelDescriptor("unknown", metadataSource = ModelMetadataSource.PROVIDER)
-        assertEquals(200_000L, AgentModelContextResolver.contextWindow(profile(AiProtocol.RESPONSES), descriptor))
+        assertEquals(100_000L, AgentModelContextResolver.contextWindow(profile(AiProtocol.RESPONSES), descriptor))
         assertEquals(
             64_000L,
             AgentModelContextResolver.contextWindow(

@@ -16,6 +16,8 @@ class WatchEditorSessionAgentToolHost(
     private val watchScope: String? = null,
 ) : WatchAgentToolHost, WatchAgentUndoHost {
     @Volatile private var activeUndoGroup: RevisionAwareUndoGroup? = null
+    @Volatile private var lastSyncedWatchXml: String? = null
+    @Volatile private var lastSyncedGlobalScript: String? = null
     override val currentRevision: Long
         get() = session.agentRevision()
 
@@ -107,6 +109,7 @@ class WatchEditorSessionAgentToolHost(
             newText = request.newText,
             expectedRevision = request.expectedRevision,
         )
+        syncMirrorFromEditor(candidate)
         onDocumentMutated(candidate)
         activeUndoGroup?.recordAgentRevision(candidate.revision)
         return candidate.mutation(request.path)
@@ -118,6 +121,7 @@ class WatchEditorSessionAgentToolHost(
             content = request.content,
             expectedRevision = request.expectedRevision,
         )
+        syncMirrorFromEditor(candidate)
         onDocumentMutated(candidate)
         activeUndoGroup?.recordAgentRevision(candidate.revision)
         return candidate.mutation(request.path)
@@ -127,10 +131,7 @@ class WatchEditorSessionAgentToolHost(
         val manager = workspaceManager ?: throw WatchAgentToolException("mirror_unavailable", "当前宿主未绑定工作区")
         val id = watchScope?.let { manager.bindingFor(it)?.workspaceId } ?: throw WatchAgentToolException("mirror_unavailable", "当前表盘未绑定工作区")
         val candidate = session.agentCandidate()
-        val resources = session.resourceInventory().associate { asset ->
-            asset.relativePath to session.draftDirectory.toPath().resolve(asset.relativePath).let(Files::readAllBytes)
-        }
-        check(manager.syncFaceMirror(id, candidate.watchXml, candidate.globalScript, resources)) { "镜像同步失败" }
+        val resources = syncMirrorFromEditor(candidate) ?: throw WatchAgentToolException("mirror_unavailable", "镜像同步失败")
         return mapOf("workspace_id" to id, "revision" to currentRevision, "path" to "face/", "resources" to resources.keys.sorted())
     }
 
@@ -165,7 +166,15 @@ class WatchEditorSessionAgentToolHost(
         checkRevision(expectedRevision)
         val manager = workspaceManager ?: throw WatchAgentToolException("mirror_unavailable", "当前宿主未绑定工作区")
         val id = watchScope?.let { manager.bindingFor(it)?.workspaceId } ?: throw WatchAgentToolException("mirror_unavailable", "当前表盘未绑定工作区")
+        val current = session.agentCandidate()
         val mirror = manager.readFaceMirror(id) ?: throw WatchAgentToolException("mirror_unavailable", "镜像目录不存在")
+        // The mirror is a Bash working copy. If the editor changed since the last
+        // editor-to-mirror sync, an older mirror must never overwrite that newer
+        // document. Refresh it and report a safe no-op instead.
+        if (lastSyncedWatchXml == null || lastSyncedWatchXml != current.watchXml || lastSyncedGlobalScript != current.globalScript) {
+            syncFaceMirror()
+            return mapOf("committed" to false, "skipped" to "stale_mirror", "revision" to currentRevision)
+        }
         val validation = validateFaceMirror() as Map<*, *>
         if (validation["valid"] != true) throw WatchAgentToolException("mirror_invalid", "镜像校验失败，拒绝写回编辑器")
         var revision = expectedRevision
@@ -180,11 +189,11 @@ class WatchEditorSessionAgentToolHost(
             session.importResource(Files.newInputStream(source), name, directory)
             revision = currentRevision
         }
-        if (mirror.watchXml.isNotBlank()) {
+        if (mirror.watchXml != current.watchXml) {
             writeDocument(WatchAgentWriteDocumentRequest(WatchAgentDocumentPath.WATCH_XML, mirror.watchXml, revision))
             revision = currentRevision
         }
-        if (mirror.globalScript.isNotBlank()) {
+        if (mirror.globalScript != session.globalScript()) {
             writeDocument(WatchAgentWriteDocumentRequest(WatchAgentDocumentPath.GLOBAL_SCRIPT, mirror.globalScript, revision))
             revision = currentRevision
         }
@@ -200,8 +209,23 @@ class WatchEditorSessionAgentToolHost(
         if (!Files.isRegularFile(source, LinkOption.NOFOLLOW_LINKS)) throw WatchAgentToolException("invalid_resource", "镜像资源不是普通文件")
         val directory = clean.substringBefore('/')
         val imported = session.importResource(Files.newInputStream(source), clean.substringAfterLast('/'), directory)
+        syncMirrorFromEditor(session.agentCandidate())
         onDocumentMutated(session.agentCandidate())
         return mapOf("imported" to imported, "revision" to currentRevision)
+    }
+
+    private fun syncMirrorFromEditor(candidate: WatchEditorAgentCandidate): Map<String, ByteArray>? {
+        val manager = workspaceManager ?: return emptyMap()
+        val id = watchScope?.let { manager.bindingFor(it)?.workspaceId } ?: return emptyMap()
+        return runCatching {
+            val resources = session.resourceInventory().associate { asset ->
+                asset.relativePath to session.draftDirectory.toPath().resolve(asset.relativePath).let(Files::readAllBytes)
+            }
+            check(manager.syncFaceMirror(id, candidate.watchXml, candidate.globalScript, resources)) { "镜像同步失败" }
+            lastSyncedWatchXml = candidate.watchXml
+            lastSyncedGlobalScript = candidate.globalScript
+            resources
+        }.getOrNull()
     }
 
     override fun beginUndoGroup(): WatchAgentUndoGroup {
