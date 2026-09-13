@@ -123,7 +123,11 @@ object RootfsCatalog {
                 archiveSizeBytes = 29_936_675L,
                 expandedSizeBytes = 512L * 1024L * 1024L,
                 signature = "apk-pinned:ubuntu-sha256sums",
-                requiredPaths = setOf("/bin/bash", "/usr/bin/apt-get", "/usr/bin/pip3"),
+                // ubuntu-base ships bash and apt-get. Python/pip are probed as
+                // optional capabilities after extraction; treating pip3 as a
+                // mandatory archive entry rejects an otherwise valid base image
+                // before the agent can install it through apt.
+                requiredPaths = setOf("/bin/bash", "/usr/bin/apt-get"),
             ),
             format = RootfsArchiveFormat.TAR_GZ,
         )
