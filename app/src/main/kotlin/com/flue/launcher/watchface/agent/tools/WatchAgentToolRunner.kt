@@ -87,6 +87,11 @@ class WatchAgentToolRunner(
             WatchAgentToolName.RUN_BASH -> {
                 val runner = requireNotNull(shellRunner) { "工作区 Bash 尚未初始化" }
                 val command = call.requiredString("command")
+                // Sync editor -> face/ before the command. Without this
+                // preflight, the first Bash call after an editor-side change
+                // had no baseline and the post-run commit could discard the
+                // command's own mirror edits as "stale".
+                host.prepareBashMirror()
                 val result = runner.run(ShellCommandRequest(
                     workspaceId = workspaceIdProvider(),
                     command = command,

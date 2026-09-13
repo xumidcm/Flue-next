@@ -135,6 +135,18 @@ class WatchEditorSessionAgentToolHost(
         return mapOf("workspace_id" to id, "revision" to currentRevision, "path" to "face/", "resources" to resources.keys.sorted())
     }
 
+    override fun prepareBashMirror() {
+        // Bash runs against the mirror and may edit it in place. Refresh the
+        // baseline first so the post-command auto-sync can distinguish those
+        // edits from an older copy and never roll the live editor backwards.
+        val manager = workspaceManager ?: return
+        val id = watchScope?.let { manager.bindingFor(it)?.workspaceId } ?: return
+        check(syncMirrorFromEditor(session.agentCandidate()) != null) {
+            "无法在 Bash 执行前同步表盘镜像"
+        }
+        check(manager.get(id) != null) { "当前表盘绑定工作区不存在" }
+    }
+
     override fun validateFaceMirror(): Any {
         val manager = workspaceManager ?: throw WatchAgentToolException("mirror_unavailable", "当前宿主未绑定工作区")
         val id = watchScope?.let { manager.bindingFor(it)?.workspaceId } ?: throw WatchAgentToolException("mirror_unavailable", "当前表盘未绑定工作区")
