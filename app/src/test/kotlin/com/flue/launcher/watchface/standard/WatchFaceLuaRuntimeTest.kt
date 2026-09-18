@@ -369,6 +369,54 @@ class WatchFaceLuaRuntimeTest {
     }
 
     @Test
+    fun scriptVariablesInsideBracedExpressionsResolveToValuesAndNeutralMissingZero() {
+        WatchFaceLuaRuntime.create("var_cyc = 0; var_s_t1 = 'hello'").use { runtime ->
+            assertEquals(100.0, runtime.evaluateNumber("{var_cyc} == 0 and 100 or 0"), 0.0)
+            assertTrue(runtime.referencesFaceState("{var_cyc} == 0 and 100 or 0"))
+            assertEquals(
+                100.0,
+                runtime.evaluateFaceNumber("{var_cyc} == 0 and 100 or 0") { tag ->
+                    WatchTagResolution.Unsupported(tag)
+                }!!,
+                0.0,
+            )
+            assertEquals(0.0, runtime.evaluateNumber("{var_cyc} == 2 and 100 or 0"), 0.0)
+            assertEquals(100.0, runtime.evaluateNumber("{var_nope} == 0 and 100 or 0"), 0.0)
+            assertEquals("hello", runtime.evaluateText("{var_s_t1}"))
+            assertEquals("fhellof", runtime.evaluateText("'f{var_s_t1}f'"))
+            assertTrue(runtime.runSnippet("var_cyc = 2").isSuccess)
+            assertEquals(0.0, runtime.evaluateNumber("{var_cyc} == 0 and 100 or 0"), 0.0)
+            assertEquals(100.0, runtime.evaluateNumber("{var_cyc} == 2 and 100 or 0"), 0.0)
+            assertEquals(
+                "hello",
+                runtime.evaluateFaceText("{var_s_t1}") { tag ->
+                    WatchTagResolution.Unsupported(tag)
+                },
+            )
+            assertNull(runtime.evaluateText("var_nope"))
+        }
+    }
+
+    @Test
+    fun mixedTagTextAndConditionalLuaMatchTheTransparentExplorationFace() {
+        val resolver: (String) -> WatchTagResolution = { tag ->
+            when (tag) {
+                "bl" -> WatchTagResolution.Resolved("80")
+                "bc" -> WatchTagResolution.Resolved("Charging")
+                "bv" -> WatchTagResolution.Resolved("42")
+                "bi" -> WatchTagResolution.Resolved("1000")
+                else -> WatchTagResolution.Unsupported(tag)
+            }
+        }
+        WatchFaceLuaRuntime.create(null).use { runtime ->
+            val expression =
+                "string.format(\"%d%% %s\", {bl}, {bc} == \"Charging\" and " +
+                    "string.format(\"• Charging • %.1fw\", ({bv} * {bi}) / 1000) or \"\")"
+            assertEquals("80% • Charging • 42.0w", runtime.evaluateText(expression, resolver))
+        }
+    }
+
+    @Test
     fun externalDataSlotsAreVisibleAndInvalidateCachedLuaReads() {
         var version = 0L
         var current = WatchExternalDataSlot(data = "first", key = "initial", timestampMs = 10L)

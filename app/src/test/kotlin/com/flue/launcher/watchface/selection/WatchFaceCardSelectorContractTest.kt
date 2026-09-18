@@ -83,10 +83,28 @@ class WatchFaceCardSelectorContractTest {
     fun `back affordance follows focused face luminance with an animated transition`() {
         val selector = source("com/example/wlauncher/ui/home/WatchFaceCardSelector.kt")
 
-        assertTrue(selector.contains("rememberAppListSeedColor("))
+        assertFalse(selector.contains("rememberAppListSeedColor("))
+        assertTrue(selector.contains("backdropColor"))
         assertTrue(selector.contains("watchFaceCardUseDarkForeground("))
         assertTrue(selector.contains("animateColorAsState("))
         assertTrue(selector.contains("tint = backIconColor"))
+    }
+
+    @Test
+    fun `selector always renders a fading dot window instead of a page count`() {
+        val selector = source("com/example/wlauncher/ui/home/WatchFaceCardSelector.kt")
+
+        assertTrue(selector.contains("watchFacePageIndicators("))
+        assertTrue(selector.contains("indicator.alpha"))
+        assertFalse(selector.contains("items.size > 9"))
+        assertFalse(selector.contains("\${pagerState.currentPage + 1} / \${items.size}"))
+    }
+
+    @Test
+    fun `selector lifts bottom actions above the original baseline`() {
+        val selector = source("com/example/wlauncher/ui/home/WatchFaceCardSelector.kt")
+
+        assertTrue(selector.contains("offset(y = (-8).dp)"))
     }
 
     private fun source(relative: String): String {

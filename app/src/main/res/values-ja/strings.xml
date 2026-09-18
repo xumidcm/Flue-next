@@ -129,6 +129,8 @@
     <string name="settings_watchface_date_ja_sub">日本語の曜日・月名スタイル</string>
     <string name="settings_watchface_status">文字盤ステータスインジケーター</string>
     <string name="settings_watchface_status_sub">文字盤上部に充電と通知インジケーターを表示</string>
+    <string name="settings_watchface_dnd_indicator">おやすみモードの月</string>
+    <string name="settings_watchface_dnd_indicator_sub">文字盤上部のおやすみモード月アイコンを個別に表示</string>
     <string name="settings_watchface_charging_power">充電電力テキスト</string>
     <string name="settings_watchface_charging_power_sub">充電中に文字盤へ電力または充電テキストを表示</string>
 
@@ -312,6 +314,7 @@
     <string name="search_d_watchface_font">カスタム文字盤フォントファイル</string>
     <string name="search_d_watchface_bottom_fade">文字盤の下部フェード</string>
     <string name="search_d_watchface_status">充電の雷マークと通知ドット</string>
+    <string name="search_d_watchface_dnd_indicator">文字盤上部のおやすみモード月アイコン</string>
     <string name="search_d_charging_power">充電中にワット数を表示</string>
     <string name="search_d_icon_packs">サードパーティのアイコンパック</string>
     <string name="search_d_hidden_apps">一覧からアプリを非表示</string>

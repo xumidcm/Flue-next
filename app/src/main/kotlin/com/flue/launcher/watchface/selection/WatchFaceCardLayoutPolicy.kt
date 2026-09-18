@@ -40,6 +40,54 @@ fun watchFaceCardLayout(
 fun watchFaceCardUseDarkForeground(backgroundLuminance: Float): Boolean =
     backgroundLuminance.takeIf(Float::isFinite)?.let { it >= 0.179f } ?: false
 
+/**
+ * The compact pager indicator keeps a bounded number of dots while still
+ * exposing the relative position of the focused page.  Small collections show
+ * every page; larger collections use a nine-dot window that sticks to either
+ * edge when the focused page is near the beginning or end.
+ */
+data class WatchFacePageIndicator(
+    val page: Int,
+    val alpha: Float,
+)
+
+private const val WATCH_FACE_PAGE_INDICATOR_MAX_VISIBLE = 9
+
+fun watchFacePageIndicators(
+    totalPages: Int,
+    currentPage: Int,
+    maxVisible: Int = WATCH_FACE_PAGE_INDICATOR_MAX_VISIBLE,
+): List<WatchFacePageIndicator> {
+    val pageCount = totalPages.coerceAtLeast(0)
+    if (pageCount == 0) return emptyList()
+    val visibleCount = maxVisible.coerceAtLeast(1).coerceAtMost(pageCount)
+    val focusedPage = currentPage.coerceIn(0, pageCount - 1)
+    val start = if (pageCount <= visibleCount) {
+        0
+    } else {
+        (focusedPage - visibleCount / 2).coerceIn(0, pageCount - visibleCount)
+    }
+    val fadeWindow = pageCount > visibleCount
+    return (start until (start + visibleCount)).map { page ->
+        WatchFacePageIndicator(
+            page = page,
+            alpha = if (fadeWindow) {
+                watchFacePageIndicatorAlpha(kotlin.math.abs(page - focusedPage))
+            } else {
+                1f
+            },
+        )
+    }
+}
+
+fun watchFacePageIndicatorAlpha(distance: Int): Float = when (distance.coerceAtLeast(0)) {
+    0 -> 1f
+    1 -> 0.58f
+    2 -> 0.32f
+    3 -> 0.14f
+    else -> 0f
+}
+
 data class WatchFaceCardVisualTransform(
     val scale: Float,
     val imageScale: Float,

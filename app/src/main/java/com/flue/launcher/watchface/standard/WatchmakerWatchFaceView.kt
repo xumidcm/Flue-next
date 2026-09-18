@@ -2853,6 +2853,8 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
                 bitmapFontNominalSize = bitmapFont.definition.nominalSize.toFloat(),
                 hscGenerated = source.isHscGenerated,
             )
+            // HSC 的设计空间兼容映射与 BMFont 的 1.6 可见高度倍率是两件正交的事：
+            // 前者决定目标 designSize，后者在 drawBitmapText 内把图集像素换算成该高度。
             drawBitmapText(canvas, value, attrs, alpha, bitmapDesignSize, bitmapFont, source)
             return
         }
@@ -3102,7 +3104,11 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         val font = preparedFont.definition
         val renderedText = font.normalizeText(text)
         val lines = WatchTextLayout.lines(renderedText)
-        val scale = designSize / font.nominalSize.coerceAtLeast(1).toFloat()
+        val scale = watchBitmapGlyphScale(
+            designSize = designSize,
+            nominalSize = font.nominalSize,
+            lineHeight = font.lineHeight,
+        )
         val align = attrs["alignment"].orEmpty().lowercase(Locale.ROOT)
         val lineHeight = font.lineHeight * scale
         val firstLineTop = when {
@@ -4547,24 +4553,68 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         canvas.drawLine(-width / 2f, y, width / 2f, y, strokePaint)
     }
 
+    /**
+     * `text_curved`：逐字沿弧排布，**不用** `drawTextOnPath`。
+     *
+     * 对照 CloX `wf_render.lua:2602` `Builders.text_curved` 与 WFTools
+     * `WmPreview.kt:2156`：每个字形占一段**自己的宽度 × 60°/radius** 的角槽
+     * （见 [WatchTextLayout.curvedGlyphSlots]），整串以弧中点为中心展开，
+     * 再按切线旋转。`drawTextOnPath` 用的是真弧长 57.3°/px，会把字距压紧约 5%，
+     * 环形排版里累积成整串偏移 —— 就是老师看到的「对不齐」。
+     *
+     * `curve_dir="Up"` 走上半弧（默认），`"Down"` 走下半弧；两者都从顶点居中展开。
+     */
     private fun drawCurvedText(canvas: Canvas, attrs: Map<String, String>, alpha: Float, source: PreparedSource) {
         val text = evaluateText(attrs["text"].orEmpty(), source)
         if (text.isBlank()) return
         val radius = dynamicNumber(attrs["radius"], 180f, source).coerceAtLeast(1f)
         textPaint.typeface = resolveTypeface(attrs["font"], source)
-        textPaint.textSize = WatchTextLayout.ttfTextSize(
+        val fontPx = WatchTextLayout.ttfTextSize(
             dynamicNumber(attrs["text_size"] ?: attrs["size"], 24f, source),
         )
+        textPaint.textSize = fontPx
         textPaint.isLinearText = textNeedsLinearRaster()
         textPaint.color = resolveColor(attrs["color"], Color.WHITE, source)
         textPaint.alpha = paintAlpha(alpha)
         textPaint.textAlign = Paint.Align.CENTER
-        pathScratch.reset()
-        val arc = WatchTextLayout.curveArc(attrs["curve_dir"])
-        pathScratch.addArc(-radius, -radius, radius, radius, arc.startDegrees, arc.sweepDegrees)
-        val extent = radius + textPaint.textSize
+        val glyphs = text.codePoints().toArray()
+        val glyphWidths = FloatArray(glyphs.size)
+        // 每个字形单独量宽：WM 的角槽按**各自的宽度**分配，不是等宽。
+        for (index in glyphs.indices) {
+            val single = String(Character.toChars(glyphs[index]))
+            glyphWidths[index] = textPaint.measureText(single)
+        }
+        val isSpace = List(glyphs.size) { glyphs[it] == ' '.code || glyphs[it] == '\u00a0'.code }
+        val slots = watchCurvedTextSlots(
+            glyphWidths = glyphWidths.toList(),
+            isSpace = isSpace,
+            fontPx = fontPx,
+            radius = radius,
+        )
+        val up = !attrs["curve_dir"].equals("Down", ignoreCase = true)
+        // 整串在弧上居中：从 -总角/2 起算，逐字推进「半槽 → 画 → 半槽」。
+        // 下面这段与 WFTools `WmPreview.kt:2175-2189` 逐行对应（含 Up/Down 的
+        // 位置与旋转符号），不要凭直觉重推 —— Down 的旋转取负号是有意为之。
+        var wdeg = -slots.sum() / 2f
+        val extent = radius + fontPx
         drawTextShaderFill(canvas, attrs, source, RectF(-extent, -extent, extent, extent), textPaint) {
-            canvas.drawTextOnPath(text, pathScratch, 0f, 0f, textPaint)
+            for (index in glyphs.indices) {
+                // wdeg 以 12 点钟方向为 0，向右（顺时针）为正。
+                wdeg += slots[index] / 2f
+                if (!isSpace[index]) {
+                    val label = String(Character.toChars(glyphs[index]))
+                    val radians = Math.toRadians(wdeg.toDouble())
+                    val offsetX = (radius * sin(radians)).toFloat()
+                    // Up：弧在上半，圆心在原点下方 → y 取负；Down 反之。
+                    val offsetY = (if (up) -radius * cos(radians) else radius * cos(radians)).toFloat()
+                    canvas.save()
+                    canvas.translate(offsetX, offsetY)
+                    canvas.rotate(if (up) wdeg else -wdeg)
+                    canvas.drawText(label, 0f, 0f, textPaint)
+                    canvas.restore()
+                }
+                wdeg += slots[index] / 2f
+            }
         }
     }
 
@@ -5065,6 +5115,8 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
             definitionRevision = definitionRevision,
             watchDirectoryKey = watchDirectoryKey,
             definition = definition,
+            // 保留 HSC 来源标记供诊断/编辑使用；位图字号不再需要它 —— 见
+            // [watchBitmapGlyphScale]：1.6 倍率对所有 `bm:` 包统一生效。
             isHscGenerated = definition.rootAttributes["description"]
                 ?.contains("Generated by HSC watchface downloader", ignoreCase = true) == true,
             hasGyroParallax = hasGyroParallax,

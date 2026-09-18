@@ -700,6 +700,7 @@ private fun SettingsRootScreen(
     val watchFaceTextEntryAnimation by vm.watchFaceTextEntryAnimation.collectAsStateWithLifecycle()
     val watchFaceTextExitAnimation by vm.watchFaceTextExitAnimation.collectAsStateWithLifecycle()
     val watchFaceStatusIndicators by vm.watchFaceStatusIndicators.collectAsStateWithLifecycle()
+    val watchFaceDndIndicator by vm.watchFaceDndIndicator.collectAsStateWithLifecycle()
     val watchFaceBottomFadeEnabled by vm.watchFaceBottomFadeEnabled.collectAsStateWithLifecycle()
     val watchFaceLongPressMode by vm.watchFaceLongPressMode.collectAsStateWithLifecycle()
     val watchfaceGravityParallaxEnabled by vm.watchfaceGravityParallaxEnabled.collectAsStateWithLifecycle()
@@ -2491,6 +2492,16 @@ private fun SettingsRootScreen(
                         checked = watchFaceStatusIndicators,
                         onToggle = vm::setWatchFaceStatusIndicatorsEnabled,
                         scale = itemFisheye(listState, "watchface_status_indicators", screenCenterY, screenHeightPx),
+                        groupPosition = position,
+                    )
+                }
+                row("watchface_dnd_indicator") { position ->
+                    SettingsSwitchRow(
+                        title = stringResource(R.string.settings_watchface_dnd_indicator),
+                        subtitle = stringResource(R.string.settings_watchface_dnd_indicator_sub),
+                        checked = watchFaceDndIndicator,
+                        onToggle = vm::setWatchFaceDndIndicatorEnabled,
+                        scale = itemFisheye(listState, "watchface_dnd_indicator", screenCenterY, screenHeightPx),
                         groupPosition = position,
                     )
                 }
@@ -7922,6 +7933,7 @@ internal fun buildSettingsSearchIndex(context: Context): List<SettingsSearchEntr
     SettingsSearchEntry("WATCH_FACE_MORE", "watchface_text_entry_animation", s(R.string.settings_watchface_text_entry_animation), s(R.string.settings_watchface_text_entry_animation_sub), listOf("bpwz", "text animation", "fly in")),
     SettingsSearchEntry("WATCH_FACE_MORE", "watchface_text_exit_animation", s(R.string.settings_watchface_text_exit_animation), s(R.string.settings_watchface_text_exit_animation_sub), listOf("bpwz", "text exit animation", "fly out")),
     SettingsSearchEntry("WATCH_FACE_MORE", "watchface_status_indicators", s(R.string.settings_watchface_status), s(R.string.search_d_watchface_status), listOf("ztts", "indicator")),
+    SettingsSearchEntry("WATCH_FACE_MORE", "watchface_dnd_indicator", s(R.string.settings_watchface_dnd_indicator), s(R.string.search_d_watchface_dnd_indicator), listOf("勿扰", "moon", "dnd", "do not disturb", "wurao")),
     SettingsSearchEntry("WATCH_FACE_MORE", "watchface_charging_power_text", s(R.string.settings_watchface_charging_power), s(R.string.search_d_charging_power), listOf("cdgl", "charging", "wattage")),
     SettingsSearchEntry("WATCH_FACE_MORE", "app_list_background_entry", s(R.string.settings_app_list_background), s(R.string.search_d_app_list_background), listOf("yylbbj", "app list background", "beijing", "bizhi", "wallpaper")),
     SettingsSearchEntry("APP_LIST_BACKGROUND", null, s(R.string.settings_app_list_background), s(R.string.search_d_app_list_background), listOf("yylbbj", "app list background", "beijing", "bizhi", "wallpaper")),
