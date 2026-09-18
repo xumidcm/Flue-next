@@ -47,8 +47,8 @@ android {
         applicationId = "com.dw.launcher"
         minSdk = 27
         targetSdk = 36
-        versionCode = 27
-        versionName = "2.3.2"
+        versionCode = 28
+        versionName = "2.3.3"
         ndk { abiFilters += listOf("armeabi-v7a", "arm64-v8a") }
     }
 
