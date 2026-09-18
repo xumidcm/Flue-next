@@ -55,6 +55,62 @@ object WatchTextLayout {
             WatchCurveArc(startDegrees = 180f, sweepDegrees = 180f)
         }
 
+    /**
+     * `text_curved` 的逐字角槽位（**度**）。
+     *
+     * ## 为什么不用 `Canvas.drawTextOnPath`
+     *
+     * WatchMaker Studio 2.0 的弧形文字按**每个字自己的宽度**分配角槽，系数是一个
+     * 扁平的 **60°／像素**：
+     *
+     * - CloX `wf_render.lua:2657`：`DEG60 = math.pi / 3`；`a[i] = w * DEG60 / radius`
+     * - WFTools `WmPreview.kt:2172`：`slotDeg[i] = wpx * 60f / radius`
+     *
+     * `drawTextOnPath` 走的是**真弧长** `180/π ≈ 57.2958°／像素`。WFTools 那处注释
+     * 把差别写得很直白：
+     *
+     * > a FLAT 60°/px, not the true arc-length 57.3°/px that drawTextOnPath used
+     * > (which packed strings ~5% too tight)
+     *
+     * 5% 的字距差在环形排版里会累积成整串偏移，看起来就是「对不齐」。
+     * 空格两处也一致取 `0.3 × 字号`（不是空格的实测宽度）。
+     *
+     * @param glyphWidths 每个字形的**实测宽度**（像素），与 `text` 等长。
+     * @param isSpace 该位是否为空格；空格宽度被替换成 `0.3 × fontPx`。
+     * @param fontPx 当前字号（像素）。
+     * @param radius 曲线半径。
+     * @return 与输入等长的角槽位列表，单位**度**；`radius <= 0` 时全为 0。
+     */
+    fun curvedGlyphSlots(
+        glyphWidths: List<Float>,
+        isSpace: List<Boolean>,
+        fontPx: Float,
+        radius: Float,
+    ): List<Float> {
+        if (glyphWidths.isEmpty()) return emptyList()
+        val safeRadius = radius.takeIf { it.isFinite() && it > 0f }
+            ?: return List(glyphWidths.size) { 0f }
+        val safeFontPx = fontPx.takeIf { it.isFinite() && it > 0f } ?: 0f
+        val spaceWidth = CURVED_TEXT_SPACE_WIDTH_RATIO * safeFontPx
+        return List(glyphWidths.size) { index ->
+            val raw = glyphWidths[index]
+            val width = if (isSpace.getOrElse(index) { false }) spaceWidth else raw
+            val safeWidth = width.takeIf { it.isFinite() && it > 0f } ?: 0f
+            safeWidth * CURVED_TEXT_DEGREES_PER_PIXEL / safeRadius
+        }
+    }
+
+    /**
+     * WM 的扁平角密度：**60°／像素**。
+     *
+     * 比真弧长 `180/π ≈ 57.2958°／像素` 大约 4.7%，正是 WFTools 注释里那句
+     * 「packed strings ~5% too tight」的来源。
+     */
+    const val CURVED_TEXT_DEGREES_PER_PIXEL: Float = 60f
+
+    /** 空格宽度占字号的比例，与 CloX / WFTools 一致。 */
+    const val CURVED_TEXT_SPACE_WIDTH_RATIO: Float = 0.3f
+
     fun lines(text: String): List<String> =
         text.replace("\r\n", "\n")
             .replace('\r', '\n')
@@ -107,6 +163,14 @@ object WatchTextLayout {
         return List(count) { index -> firstBaseline + index * spacing }
     }
 }
+
+/** Top-level contract entry point kept for renderer adapters and focused tests. */
+internal fun watchCurvedTextSlots(
+    glyphWidths: List<Float>,
+    isSpace: List<Boolean>,
+    fontPx: Float,
+    radius: Float,
+): List<Float> = WatchTextLayout.curvedGlyphSlots(glyphWidths, isSpace, fontPx, radius)
 
 private val WATCH_HEX_COLOR_LITERAL = Regex("^[0-9a-fA-F]{6}(?:[0-9a-fA-F]{2})?$")
 
@@ -1144,6 +1208,48 @@ internal fun watchBitmapTextDesignSize(
     // 示例中 f1(height=86, nominal=45) 与 f2/f3(height≈180, nominal=180)。
     return maxOf(requested, height ?: requested, nominal ?: requested)
         .coerceIn(1f, WatchmakerGeometry.DESIGN_SIZE)
+}
+
+/**
+ * 位图字体（`bm:`）的可见高度倍率。
+ *
+ * ## 为什么是 1.6
+ *
+ * WatchMaker 的位图字形按**图集原始像素**绘制，`text_size` 不是直接字号，而是
+ * 「这一行文字的可见高度」目标值。上游三处实现完全一致：
+ *
+ * - CloX `wf_render.lua:1940/2026/2541/2649`：`lab:setScale(1.6 * size / ch)`
+ * - WFTools 预览 `WmPreview.kt:1501` / 出图 `WatchfacePreviewCapturer.kt:144`：
+ *   `baseScale = 1.6f * textSizePx / fontH`
+ * - WFTools 量算 `WmPreviewGeometry.kt:138`：同一个 `1.6f * textSizePx / fontH`
+ *
+ * 之前 Flue 用的是 `text_size / nominalSize`，少了这个 `1.6`，于是所有 `bm:` 表盘
+ * 的数字与时间都**缩小到约 62%**。实测「墨水电子表」：clox 时间块高／面板宽
+ * `0.269`，Flue `0.168`，比值正好 `1.598`。
+ *
+ * ## fontH 的取值
+ *
+ * 上游三处都优先取 `info.size`（BMFont 生成字号），缺失才退回 `common.lineHeight`。
+ * 两者在本仓样本里数值相同，但这个优先级要照抄，否则遇到不一致的图集会分叉。
+ */
+internal const val WATCH_BITMAP_FONT_SCALE = 1.6f
+
+/** 见 [WATCH_BITMAP_FONT_SCALE]。`fontH` 无法确定时退回纯 1.6 倍。 */
+internal fun watchBitmapGlyphScale(
+    designSize: Float,
+    nominalSize: Int,
+    lineHeight: Int,
+): Float {
+    val fontHeight = when {
+        nominalSize > 0 -> nominalSize.toFloat()
+        lineHeight > 0 -> lineHeight.toFloat()
+        else -> 0f
+    }
+    if (fontHeight <= 0f) return WATCH_BITMAP_FONT_SCALE
+    val size = designSize.takeIf(Float::isFinite)
+        ?.coerceIn(1f, WatchmakerGeometry.DESIGN_SIZE)
+        ?: 1f
+    return WATCH_BITMAP_FONT_SCALE * size / fontHeight
 }
 
 /** The unit selected for rendering. Weather source values themselves stay Celsius. */

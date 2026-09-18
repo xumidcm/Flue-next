@@ -27,6 +27,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.asPaddingValues
@@ -94,6 +95,7 @@ import com.flue.launcher.watchface.selection.watchFaceCardLayout
 import com.flue.launcher.watchface.selection.watchFaceCardVisualTransform
 import com.flue.launcher.watchface.selection.watchFaceCardCapabilities
 import com.flue.launcher.watchface.selection.watchFaceCardUseDarkForeground
+import com.flue.launcher.watchface.selection.watchFacePageIndicators
 import kotlinx.coroutines.launch
 import top.yukonga.miuix.kmp.icon.MiuixIcons
 import top.yukonga.miuix.kmp.icon.extended.Back
@@ -107,6 +109,7 @@ fun WatchFaceCardSelector(
     selectedWatchFaceId: String,
     refreshToken: Int,
     uiStyle: UiStyle,
+    backdropColor: Color? = null,
     builtInPhotoPath: String?,
     builtInVideoPath: String?,
     photoOptions: BuiltInWatchFaceOptions,
@@ -194,15 +197,11 @@ fun WatchFaceCardSelector(
         val cardWidth = cardLayout.previewSideDp.dp
         val pagerHeight = cardWidth + 8.dp
         val horizontalPagerPadding = (maxWidth - cardWidth) / 2
-        val focusedBackgroundColor = rememberAppListSeedColor(
-            watchFaceId = focused?.id ?: selectedWatchFaceId,
-            photoPath = builtInPhotoPath,
-            videoPath = builtInVideoPath,
-            photoOptions = photoOptions,
-            videoOptions = videoOptions,
-            watchFaceDescriptor = focused,
-            enabled = focused != null,
-        )
+        // The selector is drawn above the already-blurred launcher backdrop.
+        // Use the host-provided sampled tone rather than the preview asset: a
+        // colorful watch-face preview must not flip the back affordance while
+        // the actual blurred background stays unchanged.
+        val focusedBackgroundColor = backdropColor ?: style.screenBackground
         val backIconTarget = when {
             focused == null || focusedBackgroundColor.alpha <= 0.01f -> style.titleColor
             watchFaceCardUseDarkForeground(focusedBackgroundColor.luminance()) -> Color.Black
@@ -324,19 +323,24 @@ fun WatchFaceCardSelector(
                     )
                 }
             }
+            val indicators = remember(items.size, pagerState.currentPage) {
+                watchFacePageIndicators(
+                    totalPages = items.size,
+                    currentPage = pagerState.currentPage,
+                )
+            }
             Row(
                 modifier = Modifier.graphicsLayer { alpha = presentation },
                 horizontalArrangement = Arrangement.spacedBy(5.dp),
             ) {
-                if (items.size > 9) {
-                    Text("${pagerState.currentPage + 1} / ${items.size}", color = style.secondaryTextColor, fontSize = 11.sp)
-                } else items.forEachIndexed { index, _ ->
+                indicators.forEach { indicator ->
                     Box(
                         Modifier
-                            .size(if (index == pagerState.currentPage) 7.dp else 5.dp)
+                            .size(if (indicator.page == pagerState.currentPage) 7.dp else 5.dp)
                             .clip(CircleShape)
+                            .graphicsLayer { alpha = indicator.alpha }
                             .background(
-                                if (index == pagerState.currentPage) style.accentColor
+                                if (indicator.page == pagerState.currentPage) style.accentColor
                                 else style.secondaryTextColor.copy(alpha = 0.42f),
                             ),
                     )
@@ -347,6 +351,7 @@ fun WatchFaceCardSelector(
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(horizontal = 36.dp)
+                        .offset(y = (-8).dp)
                         .graphicsLayer { alpha = presentation },
                     horizontalArrangement = Arrangement.spacedBy(10.dp, Alignment.CenterHorizontally),
                 ) {

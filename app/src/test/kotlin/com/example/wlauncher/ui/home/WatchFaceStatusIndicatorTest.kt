@@ -29,6 +29,32 @@ class WatchFaceStatusIndicatorTest {
     }
 
     @Test
+    fun notificationsShowWhenDoNotDisturbMoonIsDisabled() {
+        assertEquals(
+            WatchFaceStatusIndicator.NOTIFICATION,
+            watchFaceStatusIndicator(
+                charging = false,
+                doNotDisturb = true,
+                hasNotifications = true,
+                showDoNotDisturb = false,
+            ),
+        )
+    }
+
+    @Test
+    fun globalStatusSwitchHidesEveryIndicator() {
+        assertEquals(
+            WatchFaceStatusIndicator.NONE,
+            watchFaceStatusIndicator(
+                charging = true,
+                doNotDisturb = true,
+                hasNotifications = true,
+                showStatusIndicators = false,
+            ),
+        )
+    }
+
+    @Test
     fun moonProfileUsesTheReferenceUpperRightOpening() {
         val profile = doNotDisturbMoonProfile()
         assertEquals(0.08f, profile.topTipY, 0f)

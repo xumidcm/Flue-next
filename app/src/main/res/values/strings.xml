@@ -129,6 +129,8 @@
     <string name="settings_watchface_date_ja_sub">月 / 1月 样式</string>
     <string name="settings_watchface_status">表盘状态提示</string>
     <string name="settings_watchface_status_sub">表盘顶部显示充电闪电和通知红点</string>
+    <string name="settings_watchface_dnd_indicator">勿扰模式月亮</string>
+    <string name="settings_watchface_dnd_indicator_sub">单独控制表盘顶部的勿扰模式月亮提示</string>
     <string name="settings_watchface_charging_power">充电功率文字</string>
     <string name="settings_watchface_charging_power_sub">充电时在表盘里显示功率或充电文字</string>
 
@@ -313,6 +315,7 @@
     <string name="search_d_watchface_font">自定义表盘字体文件</string>
     <string name="search_d_watchface_bottom_fade">表盘底部渐隐</string>
     <string name="search_d_watchface_status">充电闪电与通知红点</string>
+    <string name="search_d_watchface_dnd_indicator">表盘顶部的勿扰模式月亮提示</string>
     <string name="search_d_charging_power">充电时显示功率</string>
     <string name="search_d_icon_packs">第三方图标包</string>
     <string name="search_d_hidden_apps">从列表隐藏应用</string>

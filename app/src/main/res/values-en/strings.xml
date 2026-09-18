@@ -129,6 +129,8 @@
     <string name="settings_watchface_date_ja_sub">Japanese weekday and month names</string>
     <string name="settings_watchface_status">Watch Face Status Indicators</string>
     <string name="settings_watchface_status_sub">Show charging and notification indicators at the top of the watch face</string>
+    <string name="settings_watchface_dnd_indicator">Do Not Disturb Moon</string>
+    <string name="settings_watchface_dnd_indicator_sub">Show the Do Not Disturb moon independently on the watch face</string>
     <string name="settings_watchface_charging_power">Charging Power Text</string>
     <string name="settings_watchface_charging_power_sub">Show charging wattage or charging text on the watch face</string>
 
@@ -313,6 +315,7 @@
     <string name="search_d_watchface_font">Custom watch face font file</string>
     <string name="search_d_watchface_bottom_fade">Watch face bottom fade</string>
     <string name="search_d_watchface_status">Charging lightning bolt and notification dot</string>
+    <string name="search_d_watchface_dnd_indicator">Do Not Disturb moon indicator on the watch face</string>
     <string name="search_d_charging_power">Show wattage while charging</string>
     <string name="search_d_icon_packs">Third-party icon packs</string>
     <string name="search_d_hidden_apps">Hide apps from the list</string>

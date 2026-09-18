@@ -24,6 +24,9 @@ class WatchEditorSessionAgentToolHost(
     override fun inspectFace(request: WatchAgentInspectFaceRequest): WatchAgentInspectFaceResult {
         checkRevision(request.expectedRevision)
         val snapshot = session.snapshot()
+        val candidate = session.agentCandidate()
+        val xmlInspection = runCatching { WatchAgentXmlInspector.inspect(candidate.watchXml) }.getOrNull()
+        val parsedCount = snapshot.layers.size
         return WatchAgentInspectFaceResult(
             revision = session.agentRevision(),
             name = snapshot.rootAttributes["name"],
@@ -36,6 +39,9 @@ class WatchEditorSessionAgentToolHost(
                     attributes = layer.attributes,
                 )
             },
+            layersParsed = parsedCount,
+            layersInXml = xmlInspection?.layersInXml ?: parsedCount,
+            parseStatus = if (xmlInspection == null || xmlInspection.layersInXml == parsedCount) "ok" else "mismatch",
             assets = session.resourceInventory().map { asset ->
                 WatchAgentAssetSummary(asset.relativePath, asset.bytes, asset.referenced)
             },
@@ -75,6 +81,22 @@ class WatchEditorSessionAgentToolHost(
                 )
             }
             .toMutableList()
+        runCatching { WatchAgentXmlInspector.inspect(candidate.watchXml) }.onSuccess { inspection ->
+            val parsedCount = session.snapshot().layers.size
+            if (inspection.layersInXml != parsedCount) {
+                diagnostics += WatchAgentDiagnostic(
+                    WatchAgentDiagnosticSeverity.ERROR,
+                    "layer_parse_mismatch",
+                    "XML 中发现 ${inspection.layersInXml} 个图层节点，但宿主只解析出 ${parsedCount} 个；支持的图层元素应为 Layer(type=...)。",
+                )
+            }
+        }.onFailure { error ->
+            diagnostics += WatchAgentDiagnostic(
+                WatchAgentDiagnosticSeverity.ERROR,
+                "invalid_xml",
+                error.message ?: "watch.xml 无法解析",
+            )
+        }
         val nonCanonical = IMAGE_PATH_PATTERN.findAll(candidate.watchXml).any {
             it.groupValues[2].split('`').any { value -> value.trim().startsWith("images/", true) }
         }

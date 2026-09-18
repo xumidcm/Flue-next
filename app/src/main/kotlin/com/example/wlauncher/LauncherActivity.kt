@@ -419,6 +419,7 @@ fun LauncherScreen(vm: LauncherViewModel, aodController: AodController? = null) 
     val watchFaceTextEntryAnimation by vm.watchFaceTextEntryAnimation.collectAsStateWithLifecycle()
     val watchFaceTextExitAnimation by vm.watchFaceTextExitAnimation.collectAsStateWithLifecycle()
     val watchFaceStatusIndicators by vm.watchFaceStatusIndicators.collectAsStateWithLifecycle()
+    val watchFaceDndIndicator by vm.watchFaceDndIndicator.collectAsStateWithLifecycle()
     val watchFaceBottomFadeEnabled by vm.watchFaceBottomFadeEnabled.collectAsStateWithLifecycle()
     val watchfaceGravityParallaxEnabled by vm.watchfaceGravityParallaxEnabled.collectAsStateWithLifecycle()
     val watchfaceGravityBackdropBlurEnabled by
@@ -2333,6 +2334,7 @@ fun LauncherScreen(vm: LauncherViewModel, aodController: AodController? = null) 
                 WatchFaceStatusIndicatorOverlay(
                     showStatusIndicators = watchFaceStatusIndicators && watchFaceSelectionReady,
                     hasNotifications = showNotification && notificationGroups.isNotEmpty(),
+                    showDoNotDisturb = watchFaceDndIndicator,
                     modifier = Modifier.align(Alignment.TopCenter).padding(top = 18.dp),
                 )
                 // 渲染等待覆层。刻意是 AnimatedContent 的**兄弟**而不是它的一个分支：
@@ -2964,6 +2966,7 @@ fun LauncherScreen(vm: LauncherViewModel, aodController: AodController? = null) 
                         selectedWatchFaceId = selectedWatchFaceId,
                         refreshToken = watchFaceRefreshToken,
                         uiStyle = uiStyle,
+                        backdropColor = legacyWatchFaceBackdropFrames?.fallbackArgb?.let { Color(it) },
                         builtInPhotoPath = builtInPhotoPath,
                         builtInVideoPath = builtInVideoPath,
                         photoOptions = photoWatchOptions,

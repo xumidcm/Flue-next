@@ -220,9 +220,12 @@ internal fun watchFaceStatusIndicator(
     charging: Boolean,
     doNotDisturb: Boolean,
     hasNotifications: Boolean,
+    showDoNotDisturb: Boolean = true,
+    showStatusIndicators: Boolean = true,
 ): WatchFaceStatusIndicator = when {
+    !showStatusIndicators -> WatchFaceStatusIndicator.NONE
     charging -> WatchFaceStatusIndicator.CHARGING
-    doNotDisturb -> WatchFaceStatusIndicator.DO_NOT_DISTURB
+    showDoNotDisturb && doNotDisturb -> WatchFaceStatusIndicator.DO_NOT_DISTURB
     hasNotifications -> WatchFaceStatusIndicator.NOTIFICATION
     else -> WatchFaceStatusIndicator.NONE
 }
@@ -250,12 +253,15 @@ internal fun doNotDisturbMoonProfile(): MoonGlyphProfile = MoonGlyphProfile(
 fun WatchFaceStatusIndicatorOverlay(
     showStatusIndicators: Boolean,
     hasNotifications: Boolean,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    showDoNotDisturb: Boolean = true,
 ) {
     if (!showStatusIndicators) return
     WatchFaceStatusIndicators(
         chargingSnapshot = rememberChargingSnapshot(),
         hasNotifications = hasNotifications,
+        showDoNotDisturb = showDoNotDisturb,
+        showStatusIndicators = showStatusIndicators,
         modifier = modifier
     )
 }
@@ -279,7 +285,8 @@ fun WatchFaceLayer(
     hasNotifications: Boolean = false,
     onLongPress: (() -> Unit)? = null,
     onDoubleTap: (() -> Unit)? = null,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    showDoNotDisturb: Boolean = true,
 ) {
     BuiltInWatchFaceSurface(
         watchFaceId = watchFaceId,
@@ -291,6 +298,7 @@ fun WatchFaceLayer(
         videoOptions = videoOptions,
         showChargingPowerText = showChargingPowerText,
         showStatusIndicators = showStatusIndicators,
+        showDoNotDisturb = showDoNotDisturb,
         showBottomFade = showBottomFade,
         bottomFadeColor = bottomFadeColor,
         bottomFadeHeightDp = bottomFadeHeightDp,
@@ -324,7 +332,8 @@ fun BuiltInWatchFacePreview(
     bottomFadeColor: Color? = null,
     bottomFadeHeightDp: Int = 84,
     bottomFadeBlurRadiusDp: Float = 4f,
-    hasNotifications: Boolean = false
+    hasNotifications: Boolean = false,
+    showDoNotDisturb: Boolean = true,
 ) {
     BuiltInWatchFaceSurface(
         watchFaceId = watchFaceId,
@@ -336,6 +345,7 @@ fun BuiltInWatchFacePreview(
         videoOptions = videoOptions,
         showChargingPowerText = showChargingPowerText,
         showStatusIndicators = showStatusIndicators,
+        showDoNotDisturb = showDoNotDisturb,
         showBottomFade = showBottomFade,
         bottomFadeColor = bottomFadeColor,
         bottomFadeHeightDp = bottomFadeHeightDp,
@@ -361,6 +371,7 @@ private fun BuiltInWatchFaceSurface(
     videoOptions: BuiltInWatchFaceOptions,
     showChargingPowerText: Boolean,
     showStatusIndicators: Boolean,
+    showDoNotDisturb: Boolean,
     showBottomFade: Boolean,
     bottomFadeColor: Color?,
     bottomFadeHeightDp: Int,
@@ -495,10 +506,12 @@ private fun BuiltInWatchFaceSurface(
             )
         }
 
-        if (showClock && showStatusIndicators) {
+        if (showClock) {
             WatchFaceStatusIndicators(
                 chargingSnapshot = chargingSnapshot,
                 hasNotifications = hasNotifications,
+                showDoNotDisturb = showDoNotDisturb,
+                showStatusIndicators = showStatusIndicators,
                 modifier = Modifier
                     .align(Alignment.TopCenter)
                     .padding(top = 18.dp)
@@ -661,13 +674,21 @@ fun ClockOverlayPreview(
 private fun WatchFaceStatusIndicators(
     chargingSnapshot: ChargingSnapshot,
     hasNotifications: Boolean,
+    showDoNotDisturb: Boolean,
+    showStatusIndicators: Boolean,
     modifier: Modifier = Modifier
 ) {
     val doNotDisturb by com.flue.launcher.status.DoNotDisturbState.enabled.collectAsStateWithLifecycle()
 
     // Priority is deliberate: charging remains visible above every other state;
-    // DND suppresses notification dots but does not hide the charging affordance.
-    val indicator = watchFaceStatusIndicator(chargingSnapshot.charging, doNotDisturb, hasNotifications)
+    // when enabled, DND suppresses notification dots but does not hide charging.
+    val indicator = watchFaceStatusIndicator(
+        charging = chargingSnapshot.charging,
+        doNotDisturb = doNotDisturb,
+        hasNotifications = hasNotifications,
+        showDoNotDisturb = showDoNotDisturb,
+        showStatusIndicators = showStatusIndicators,
+    )
     if (indicator == WatchFaceStatusIndicator.NONE) return
     Box(
         modifier = modifier,

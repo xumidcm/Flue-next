@@ -97,6 +97,31 @@ class WatchmakerRuntimeContractsTest {
     }
 
     @Test
+    fun curvedTextUsesPerGlyphSixtyDegreeSlots() {
+        val slots = WatchTextLayout.curvedGlyphSlots(
+            glyphWidths = listOf(10f, 20f, 30f),
+            isSpace = listOf(false, false, false),
+            fontPx = 40f,
+            radius = 100f,
+        )
+
+        assertEquals(listOf(6f, 12f, 18f), slots)
+        assertEquals((10f + 20f + 30f) * 60f / 100f, slots.sum(), 0.0001f)
+    }
+
+    @Test
+    fun curvedTextSpacesUseThirtyPercentOfTheFontSize() {
+        val slots = watchCurvedTextSlots(
+            glyphWidths = listOf(10f, 999f, 30f),
+            isSpace = listOf(false, true, false),
+            fontPx = 40f,
+            radius = 100f,
+        )
+
+        assertEquals(12f * 60f / 100f, slots[1], 0.0001f)
+    }
+
+    @Test
     fun editorNewlinesProduceSeparateCenteredTextBaselines() {
         assertEquals(listOf("First", "Second"), WatchTextLayout.lines("First\nSecond"))
         assertEquals(
@@ -338,6 +363,34 @@ class WatchmakerRuntimeContractsTest {
         assertFalse(watchTextNeedsLinearRaster(1f, 0f))
         assertFalse(watchTextNeedsLinearRaster(Float.NaN, 1f))
         assertFalse(watchTextNeedsLinearRaster(Float.POSITIVE_INFINITY, 1f))
+    }
+
+    @Test
+    fun bitmapFontsUseTheOnePointSixVisibleHeightRule() {
+        // clox `wf_render.lua:1940` / wftools `WmPreview.kt:1501`:
+        //   scale = 1.6 * text_size / fontH,  fontH = info.size ?: lineHeight
+        // 「墨水电子表」f2: text_size=88, nominal=lineHeight=124
+        assertEquals(1.6f * 88f / 124f, watchBitmapGlyphScale(88f, 124, 124), 0.0001f)
+        // 103 号字体（f1/f5）与 f6 同样按 info.size 取值。
+        assertEquals(1.6f * 42f / 41f, watchBitmapGlyphScale(42f, 41, 41), 0.0001f)
+        assertEquals(1.6f * 46f / 46f, watchBitmapGlyphScale(46f, 46, 46), 0.0001f)
+    }
+
+    @Test
+    fun bitmapFontScaleFallsBackToLineHeightThenToTheBareFactor() {
+        // info.size 缺失时退回 common.lineHeight（wftools 三处实现的优先级）。
+        assertEquals(1.6f * 30f / 60f, watchBitmapGlyphScale(30f, 0, 60), 0.0001f)
+        // 两者都拿不到时不除零，退回纯 1.6 倍。
+        assertEquals(1.6f, watchBitmapGlyphScale(30f, 0, 0), 0.0001f)
+        assertEquals(1.6f, watchBitmapGlyphScale(30f, -1, -1), 0.0001f)
+    }
+
+    @Test
+    fun bitmapFontScaleClampsTheDesignSizeIntoTheCanvas() {
+        // 越界/非有限的 text_size 被夹进 1..512，避免负字号与无穷放大。
+        assertEquals(1.6f * 512f / 100f, watchBitmapGlyphScale(9_999f, 100, 100), 0.0001f)
+        assertEquals(1.6f * 1f / 100f, watchBitmapGlyphScale(-5f, 100, 100), 0.0001f)
+        assertEquals(1.6f * 1f / 100f, watchBitmapGlyphScale(Float.NaN, 100, 100), 0.0001f)
     }
 
     @Test

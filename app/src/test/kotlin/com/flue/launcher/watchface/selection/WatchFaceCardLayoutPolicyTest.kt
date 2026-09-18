@@ -68,4 +68,43 @@ class WatchFaceCardLayoutPolicyTest {
         assertTrue(watchFaceCardUseDarkForeground(backgroundLuminance = 1f))
         assertFalse(watchFaceCardUseDarkForeground(backgroundLuminance = Float.NaN))
     }
+
+    @Test
+    fun `page indicators keep every page when there are at most nine`() {
+        assertEquals(
+            listOf(0),
+            watchFacePageIndicators(totalPages = 1, currentPage = 0).map { it.page },
+        )
+        val indicators = watchFacePageIndicators(totalPages = 9, currentPage = 4)
+
+        assertEquals((0 until 9).toList(), indicators.map { it.page })
+        assertTrue(indicators.all { it.alpha == 1f })
+    }
+
+    @Test
+    fun `page indicators use a nine point window and fade distant neighbors`() {
+        val indicators = watchFacePageIndicators(totalPages = 21, currentPage = 10)
+
+        assertEquals((6..14).toList(), indicators.map { it.page })
+        assertEquals(
+            listOf(0f, 0.14f, 0.32f, 0.58f, 1f, 0.58f, 0.32f, 0.14f, 0f),
+            indicators.map { it.alpha },
+        )
+    }
+
+    @Test
+    fun `page indicator window sticks to the start and end`() {
+        assertEquals(
+            (1..9).toList(),
+            watchFacePageIndicators(totalPages = 10, currentPage = 5).map { it.page },
+        )
+        assertEquals(
+            (0..8).toList(),
+            watchFacePageIndicators(totalPages = 21, currentPage = 0).map { it.page },
+        )
+        assertEquals(
+            (12..20).toList(),
+            watchFacePageIndicators(totalPages = 21, currentPage = 20).map { it.page },
+        )
+    }
 }

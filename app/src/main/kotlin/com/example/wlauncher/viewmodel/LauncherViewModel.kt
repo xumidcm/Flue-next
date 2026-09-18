@@ -229,6 +229,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         val KEY_WATCHFACE_TEXT_ENTRY_ANIMATION = booleanPreferencesKey("watchface_text_entry_animation")
         val KEY_WATCHFACE_TEXT_EXIT_ANIMATION = booleanPreferencesKey("watchface_text_exit_animation")
         val KEY_WATCHFACE_STATUS_INDICATORS = booleanPreferencesKey("watchface_status_indicators")
+        val KEY_WATCHFACE_DND_INDICATOR = booleanPreferencesKey("watchface_dnd_indicator")
         val KEY_WATCHFACE_BOTTOM_FADE = booleanPreferencesKey("watchface_bottom_fade_enabled")
         val KEY_WATCHFACE_LONG_PRESS_MODE = stringPreferencesKey("watchface_long_press_mode")
         val KEY_WATCHMAKER_FORCE_FILL = booleanPreferencesKey("watchmaker_force_fill")
@@ -610,6 +611,8 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     val watchFaceTextExitAnimation: StateFlow<Boolean> = _watchFaceTextExitAnimation.asStateFlow()
     private val _watchFaceStatusIndicators = MutableStateFlow(true)
     val watchFaceStatusIndicators: StateFlow<Boolean> = _watchFaceStatusIndicators.asStateFlow()
+    private val _watchFaceDndIndicator = MutableStateFlow(true)
+    val watchFaceDndIndicator: StateFlow<Boolean> = _watchFaceDndIndicator.asStateFlow()
     // 表盘底部渐隐遮罩默认关闭；用户可在“更多表盘选项”里手动开启。
     private val _watchFaceBottomFadeEnabled = MutableStateFlow(false)
     val watchFaceBottomFadeEnabled: StateFlow<Boolean> = _watchFaceBottomFadeEnabled.asStateFlow()
@@ -1214,6 +1217,11 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                 val loadedWatchFaceStatusIndicators = prefs[KEY_WATCHFACE_STATUS_INDICATORS] ?: true
                 if (_watchFaceStatusIndicators.value != loadedWatchFaceStatusIndicators) {
                     _watchFaceStatusIndicators.value = loadedWatchFaceStatusIndicators
+                }
+
+                val loadedWatchFaceDndIndicator = prefs[KEY_WATCHFACE_DND_INDICATOR] ?: true
+                if (_watchFaceDndIndicator.value != loadedWatchFaceDndIndicator) {
+                    _watchFaceDndIndicator.value = loadedWatchFaceDndIndicator
                 }
 
                 val loadedWatchFaceBottomFade = prefs[KEY_WATCHFACE_BOTTOM_FADE] ?: false
@@ -2855,6 +2863,11 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         persist { store.edit { it[KEY_WATCHFACE_STATUS_INDICATORS] = enabled } }
     }
 
+    fun setWatchFaceDndIndicatorEnabled(enabled: Boolean) {
+        _watchFaceDndIndicator.value = enabled
+        persist { store.edit { it[KEY_WATCHFACE_DND_INDICATOR] = enabled } }
+    }
+
     fun setWatchFaceBottomFadeEnabled(enabled: Boolean) {
         _watchFaceBottomFadeEnabled.value = enabled
         persist { store.edit { it[KEY_WATCHFACE_BOTTOM_FADE] = enabled } }
@@ -3945,6 +3958,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         _watchFaceTextEntryAnimation.value = true
         _watchFaceTextExitAnimation.value = true
         _watchFaceStatusIndicators.value = true
+        _watchFaceDndIndicator.value = true
         _watchFaceBottomFadeEnabled.value = false
         _watchFaceLongPressMode.value = WatchFaceLongPressMode.CARDS
         _watchfaceCanvasDefault.value = WatchCanvasSettings.GLOBAL_DEFAULT
@@ -4082,6 +4096,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                 it[KEY_WATCHFACE_TEXT_ENTRY_ANIMATION] = true
                 it[KEY_WATCHFACE_TEXT_EXIT_ANIMATION] = true
                 it[KEY_WATCHFACE_STATUS_INDICATORS] = true
+                it[KEY_WATCHFACE_DND_INDICATOR] = true
                 it[KEY_WATCHFACE_BOTTOM_FADE] = false
                 it[KEY_WATCHFACE_LONG_PRESS_MODE] = WatchFaceLongPressMode.CARDS.encode()
                 it[KEY_WATCHMAKER_FORCE_FILL] = false

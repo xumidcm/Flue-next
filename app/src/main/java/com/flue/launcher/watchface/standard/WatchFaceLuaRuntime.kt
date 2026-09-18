@@ -252,7 +252,7 @@ class WatchFaceLuaRuntime private constructor(
     internal val cachedExpressionCount: Int
         get() = synchronized(compiledExpressions) { compiledExpressions.size }
 
-    /** True only when the expression references a global defined by face code. */
+    /** True when the expression references face state or a reserved `var_*` value. */
     fun referencesFaceState(expression: String): Boolean {
         if (closed || expression.isBlank()) return false
         // 这一步要扫一遍表达式挑出标识符（协程序列 + 字符串切片），而它在**每个动态属性、
@@ -263,9 +263,15 @@ class WatchFaceLuaRuntime private constructor(
         }?.let { cached ->
             if (cached.first == faceStateGeneration) return cached.second
         }
-        val result = identifiersOutsideTagsAndStrings(expression).any { name ->
-            name !in BUILTIN_ROOTS && (name in dynamicFaceNames || !globals.rawget(name).isnil())
-        }
+        // `{var_*}` is a value lookup, not a device tag.  The generic scanner
+        // deliberately skips every braced token so `{dh24}` cannot turn into
+        // face state, therefore keep the reserved script-variable prefix as a
+        // small separate signal.  This also lets callers use evaluateFace*()
+        // directly without depending on the editor's Lua-source classifier.
+        val result = BRACED_SCRIPT_VARIABLE_PATTERN.containsMatchIn(expression) ||
+            identifiersOutsideTagsAndStrings(expression).any { name ->
+                name !in BUILTIN_ROOTS && (name in dynamicFaceNames || !globals.rawget(name).isnil())
+            }
         synchronized(faceStateReferences) {
             faceStateReferences[expression] = faceStateGeneration to result
         }
@@ -490,6 +496,20 @@ class WatchFaceLuaRuntime private constructor(
                 recordedTagValues?.add(resolved)
             }
             return resolved?.toLuaInput() ?: NIL
+        }
+    }
+
+    /** Reads a braced `var_*` script value without changing ordinary Lua globals. */
+    private inner class ScriptVariableLookup : VarArgFunction() {
+        override fun invoke(args: Varargs): Varargs {
+            val name = args.arg(args.narg()).checkjstring().trim()
+            if (!SCRIPT_VARIABLE_PATTERN.matches(name)) return LuaValue.NIL
+            val global = globals.rawget(name)
+            return when {
+                global.isboolean() || global.isnumber() || global.isstring() -> global
+                name in dynamicFaceNames -> LuaValue.NIL
+                else -> LuaValue.ZERO
+            }
         }
     }
 
@@ -805,6 +825,20 @@ class WatchFaceLuaRuntime private constructor(
         private const val FORMAT_FLAGS = "-+ #0"
         private const val INSTRUCTION_LIMIT_MESSAGE =
             "instruction limit exceeded (possible infinite loop in face script)"
+
+        /**
+         * 脚本全局变量的形态。WatchMaker 约定所有脚本写入的全局都以 `var_` 开头
+         * （CloX `wf_expr.lua:205` 原文：「ONLY script variables (var_* — always
+         * that prefix, even when the script hasn't WRITTEN them yet)」），所以这个
+         * 形态本身就是「这是一个脚本变量」的判据，不需要先跑脚本。
+         *
+         * 与 CloX `identDeps` 的 `var_[%w_]*` 同形；大小写敏感 —— Lua 全局本来就是。
+        */
+        private val SCRIPT_VARIABLE_PATTERN = Regex("var_[A-Za-z0-9_]*")
+        private val BRACED_SCRIPT_VARIABLE_PATTERN = Regex(
+            """\{\s*var_[A-Za-z0-9_]*\s*\}""",
+        )
+
         private val DECLARED_FACE_NAME = Regex(
             "(?:\\bfunction\\s+([A-Za-z_][A-Za-z0-9_]*)\\s*\\(|\\b([A-Za-z_][A-Za-z0-9_]*)\\s*=)",
         )
@@ -910,6 +944,10 @@ class WatchFaceLuaRuntime private constructor(
             )
             runtime.resolveTag = resolveTag
             globals.set("wm_tag", runtime.LiveTagLookup())
+            // Braced WatchMaker script variables use a separate bridge so an
+            // undeclared `{var_*}` can be neutral numeric zero without changing
+            // ordinary Lua reads of a missing global (which must stay nil).
+            globals.set("wm_var", runtime.ScriptVariableLookup())
             // WF.thirdParty.slots：clox External Data API 的读取面。
             //
             // 注意**必须装在白名单裁剪之后** —— 上面那一轮 `set(current, LuaValue.NIL)`
@@ -1184,8 +1222,13 @@ class WatchFaceLuaRuntime private constructor(
             // braced form before the general in-string splice so the resolved
             // value is not accidentally fed back as a second tag name.
             val normalizedSource = BRACED_WM_TAG.replace(source) { match ->
-                val name = match.groupValues[2].trim().lowercase(Locale.ROOT)
-                if (isKnownFaceTag(name)) "wm_tag(${name.quoteLua()})" else match.value
+                val rawName = match.groupValues[2].trim()
+                val name = rawName.lowercase(Locale.ROOT)
+                when {
+                    SCRIPT_VARIABLE_PATTERN.matches(rawName) -> "wm_var(${rawName.quoteLua()})"
+                    isKnownFaceTag(name) -> "wm_tag(${name.quoteLua()})"
+                    else -> match.value
+                }
             }
             if ('{' !in normalizedSource) return normalizedSource
             val output = StringBuilder(normalizedSource.length + 32)
@@ -1202,11 +1245,12 @@ class WatchFaceLuaRuntime private constructor(
                         char == '{' -> {
                             val end = normalizedSource.indexOf('}', index + 1)
                             val name = normalizedSource.substringOrNull(index + 1, end)?.trim()
-                            if (name != null && isKnownFaceTag(name)) {
+                            val spliced = name?.let(::spliceBracedNameInQuote)
+                            if (spliced != null) {
                                 output.append(quote)
-                                    .append(" .. wm_tag(")
-                                    .append(name.lowercase(Locale.ROOT).quoteLua())
-                                    .append(") .. ")
+                                    .append(" .. ")
+                                    .append(spliced)
+                                    .append(" .. ")
                                     .append(quote)
                                 index = end + 1
                             } else {
@@ -1232,10 +1276,9 @@ class WatchFaceLuaRuntime private constructor(
                 } else if (char == '{') {
                     val end = normalizedSource.indexOf('}', index + 1)
                     val name = normalizedSource.substringOrNull(index + 1, end)?.trim()
-                    if (name != null && isKnownFaceTag(name)) {
-                        output.append("wm_tag(")
-                            .append(name.lowercase(Locale.ROOT).quoteLua())
-                            .append(')')
+                    val spliced = name?.let(::spliceBracedName)
+                    if (spliced != null) {
+                        output.append(spliced)
                         index = end + 1
                     } else {
                         output.append(char)
@@ -1249,8 +1292,56 @@ class WatchFaceLuaRuntime private constructor(
             return output.toString()
         }
 
+        /**
+         * 花括号名字 → Lua **取值**源码（引号外）。返回 null 表示原样保留。
+         *
+         * ## 为什么脚本变量要走 `wm_var('var_x')`
+         *
+         * 三条理由，缺一都会继续错：
+         *
+         * 1. **`wm_tag` 只查设备标签。** Lua 路径的 resolver 不回读 face 全局，
+         *    所以把 `var_cyc` 当成设备标签会得到 NIL。
+         * 2. **普通裸变量不能承担“缺失即 0”。** 表盘脚本里有大量 `var_x = var_x or 1`
+         *    和数组/表初始化；改全局 metatable 会把缺失变量变成数字，直接触发
+         *    `attempt to index a number`，也会让未声明变量的文字从空白变成 `0`。
+         * 3. **专用桥等价于 CloX 的值表。** `wm_var` 直接读沙箱里的脚本全局：已声明值
+         *    原样返回，已声明但为 nil 保持 nil，尚未声明才返回属性表达式所需的中性 0。
+         *
+         * 真实收益（三个 `bm:`/TTF 表盘的实测根因）：
+         *
+         * - `opacity="{var_cyc} == 0 and 100 or 0"`：修前 `{0} == 0` → false → **0**
+         *   → 整层消失；修后 `0 == 0` → **100**。
+         * - `text="{var_s_t1}"`：修前整串被当表构造器，渲染出 Lua 表地址
+         *   （`table: 4decbe5`）；修后直接得到变量本身的文本。
+         */
+        private fun spliceBracedName(name: String): String? {
+            scriptValueSplice(name)?.let { return it }
+            return if (isKnownFaceTag(name)) "wm_tag(${name.lowercase(Locale.ROOT).quoteLua()})" else null
+        }
+
+        /** 引号内：字符串拼接，用 tostring 兜住 nil，避免整条表达式报错。 */
+        private fun spliceBracedNameInQuote(name: String): String? {
+            scriptValueSplice(name)?.let { return "tostring($it or '')" }
+            return if (isKnownFaceTag(name)) "wm_tag(${name.lowercase(Locale.ROOT).quoteLua()})" else null
+        }
+
+        /**
+         * 脚本变量的取值源码。只接受合法的 `var_*` 名字，避免把任意文本拼进 Lua。
+         *
+         * `tweens.*` 不在这里 —— 它是设备/动画标签，继续走 `wm_tag`。
+         */
+        private fun scriptValueSplice(name: String): String? =
+            if (SCRIPT_VARIABLE_PATTERN.matches(name)) "wm_var(${name.quoteLua()})" else null
+
+        /**
+         * 花括号里哪些名字属于**目录标签**，该走 `wm_tag`。
+         *
+         * 脚本变量（`var_*`）在调用本函数前已由 [scriptValueSplice] 拦截，
+         * 不得把 Lua 表构造器或任意 `var_...` 文本误判成标签。
+         */
         private fun isKnownFaceTag(name: String): Boolean =
-            name.startsWith("tweens.", ignoreCase = true) || WatchmakerTagResolver.isKnown(name)
+            name.startsWith("tweens.", ignoreCase = true) ||
+                WatchmakerTagResolver.isKnown(name)
 
         private fun String.substringOrNull(startIndex: Int, endIndex: Int): String? =
             if (endIndex >= startIndex) substring(startIndex, endIndex) else null

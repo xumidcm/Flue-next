@@ -53,7 +53,7 @@ data class WatchAgentToolContract(
 
 /** Versioned schema metadata is intentionally available without a runner instance. */
 object WatchAgentToolContracts {
-    const val schemaVersion: String = "watch-agent-tools-v2"
+    const val schemaVersion: String = "watch-agent-tools-v3"
 
     val all: List<WatchAgentToolContract> = listOf(
         WatchAgentToolContract(WatchAgentToolName.LIST_WORKSPACE_FILES, "列出当前绑定工作区与表盘 face/ 镜像中的全部受控文件，包括 watch.xml、脚本、字体、素材和图片；图片路径可用于 read_image。"),
@@ -63,7 +63,7 @@ object WatchAgentToolContracts {
             listOf(WatchAgentToolParameter("command", "string", required = true), WatchAgentToolParameter("timeout_seconds", "integer"))),
         WatchAgentToolContract(
             WatchAgentToolName.INSPECT_FACE,
-            "读取当前表盘版本、图层结构、素材清单以及预览状态。编辑前先调用。",
+            "读取当前表盘版本、图层结构、素材清单以及预览状态；结果同时给出 layers_parsed、layers_in_xml 和 parse_status，数量不一致说明 XML 图层元素未被宿主解析。编辑前先调用。",
         ),
         WatchAgentToolContract(
             WatchAgentToolName.READ_DOCUMENT,
@@ -77,11 +77,11 @@ object WatchAgentToolContracts {
         ),
         WatchAgentToolContract(
             WatchAgentToolName.VALIDATE_FACE,
-            "检查当前 XML 结构、资源、路径和表达式诊断。",
+            "检查当前 XML 结构、资源、路径和表达式诊断；XML 中存在图层节点但宿主解析数量不一致时必须返回错误，不能把解析失败报告为 valid=true。",
         ),
         WatchAgentToolContract(
             WatchAgentToolName.PREVIEW_FACE,
-            "通过宿主原生渲染器预览当前表盘或图层。",
+            "通过宿主原生渲染器预览当前表盘或图层；宿主提供时返回 rendered_layers、non_background_pixel_ratio 和 renderer_warning，空图层、纯背景或与上一稿相同的输出必须显式警告；null 表示宿主未暴露该测量。",
             listOf(
                 WatchAgentToolParameter("target", "string"),
                 WatchAgentToolParameter("mode", "string", enumValues = listOf("in_context", "isolated")),
