@@ -87,7 +87,7 @@ object WatchmakerWatchFaceStorage {
         scanWithDiagnostics(context).descriptors
 
     fun scanWithDiagnostics(context: Context): WatchmakerWatchFaceScanResult {
-        val parser = WatchmakerDefinitionParser()
+        val metadataReader = WatchmakerMetadataReader(File(context.cacheDir, "watchmaker-metadata"))
         val installer = WatchArchiveInstaller()
         val ordered = ArrayList<WatchInstallOrder<WatchFaceDescriptor>>()
         val failures = ArrayList<WatchmakerWatchFaceScanFailure>()
@@ -105,8 +105,8 @@ object WatchmakerWatchFaceStorage {
                     // cannot move a legacy face to the top of the list.
                     val installedAt = WatchInstallMetadata.readOrCreate(directory, legacyInstalledAt)
                     val watchXml = installer.repairInstalledPackage(directory)
-                    val definition = parser.parse(watchXml)
-                    val descriptor = definition.toDescriptor(
+                    val metadata = metadataReader.read(watchXml)
+                    val descriptor = metadata.toDescriptor(
                         stableId = directory.name,
                         rootDirectory = directory,
                         preferredPreview = previewNextTo(watchXml),
@@ -147,9 +147,9 @@ object WatchmakerWatchFaceStorage {
 }
 
 private fun InstalledWatchArchive.toDescriptor(): WatchFaceDescriptor =
-    definition.toDescriptor(stableId, rootDirectory, preview)
+    WatchmakerMetadata.from(definition).toDescriptor(stableId, rootDirectory, preview)
 
-private fun WatchmakerDefinition.toDescriptor(
+private fun WatchmakerMetadata.toDescriptor(
     stableId: String,
     rootDirectory: File,
     preferredPreview: File? = null,
@@ -166,10 +166,10 @@ private fun WatchmakerDefinition.toDescriptor(
         id = "$WATCHMAKER_ID_PREFIX$stableId",
         type = WatchFaceType.WATCHMAKER,
         displayName = name.ifBlank { stableId },
-        summary = "$versionLabel · ${layers.size} 个图层",
+        summary = "$versionLabel · $layerCount 个图层",
         previewFilePath = preview?.absolutePath,
         sourceDirPath = rootDirectory.absolutePath,
-        author = rootAttributes["author"]?.takeIf(String::isNotBlank),
+        author = author,
         supportsSettings = true,
     )
 }

@@ -3125,24 +3125,22 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
             }
         }
         if (!force && watchFaceScanHydrated && now - lastWatchFaceRefreshAt < 25_000L) return
-        // force 的本意是「编辑器改了表盘，必须立刻重扫」。但从任意应用/锁屏回来
-        // 也都会走这条 —— 原来每次 onResume 都付一轮「逐包 ZipFile + XML 解析」
-        // 的成本。磁盘探测（纯 stat 走）发现什么都没变时，force 直接落空，
-        // cachedWatchFaces 已在上方发布，视图保持现状即可。
-        if (
-            force && watchFaceScanHydrated &&
-            !watchFaceDiskChangedSince(lastWatchFaceScanWallClockMs)
-        ) {
-            lastWatchFaceRefreshAt = now
-            return
-        }
         lastWatchFaceRefreshAt = now
-        lastWatchFaceScanWallClockMs = System.currentTimeMillis()
+        val canSkipUnchanged = force && watchFaceScanHydrated
+        val previousScanWallClockMs = lastWatchFaceScanWallClockMs
         watchFaceRefreshJob?.cancel()
         watchFaceRefreshJob = viewModelScope.launch {
+            val scanStartedAt = System.currentTimeMillis()
             val scanned = withContext(Dispatchers.IO) {
+                // onResume 的强制刷新也走这里。目录 stat 会随已安装素材数量
+                // 增长，必须和扫描一起放在 IO，不能阻塞其他表盘的首帧。
+                if (canSkipUnchanged && !watchFaceDiskChangedSince(previousScanWallClockMs)) {
+                    return@withContext null
+                }
                 scanAllWatchFaces()
-            }
+            } ?: return@launch
+            // 取消的扫描不能提前推进时间基线，否则下一次可能漏掉编辑结果。
+            lastWatchFaceScanWallClockMs = scanStartedAt
             publishWatchFaces(scanned)
             syncSelectedWatchFace(freshScanCompleted = true)
         }
