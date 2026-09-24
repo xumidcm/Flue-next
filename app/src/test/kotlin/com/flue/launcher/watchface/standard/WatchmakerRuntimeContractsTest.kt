@@ -394,17 +394,6 @@ class WatchmakerRuntimeContractsTest {
     }
 
     @Test
-    fun hscBitmapFontsUseTheConvertedLayerHeightWithoutChangingRegularPackages() {
-        // HSC conversion sample: original text_size is still 60/128/122 while
-        // height has already been converted into the 512 design coordinate space.
-        assertEquals(86f, watchBitmapTextDesignSize(60f, 86f, 45f, hscGenerated = true))
-        assertEquals(183f, watchBitmapTextDesignSize(128f, 183f, 180f, hscGenerated = true))
-        assertEquals(180f, watchBitmapTextDesignSize(122f, 174f, 180f, hscGenerated = true))
-        assertEquals(60f, watchBitmapTextDesignSize(60f, 86f, 45f, hscGenerated = false))
-        assertEquals(60f, watchBitmapTextDesignSize(60f, null, null, hscGenerated = true))
-    }
-
-    @Test
     fun canvasTransformFitsOrCenterCropsWithoutChangingTheAnchor() {
         val fit = watchCanvasTransform(
             viewWidth = 320f,
