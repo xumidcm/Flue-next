@@ -102,6 +102,7 @@ import com.flue.launcher.ui.common.flueOverlayMaskShape
 import com.flue.launcher.ui.home.WatchFaceLayer
 import com.flue.launcher.ui.home.WatchFaceLoadingMode
 import com.flue.launcher.ui.home.WatchFaceLoadingScreen
+import com.flue.launcher.ui.home.rememberWatchFaceRenderGate
 import com.flue.launcher.ui.home.WatchFaceBottomFadeOverlay
 import com.flue.launcher.ui.home.WatchFaceStatusIndicatorOverlay
 import com.flue.launcher.ui.home.WatchFaceCardSelector
@@ -169,15 +170,6 @@ private const val WIDGET_HOST_LOG_TAG = "FlueWidgetHost"
  * 只会互相抢资源、把加载本身拖得更慢。让它们先跑一段。
  */
 private const val SIDE_PAGE_PREWARM_DELAY_MS = 300L
-
-/**
- * 渲染等待覆层的硬揭开时限。
- *
- * 渲染器自己已经有一道保底（`WATCH_RENDER_READY_MAX_HOLD_MS`，4 秒），这里比它宽
- * 一点当第二道网：就绪信号万一因为某条没想到的路径永远不来（比如表盘还没被布局
- * 就被切走），也绝不能让用户一直盯着转圈。
- */
-private const val FACE_RENDER_GATE_MAX_HOLD_MS = 6_000L
 
 internal fun notificationUnderlayBlurProgress(
     notificationReturnState: ScreenState,
@@ -305,8 +297,7 @@ class LauncherActivity : FlueComponentActivity() {
         // 从表盘编辑器返回时，磁盘上的 watch.xml / 资产已更新，但 ViewModel
         // 缓存的 descriptor 和 refreshToken 还是旧值，导致 WatchmakerWatchFaceView
         // 命中"same key + same token"早返回，不重载。
-        // force = true 绕过25s节流，重扫并 bump token；view 走 KEEP_CURRENT_UNTIL_READY
-        // 路径（同 face ID），旧帧持续显示直到新内容就绪，不会出现黑帧。
+        // force = true 绕过25s节流检查目录；编辑器保存时通过共享令牌通知重载。
         vm.refreshWatchFaces(force = true)
         scheduleDeferredResumeMaintenance()
     }
@@ -1660,24 +1651,14 @@ fun LauncherScreen(vm: LauncherViewModel, aodController: AodController? = null) 
         // 之后画面往往还是半成品 —— 老师报的「冷启动加载 UI 直接消失、过一会儿
         // 表盘才好」就是这段缝，切换表盘同理。
         //
-        // 键同时含 stableKey 与 refreshToken：切表盘 / 编辑器保存返回的瞬间它天然
-        // 不匹配，加载覆层自动回来，不会闪一下上一块表盘的残帧。
-        val faceRenderReadyKey = "${selectedWatchFace.stableKey}#$watchFaceRefreshToken"
-        var reportedFaceRenderReadyKey by remember { mutableStateOf<String?>(null) }
-        // 只有原生渲染器那两种需要等；内置 Compose 表盘与兜底分支立即算就绪。
-        val faceNeedsRenderGate = selectedWatchFace.isWatchmaker || selectedWatchFace.isJbWatch
-        var faceRenderGateExpired by remember(faceRenderReadyKey) { mutableStateOf(false) }
-        LaunchedEffect(faceRenderReadyKey, faceNeedsRenderGate) {
-            if (!faceNeedsRenderGate) return@LaunchedEffect
-            // 第二道兜底（渲染器自己那道见 WATCH_RENDER_READY_MAX_HOLD_MS）：
-            // 就绪信号万一有 bug，也绝不能让用户一直盯着转圈。
-            delay(FACE_RENDER_GATE_MAX_HOLD_MS)
-            faceRenderGateExpired = true
-        }
-        val faceRenderReady = !faceNeedsRenderGate ||
-            faceRenderGateExpired ||
-            reportedFaceRenderReadyKey == faceRenderReadyKey
-        val markFaceRenderReady: (Int) -> Unit = { reportedFaceRenderReadyKey = faceRenderReadyKey }
+        // 冷启动和切换表盘需要等首帧；已显示的同一表盘在刷新时由渲染器保留旧帧。
+        val faceRenderGate = rememberWatchFaceRenderGate(
+            faceKey = selectedWatchFace.stableKey,
+            refreshToken = watchFaceRefreshToken,
+            needsRenderGate = selectedWatchFace.isWatchmaker || selectedWatchFace.isJbWatch,
+        )
+        val faceRenderReady = faceRenderGate.ready
+        val markFaceRenderReady = faceRenderGate.onRenderReady
 
         LaunchedEffect(backPressRequests) {
             if (backPressRequests > 0L) {

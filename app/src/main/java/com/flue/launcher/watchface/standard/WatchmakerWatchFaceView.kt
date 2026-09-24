@@ -1151,7 +1151,7 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         onTapAction: ((WatchTapAction) -> Unit)? = null,
         onSourceReady: ((Int) -> Unit)? = null,
         /**
-         * 渲染真正静默（本帧画出来的就是完整画面）时回调一次，桌面据此撤加载页。
+         * 渲染真正静默（本帧画出来的就是完整画面）时回调，重新绑定就绪内容时同步状态。
          * 与 [onSourceReady] 的区别：后者只表示结构就绪，位图/GIF/字体还没来。
          */
         onRenderReady: ((Int) -> Unit)? = null,
@@ -1202,6 +1202,14 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
                 loadedRefreshToken == refreshToken
             ) {
                 onSourceReady?.invoke(refreshToken)
+            }
+            // 内容仍在时，重新绑定的宿主也需要拿到就绪状态。绘制路径按表盘/令牌
+            // 去重，只靠下一帧不会再次通知，宿主会误等到加载覆层超时。
+            if (
+                renderReadyDescriptorKey == descriptor.stableKey &&
+                renderReadyRefreshToken == refreshToken
+            ) {
+                onRenderReady?.invoke(refreshToken)
             }
             return
         }

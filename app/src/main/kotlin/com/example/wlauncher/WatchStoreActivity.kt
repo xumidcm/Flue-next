@@ -2755,14 +2755,23 @@ private fun WatchFaceListCard(
         )
         Spacer(Modifier.width(10.dp))
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-            Text(
-                displayName,
-                color = style.titleColor,
-                fontSize = 15.sp,
-                fontWeight = FontWeight.SemiBold,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
-            )
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(5.dp),
+            ) {
+                Text(
+                    displayName,
+                    modifier = Modifier.weight(1f, fill = false),
+                    color = style.titleColor,
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                if (item.wmProtected) {
+                    WatchStoreProtectedBadge()
+                }
+            }
             Text(
                 "${item.category.name} · ${stringResource(screenTypeLabelRes(item.screenType))}",
                 color = style.secondaryTextColor,
@@ -2770,9 +2779,6 @@ private fun WatchFaceListCard(
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
-            if (item.wmProtected) {
-                WatchStoreProtectedBadge()
-            }
             InstallStateLine(
                 downloadState = downloadState,
                 compact = false,
