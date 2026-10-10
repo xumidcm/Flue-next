@@ -685,6 +685,7 @@ private fun SettingsRootScreen(
     val flueScreenRound = isFlueScreenRound()
     val showNotification by vm.showNotification.collectAsStateWithLifecycle()
     val showOngoingNotifications by vm.showOngoingNotifications.collectAsStateWithLifecycle()
+    val watchFaceTapHapticsEnabled by vm.watchFaceTapHapticsEnabled.collectAsStateWithLifecycle()
     val rotaryHapticsEnabled by vm.rotaryHapticsEnabled.collectAsStateWithLifecycle()
     val showWidgetPage by vm.showWidgetPage.collectAsStateWithLifecycle()
     val glassHighlightEnabled by vm.glassHighlightEnabled.collectAsStateWithLifecycle()
@@ -2229,6 +2230,16 @@ private fun SettingsRootScreen(
                         scale = itemFisheye(listState, "tap_actions", screenCenterY, screenHeightPx),
                         icon = { SettingsIcon(material = OfficialMiuixIcons.OfficialSettings, miuix = OfficialMiuixIcons.OfficialSettings) },
                         onClick = { navigateTo(SettingsDestination.TAP_ACTION_CATEGORIES) },
+                        groupPosition = position,
+                    )
+                }
+                row("watchface_tap_haptics") { position ->
+                    SettingsSwitchRow(
+                        title = stringResource(R.string.settings_watchface_tap_haptics),
+                        subtitle = stringResource(R.string.settings_watchface_tap_haptics_sub),
+                        checked = watchFaceTapHapticsEnabled,
+                        onToggle = vm::setWatchFaceTapHapticsEnabled,
+                        scale = itemFisheye(listState, "watchface_tap_haptics", screenCenterY, screenHeightPx),
                         groupPosition = position,
                     )
                 }
@@ -7903,6 +7914,7 @@ internal fun buildSettingsSearchIndex(context: Context): List<SettingsSearchEntr
     SettingsSearchEntry("WATCH_FACES", "watchface_import_archive", s(R.string.search_t_watchface_import), s(R.string.search_d_watchface_import), listOf("drbp", "import", "daoru", "watch")),
     SettingsSearchEntry("WATCH_FACES", "watchface_editor_current", s(R.string.settings_watchface_editor_current), s(R.string.search_t_watchface_editor_new), listOf("bjbp", "edit face", "bianji", "editor")),
     SettingsSearchEntry("WATCH_FACES", "watchface_refresh", s(R.string.settings_watchface_refresh), s(R.string.settings_watchface_refresh_sub), listOf("smbp", "rescan", "shuaxin", "refresh")),
+    SettingsSearchEntry("WATCH_FACE_MORE", "watchface_tap_haptics", s(R.string.settings_watchface_tap_haptics), s(R.string.settings_watchface_tap_haptics_sub), listOf("djzd", "zhendong", "tap haptics", "vibration", "振动", "震动")),
     SettingsSearchEntry("WATCH_FACE_MORE", null, s(R.string.search_t_watchface_more), s(R.string.search_d_watchface_more), listOf("bpgd", "xinlv", "riqi", "date")),
     SettingsSearchEntry("WATCH_FACE_MORE", "watchface_long_press_mode", s(R.string.settings_watchface_long_press_mode), s(R.string.settings_watchface_long_press_mode_cards_sub), listOf("chang an", "long press", "cards", "list", "kapian", "liebiao")),
     SettingsSearchEntry("WATCH_FACE_MORE", "watch_weather_header", s(R.string.settings_watch_weather), s(R.string.settings_watch_weather_sub), listOf("tq", "weather", "tianqi")),

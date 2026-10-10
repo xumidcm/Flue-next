@@ -402,6 +402,7 @@ fun LauncherScreen(vm: LauncherViewModel, aodController: AodController? = null) 
     val activeMotionProfile by vm.activeMotionProfile.collectAsStateWithLifecycle()
     val showStepCount by vm.showStepCount.collectAsStateWithLifecycle()
     val showNotification by vm.showNotification.collectAsStateWithLifecycle()
+    val watchFaceTapHapticsEnabled by vm.watchFaceTapHapticsEnabled.collectAsStateWithLifecycle()
     val rotaryHapticsEnabled by vm.rotaryHapticsEnabled.collectAsStateWithLifecycle()
     val showWidgetPage by vm.showWidgetPage.collectAsStateWithLifecycle()
     val widgetGlassHighlightEnabled by vm.widgetGlassHighlightEnabled.collectAsStateWithLifecycle()
@@ -2235,6 +2236,7 @@ fun LauncherScreen(vm: LauncherViewModel, aodController: AodController? = null) 
                                 dataProvider = watchmakerDataProvider,
                                 onRenderReady = markFaceRenderReady,
                                 ambientMode = ambientMode,
+                                tapHapticsEnabled = watchFaceTapHapticsEnabled,
                                 canvasSettings = watchfaceCanvasSettings,
                                 gravityParallaxEnabled = watchfaceGravityParallaxEnabled,
                                 gravityBackdropBlurEnabled = watchfaceGravityBackdropBlurEnabled,

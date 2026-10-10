@@ -1768,4 +1768,6 @@
     <string name="watch_store_login_required">登录后才能使用这个功能</string>
     <string name="watch_store_web_view_outdated_fmt">内置浏览器版本过低（%1$s），已改用系统浏览器打开</string>
     <string name="watch_store_web_view_render_failed">网页版加载失败，已改用系统浏览器打开</string>
+    <string name="settings_watchface_tap_haptics">点击震动</string>
+    <string name="settings_watchface_tap_haptics_sub">点击 .watch 表盘互动按钮时提供震动反馈</string>
 </resources>

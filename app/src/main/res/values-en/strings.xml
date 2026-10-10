@@ -1729,4 +1729,6 @@
     <string name="watch_store_login_required">Sign in to use this</string>
     <string name="watch_store_web_view_outdated_fmt">The built-in browser is too old (%1$s); opened in the system browser instead</string>
     <string name="watch_store_web_view_render_failed">The web store failed to load; opened in the system browser instead</string>
+    <string name="settings_watchface_tap_haptics">Tap vibration</string>
+    <string name="settings_watchface_tap_haptics_sub">Vibrate when tapping interactive buttons on .watch faces</string>
 </resources>

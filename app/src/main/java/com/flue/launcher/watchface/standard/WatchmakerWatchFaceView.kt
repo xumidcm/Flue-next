@@ -411,8 +411,9 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
     private var gravityBackdropBlurFrame: Bitmap? = null
     private var gravityBackdropBlurPrepared = false
     private val gravityBackdropPaint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
-    /** 当前手势是否由本视图消费；决策在 DOWN 时定下、整个手势保持一致。 */
-    private var consumeCurrentGesture = false
+    /** 收到 DOWN 后才接受后续事件；取消或隐藏后丢弃旧手势的 UP。 */
+    private var touchGestureActive = false
+    private var tapHapticsEnabled = true
 
     /**
      * 本实例负责的 renderPlan 区间；null 表示全量。
@@ -1035,27 +1036,44 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
 
     /** 已经为哪些表盘弹过位置权限（按 `rootCacheKey`）。拒了就不再反复问。 */
     private val locationPromptedFaceKeys = HashSet<String>(2)
-    private val gestureDetector = GestureDetector(
-        context,
-        object : GestureDetector.SimpleOnGestureListener() {
-            override fun onDown(event: MotionEvent): Boolean = faceVisible
+    private val gestureListener = object : GestureDetector.SimpleOnGestureListener() {
+        override fun onDown(event: MotionEvent): Boolean = faceVisible
 
-            override fun onDoubleTap(event: MotionEvent): Boolean {
-                if (faceVisible) doubleTapAction?.invoke()
-                return faceVisible
-            }
+        override fun onDoubleTap(event: MotionEvent): Boolean {
+            if (faceVisible) doubleTapAction?.invoke()
+            return faceVisible
+        }
 
-            override fun onSingleTapConfirmed(event: MotionEvent): Boolean {
-                if (!faceVisible) return false
-                dispatchTap(event.x, event.y)
-                return true
-            }
+        // Release is actionable immediately; double-tap locking may follow it.
+        override fun onSingleTapUp(event: MotionEvent): Boolean {
+            if (!faceVisible) return false
+            dispatchTap(event.x, event.y)
+            return true
+        }
 
-            override fun onLongPress(event: MotionEvent) {
-                if (faceVisible) longPressAction?.invoke()
-            }
-        },
-    )
+        override fun onLongPress(event: MotionEvent) {
+            if (faceVisible) longPressAction?.invoke()
+        }
+    }
+    private val gestureDetector = GestureDetector(context, gestureListener).apply {
+        // Without a lock action, every tap (including rapid taps) is independent.
+        setOnDoubleTapListener(null)
+    }
+
+    private fun cancelPendingGesture() {
+        val now = SystemClock.uptimeMillis()
+        val cancel = MotionEvent.obtain(now, now, MotionEvent.ACTION_CANCEL, 0f, 0f, 0)
+        try {
+            gestureDetector.onTouchEvent(cancel)
+        } finally {
+            cancel.recycle()
+        }
+        touchGestureActive = false
+    }
+
+    fun setTapHapticsEnabled(enabled: Boolean) {
+        tapHapticsEnabled = enabled
+    }
 
     init {
         externalDataStore.addListener(externalDataListener)
@@ -1160,6 +1178,13 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
     ) {
         if (disposed) return
         require(descriptor.isWatchmaker) { "Watchmaker view requires a standard .watch descriptor" }
+        if (descriptorKey != descriptor.stableKey || this.refreshToken != refreshToken ||
+            (faceVisible && !isFaceVisible) ||
+            ((doubleTapAction != null) != (onDoubleTap != null))
+        ) {
+            cancelPendingGesture()
+        }
+        gestureDetector.setOnDoubleTapListener(if (onDoubleTap != null) gestureListener else null)
         frameTagResolutionCache.clear()
         onRenderReadyCallback = onRenderReady
         this.faceVisible = isFaceVisible
@@ -1326,6 +1351,7 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
             notifyVideoPlayback()
             return
         }
+        if (!visible) cancelPendingGesture()
         faceVisible = visible
         notifyVideoPlayback()
         if (visible || textExitAnimationActive) scheduleTicks() else cancelTicks()
@@ -1532,6 +1558,7 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         ambientTransition = null
         releaseFaceSound()
         if (disposed) return
+        cancelPendingGesture()
         disposed = true
         externalDataStore.removeListener(externalDataListener)
         bindGeneration++
@@ -1560,7 +1587,7 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         onRenderReadyCallback = null
         boundDescriptor = null
         tapTargets.clear()
-        consumeCurrentGesture = false
+        touchGestureActive = false
         source?.clearRuntimeCaches()
         source = null
         sourceTransitionFrame?.let { frame ->
@@ -1598,6 +1625,7 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
     }
 
     override fun onDetachedFromWindow() {
+        cancelPendingGesture()
         releaseFaceSound()
         unregisterScreenReceiver()
         cancelTicks()
@@ -1617,6 +1645,11 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
 
     override fun onTouchEvent(event: MotionEvent): Boolean {
         if (disposed || !faceVisible) return false
+        if (event.actionMasked == MotionEvent.ACTION_DOWN) {
+            touchGestureActive = true
+        } else if (!touchGestureActive) {
+            return false
+        }
         // 整手势消费：长按进编辑器、双击、tap_action 都由本视图的
         // gestureDetector 识别。曾试过"只在命中 tap target 时才消费"，
         // 结果 DOWN 不消费 → 视图收不到后续事件 → 长按进入表盘编辑直接
@@ -1626,7 +1659,7 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         if (event.actionMasked == MotionEvent.ACTION_UP ||
             event.actionMasked == MotionEvent.ACTION_CANCEL
         ) {
-            consumeCurrentGesture = false
+            touchGestureActive = false
         }
         return true
     }
@@ -6346,6 +6379,10 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         }
         val index = selectNearestWatchTapHitIndex(candidates, graceRadiusPx) ?: return
         val target = tapTargets[index]
+        // Acknowledges the accepted tap before Lua or external actions do work.
+        if (tapHapticsEnabled && target.action !is WatchTapAction.Unsupported) {
+            performHapticFeedback(HapticFeedbackConstants.CONTEXT_CLICK)
+        }
         if (target.action is WatchTapAction.ColorSwitch) {
             applyWatchColorSwitch(target.action.direction)
             return
@@ -6382,7 +6419,6 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
             direction = direction,
         )
         prefs.edit().putInt(prepared.rootCacheKey, selection.index).apply()
-        performHapticFeedback(HapticFeedbackConstants.CONTEXT_CLICK)
         // 索引 0 = 回到表盘默认色，这时要把 override 摘掉而不是写死成默认色的字面量：
         // 表盘刷新后 ucolor_default 可能变（作者改了 XML），override 不该把旧值钉住。
         userColorOverride = selection.color.takeIf { selection.index != 0 }
@@ -6447,7 +6483,6 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         val normalized = rawAction.trim().lowercase(Locale.ROOT)
         val intent = WatchTapActionMappings.of(context).launchIntent(context, normalized)
             ?: return false
-        performHapticFeedback(HapticFeedbackConstants.CONTEXT_CLICK)
         return runCatching {
             context.startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
         }.isSuccess
@@ -6469,7 +6504,6 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
                 }
             }
             if (result.isSuccess) {
-                performHapticFeedback(HapticFeedbackConstants.CONTEXT_CLICK)
                 prepared?.recycleBakedSegments()
                 cancelTicks()
                 scheduleTicks()
@@ -6480,7 +6514,6 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
             return
         }
         if (action === WatchTapAction.HeartRate) {
-            performHapticFeedback(HapticFeedbackConstants.CONTEXT_CLICK)
             runCatching { dataProvider.requestRefresh() }
             requestFullRepaint()
             return
@@ -6491,7 +6524,6 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         if (action === WatchTapAction.StopwatchStartStop ||
             action === WatchTapAction.StopwatchReset
         ) {
-            performHapticFeedback(HapticFeedbackConstants.CONTEXT_CLICK)
             if (action === WatchTapAction.StopwatchStartStop) {
                 WatchStopwatch.toggle(SystemClock.elapsedRealtime())
             } else {
@@ -6503,7 +6535,6 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
             return
         }
         if (action is WatchTapAction.Media) {
-            performHapticFeedback(HapticFeedbackConstants.CONTEXT_CLICK)
             // **先活跃会话、后媒体键**（见 WatchMediaTransport 的注释）：手表上媒体键这条路
             // 经常断，而播放器一定实现 MediaSession 的传输控制。老师报「音乐播放没用」就是
             // 第一版只发媒体键的后果。
@@ -6524,7 +6555,6 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
             return
         }
         if (action is WatchTapAction.Volume) {
-            performHapticFeedback(HapticFeedbackConstants.CONTEXT_CLICK)
             val audio = context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
             runCatching {
                 audio?.adjustStreamVolume(
@@ -6538,7 +6568,6 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
             return
         }
         if (action is WatchTapAction.SetAlarm) {
-            performHapticFeedback(HapticFeedbackConstants.CONTEXT_CLICK)
             val intent = Intent(AlarmClock.ACTION_SET_ALARM)
                 .putExtra(AlarmClock.EXTRA_HOUR, action.hour)
                 .putExtra(AlarmClock.EXTRA_MINUTES, action.minute)
@@ -6553,7 +6582,6 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         if (action is WatchTapAction.Named) {
             // 命名动作在上游要用户在设置里映射到具体应用，Flue 没有那张映射表，所以按名字的
             // **语义**去开系统默认应用 —— 音乐、拨号、相机这些都有标准 intent 或类目。
-            performHapticFeedback(HapticFeedbackConstants.CONTEXT_CLICK)
             // **用户映射优先**（设置 → 表盘点击动作）：上游就是让用户自己指的，
             // 猜系统默认只是没设置时的兜底。
             WatchTapActionMappings.of(context).launchIntent(context, action.value)?.let { mapped ->
@@ -7423,6 +7451,7 @@ fun WatchmakerWatchFaceHost(
     /** 渲染静默（画面完整）时回调一次，桌面据此撤「表盘加载中」。 */
     onRenderReady: ((Int) -> Unit)? = null,
     canvasSettings: WatchCanvasSettings = WatchCanvasSettings.DEFAULT,
+    tapHapticsEnabled: Boolean = true,
     gravityParallaxEnabled: Boolean = false,
     /** 重力景深底部模糊背景层；关掉后底下只剩根 `bg_color`（对齐 clox）。 */
     gravityBackdropBlurEnabled: Boolean = true,
@@ -7448,6 +7477,7 @@ fun WatchmakerWatchFaceHost(
         update = { stage ->
             val view = stage.renderer
             view.setWatchDataProvider(resolvedDataProvider)
+            view.setTapHapticsEnabled(tapHapticsEnabled)
             view.setCanvasSettings(canvasSettings)
             view.setGravityParallaxEnabled(gravityParallaxEnabled)
             view.setGravityBackdropBlurEnabled(gravityBackdropBlurEnabled)

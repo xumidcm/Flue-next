@@ -1715,4 +1715,6 @@
     <string name="watch_store_login_required">この機能はログインが必要です</string>
     <string name="watch_store_web_view_outdated_fmt">内蔵ブラウザのバージョンが古いため（%1$s）、システムのブラウザで開きました</string>
     <string name="watch_store_web_view_render_failed">ウェブ版の読み込みに失敗したため、システムのブラウザで開きました</string>
+    <string name="settings_watchface_tap_haptics">タップ時の振動</string>
+    <string name="settings_watchface_tap_haptics_sub">.watch 文字盤の操作ボタンをタップすると振動します</string>
 </resources>

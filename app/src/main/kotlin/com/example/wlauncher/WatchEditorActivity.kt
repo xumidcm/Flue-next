@@ -459,6 +459,7 @@ private fun WatchEditorRoute(
             )
         }
     }
+    val tapHapticsEnabled by vm.watchFaceTapHapticsEnabled.collectAsStateWithLifecycle()
     // 预览的模糊底图跟随设置（景深本身在预览里强制开，理由见 WatchEditorPreview）。
     val editorGravityBackdropBlurEnabled by
         vm.watchfaceGravityBackdropBlurEnabled.collectAsStateWithLifecycle()
@@ -1971,6 +1972,7 @@ private fun WatchEditorRoute(
                         errorMessage = errorMessage,
                         imageSizeLookup = imageSizeLookup,
                         draftDirectory = active.draftDirectory,
+                        tapHapticsEnabled = tapHapticsEnabled,
                         gravityBackdropBlurEnabled = editorGravityBackdropBlurEnabled,
                         onBack = ::requestClose,
                         onSelectLayer = ::selectLayer,
@@ -2621,6 +2623,7 @@ private fun WatchEditorScreen(
     onImportWatchLong: () -> Unit,
     onConvertWatch: () -> Unit,
     onConvertWatchLong: () -> Unit,
+    tapHapticsEnabled: Boolean = true,
     /** 底部模糊背景层开关，跟随设置（预览要和桌面观感一致）。 */
     gravityBackdropBlurEnabled: Boolean = true,
     onPreviewRefreshReady: (Int) -> Unit = {},
@@ -2847,6 +2850,7 @@ private fun WatchEditorScreen(
             onRefreshReady = onPreviewRefreshReady,
             onRefreshFailed = onPreviewRefreshFailed,
             previewPlaying = previewPlaying,
+            tapHapticsEnabled = tapHapticsEnabled,
             gravityBackdropBlurEnabled = gravityBackdropBlurEnabled,
             designExtentWidth = WatchCanvasSize.DEFAULT.designExtentWidth,
             designExtentHeight = WatchCanvasSize.DEFAULT.designExtentHeight,
@@ -4493,6 +4497,7 @@ private fun WatchEditorPreview(
     onRefreshReady: (Int) -> Unit,
     onRefreshFailed: (Int) -> Unit,
     previewPlaying: Boolean,
+    tapHapticsEnabled: Boolean,
     /**
      * 底部模糊背景层开关，跟随设置。
      *
@@ -4624,6 +4629,7 @@ private fun WatchEditorPreview(
                 // setting: authors must be able to see and tune gyro layers even
                 // when the everyday gravity-parallax switch is disabled.
                 view.setGravityParallaxEnabled(true)
+                view.setTapHapticsEnabled(tapHapticsEnabled)
                 view.setGravityBackdropBlurEnabled(gravityBackdropBlurEnabled)
                 view.setEditorAnimatedImageLayer(animatedPreviewLayerIndex)
                 // 统一的预览播放开关：序列帧、视频、重力景深三者同进同退。

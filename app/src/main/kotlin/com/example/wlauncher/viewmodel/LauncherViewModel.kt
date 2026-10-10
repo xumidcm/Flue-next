@@ -215,6 +215,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         val KEY_SHOW_STEP_COUNT = booleanPreferencesKey("show_step_count")
         val KEY_SHOW_NOTIFICATION = booleanPreferencesKey("show_notification")
         val KEY_SHOW_ONGOING_NOTIFICATIONS = booleanPreferencesKey("show_ongoing_notifications")
+        val KEY_WATCHFACE_TAP_HAPTICS_ENABLED = booleanPreferencesKey("watchface_tap_haptics_enabled")
         val KEY_ROTARY_HAPTICS_ENABLED = booleanPreferencesKey("rotary_haptics_enabled")
         val KEY_NOTIFICATION_SETTING_MIGRATED = booleanPreferencesKey("notification_setting_migrated")
         val KEY_SHOW_WIDGET_PAGE = booleanPreferencesKey("show_widget_page")
@@ -575,6 +576,9 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     val showNotification: StateFlow<Boolean> = _showNotification.asStateFlow()
     private val _showOngoingNotifications = MutableStateFlow(false)
     val showOngoingNotifications: StateFlow<Boolean> = _showOngoingNotifications.asStateFlow()
+    private val _watchFaceTapHapticsEnabled = MutableStateFlow(true)
+    val watchFaceTapHapticsEnabled: StateFlow<Boolean> = _watchFaceTapHapticsEnabled.asStateFlow()
+
     private val _rotaryHapticsEnabled = MutableStateFlow(true)
     val rotaryHapticsEnabled: StateFlow<Boolean> = _rotaryHapticsEnabled.asStateFlow()
     private val _showWidgetPage = MutableStateFlow(true)
@@ -1289,6 +1293,8 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                 if (_showOngoingNotifications.value != loadedShowOngoingNotifications) {
                     _showOngoingNotifications.value = loadedShowOngoingNotifications
                 }
+
+                _watchFaceTapHapticsEnabled.value = prefs[KEY_WATCHFACE_TAP_HAPTICS_ENABLED] ?: true
 
                 val loadedRotaryHaptics = prefs[KEY_ROTARY_HAPTICS_ENABLED] ?: true
                 if (_rotaryHapticsEnabled.value != loadedRotaryHaptics) {
@@ -3016,6 +3022,11 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         persist { store.edit { it[KEY_SHOW_ONGOING_NOTIFICATIONS] = show } }
     }
 
+    fun setWatchFaceTapHapticsEnabled(enabled: Boolean) {
+        _watchFaceTapHapticsEnabled.value = enabled
+        persist { store.edit { it[KEY_WATCHFACE_TAP_HAPTICS_ENABLED] = enabled } }
+    }
+
     fun setRotaryHapticsEnabled(enabled: Boolean) {
         _rotaryHapticsEnabled.value = enabled
         persist { store.edit { it[KEY_ROTARY_HAPTICS_ENABLED] = enabled } }
@@ -3943,6 +3954,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         _showStepCount.value = false
         _showNotification.value = true
         _showOngoingNotifications.value = false
+        _watchFaceTapHapticsEnabled.value = true
         _rotaryHapticsEnabled.value = true
         _showWidgetPage.value = true
         _showControlCenter.value = true
@@ -4081,6 +4093,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                 it[KEY_LEGACY_CIRCULAR_ICONS] = true
                 it[KEY_SHOW_NOTIFICATION] = true
                 it[KEY_SHOW_ONGOING_NOTIFICATIONS] = false
+                it[KEY_WATCHFACE_TAP_HAPTICS_ENABLED] = true
                 it[KEY_ROTARY_HAPTICS_ENABLED] = true
                 it[KEY_SHOW_WIDGET_PAGE] = true
                 it[KEY_SHOW_CONTROL_CENTER] = true
