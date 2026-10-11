@@ -2,14 +2,14 @@ package com.flue.launcher.ui.anim
 
 import android.os.Build
 import android.os.SystemClock
-import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.tween
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.graphics.BlurEffect
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ColorFilter
+import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.RenderEffect
@@ -21,9 +21,11 @@ import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.graphics.drawscope.scale
 import androidx.compose.ui.graphics.drawscope.translate
 import androidx.compose.ui.graphics.layer.drawLayer
+import androidx.compose.ui.graphics.layer.GraphicsLayer
 import androidx.compose.ui.graphics.rememberGraphicsLayer
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.toIntSize
 import kotlin.math.roundToInt
@@ -98,7 +100,7 @@ internal fun shouldDrawLiveBackdropContent(
     overlayActive: Boolean,
     capturedFrameAvailable: Boolean,
     backend: OverlayBlurBackend = OverlayBlurBackend.SYSTEM,
-): Boolean = backend == OverlayBlurBackend.LEGACY || !overlayActive || !capturedFrameAvailable
+): Boolean = !overlayActive || !capturedFrameAvailable
 
 internal enum class BackdropContentSource {
     LIVE,
@@ -135,20 +137,20 @@ internal class BackdropFrameSession<T> {
             retained = candidate?.takeIf(isValid)
         }
         active = overlayActive
-        // SYSTEM cannot switch the clear scene mid-gesture. LEGACY only adds
-        // blur over the live face, so its first ready blur may arrive later.
+        // Both backends keep the same clear scene for the whole gesture.
         return retained
     }
 }
 
 /** API 27-30 transition hot path: one cached bitmap draw, with no recording. */
-private fun DrawScope.drawLegacyBackdropCover(
+internal fun DrawScope.drawLegacyBackdropCover(
     image: ImageBitmap,
     frames: LegacyWatchFaceBackdropFrames,
     layerSize: IntSize,
     contentScale: Float,
     translationYPx: Float,
     alpha: Float,
+    colorFilter: ColorFilter? = null,
 ) {
     if (alpha <= 0.001f) return
     val scale = contentScale.coerceIn(0.01f, 4f)
@@ -176,8 +178,60 @@ private fun DrawScope.drawLegacyBackdropCover(
         dstOffset = IntOffset.Zero,
         dstSize = layerSize,
         alpha = alpha,
+        colorFilter = colorFilter,
         filterQuality = FilterQuality.Medium,
     )
+}
+
+/** Draws an opaque mirrored scene, then applies the face alpha once to the entire result. */
+internal class LegacyBackdropPainter {
+    private val alphaPaint = androidx.compose.ui.graphics.Paint()
+    // 20% black scrim has only 52 distinct 8-bit values. Reuse filters across frames.
+    private val dimFilters = arrayOfNulls<ColorFilter>(52)
+
+    fun draw(
+        scope: DrawScope,
+        frames: LegacyWatchFaceBackdropFrames,
+        scale: Float,
+        translationYPx: Float,
+        alpha: Float,
+        progress: Float,
+        blurProgress: Float,
+        blurEnabled: Boolean,
+        darkMode: Boolean,
+    ) = with(scope) {
+        val opacity = alpha.takeIf(Float::isFinite)?.coerceIn(0f, 1f) ?: 1f
+        if (opacity <= 0f) return@with
+        if (!blurEnabled || !frames.hasPreparedBlur || blurProgress <= 0f) {
+            val dim = (51f * progress.coerceIn(0f, 1f)).roundToInt()
+            val filter = if (dim == 0) null else dimFilters[dim] ?: ColorFilter.tint(
+                Color.Black.copy(alpha = dim / 255f), BlendMode.SrcAtop,
+            ).also { dimFilters[dim] = it }
+            // The prepared image is opaque. Apply dimming before opacity in one
+            // bitmap draw, avoiding an extra full-screen offscreen buffer.
+            drawLegacyBackdropCover(frames.clear, frames, size.toIntSize(), scale,
+                translationYPx, opacity, filter)
+            return@with
+        }
+        val grouped = opacity < 1f
+        if (grouped) {
+            alphaPaint.alpha = opacity
+            drawContext.canvas.saveLayer(androidx.compose.ui.geometry.Rect(Offset.Zero, size), alphaPaint)
+        }
+        try {
+            val extent = size.toIntSize()
+            drawLegacyBackdropCover(frames.clear, frames, extent, scale, translationYPx, 1f)
+            if (blurEnabled && frames.hasPreparedBlur) {
+                drawLegacyBackdropCover(
+                    if (darkMode) frames.darkBlurred else frames.lightBlurred,
+                    frames, extent, scale, translationYPx, legacyBackdropBlend(blurProgress).blurredAlpha,
+                )
+            }
+            drawRect(Color.Black.copy(alpha = 0.20f * progress.coerceIn(0f, 1f)))
+        } finally {
+            if (grouped) drawContext.canvas.restore()
+        }
+    }
 }
 
 /** Draw-phase only state; changing it must never trigger recomposition. */
@@ -235,6 +289,91 @@ internal class PreparedBackdropRecordState {
 }
 
 /**
+ * Records one mirrored copy of a clean face layer and reuses that display list
+ * while the geometry moves less than the visible epsilon. The same helper is
+ * used by the prepared-frame path and the live fallback path, so a late frame
+ * cannot change the scale/translation geometry midway through a transition.
+ */
+private fun DrawScope.drawLegacyMirroredLayer(
+    sourceLayer: GraphicsLayer,
+    mirroredLayer: GraphicsLayer,
+    layerSize: IntSize,
+    contentScale: Float,
+    translationYPx: Float,
+    progress: Float,
+    captureState: BackdropCaptureState,
+    layoutDirection: LayoutDirection,
+) {
+    val scale = contentScale.coerceIn(0.01f, 1f)
+    val insetLeft = (size.width - size.width * scale) / 2f
+    val insetTop = (size.height - size.height * scale) / 2f + translationYPx
+    val insetRight = insetLeft + size.width * scale
+    val insetBottom = insetTop + size.height * scale
+    val geometryMoved = !(
+        kotlin.math.abs(progress - captureState.recordedProgress) < MAGNIFIED_RECORD_PROGRESS_EPSILON &&
+            captureState.capturedSize == layerSize
+        )
+    if (geometryMoved) {
+        mirroredLayer.record(this, layoutDirection, layerSize) {
+            fun drawSource(translateX: Float, translateY: Float, scaleX: Float, scaleY: Float) {
+                translate(left = translateX, top = translateY) {
+                    scale(scaleX = scaleX, scaleY = scaleY, pivot = Offset.Zero) {
+                        drawLayer(sourceLayer)
+                    }
+                }
+            }
+            clipRect(insetLeft.coerceAtLeast(0f), insetTop.coerceAtLeast(0f),
+                insetRight.coerceAtMost(size.width), insetBottom.coerceAtMost(size.height)) {
+                drawSource(insetLeft, insetTop, scale, scale)
+            }
+            if (insetLeft > 0f) {
+                clipRect(0f, insetTop.coerceAtLeast(0f), insetLeft, insetBottom.coerceAtMost(size.height)) {
+                    drawSource(insetLeft, insetTop, -scale, scale)
+                }
+            }
+            if (insetRight < size.width) {
+                clipRect(insetRight, insetTop.coerceAtLeast(0f), size.width, insetBottom.coerceAtMost(size.height)) {
+                    drawSource(insetRight + size.width * scale, insetTop, -scale, scale)
+                }
+            }
+            if (insetTop > 0f) {
+                clipRect(insetLeft.coerceAtLeast(0f), 0f, insetRight.coerceAtMost(size.width), insetTop) {
+                    drawSource(insetLeft, insetTop, scale, -scale)
+                }
+            }
+            if (insetBottom < size.height) {
+                clipRect(insetLeft.coerceAtLeast(0f), insetBottom, insetRight.coerceAtMost(size.width), size.height) {
+                    drawSource(insetLeft, insetBottom + size.height * scale, scale, -scale)
+                }
+            }
+            if (insetLeft > 0f && insetTop > 0f) {
+                clipRect(0f, 0f, insetLeft, insetTop) {
+                    drawSource(insetLeft, insetTop, -scale, -scale)
+                }
+            }
+            if (insetRight < size.width && insetTop > 0f) {
+                clipRect(insetRight, 0f, size.width, insetTop) {
+                    drawSource(insetRight + size.width * scale, insetTop, -scale, -scale)
+                }
+            }
+            if (insetLeft > 0f && insetBottom < size.height) {
+                clipRect(0f, insetBottom, insetLeft, size.height) {
+                    drawSource(insetLeft, insetBottom + size.height * scale, -scale, -scale)
+                }
+            }
+            if (insetRight < size.width && insetBottom < size.height) {
+                clipRect(insetRight, insetBottom, size.width, size.height) {
+                    drawSource(insetRight + size.width * scale, insetBottom + size.height * scale, -scale, -scale)
+                }
+            }
+        }
+        captureState.recordedProgress = progress
+        captureState.capturedSize = layerSize
+    }
+    clipRect { drawLayer(mirroredLayer) }
+}
+
+/**
  * clox 式覆层背衬：表盘按进度下压缩小时，边缘让出的区域用表盘最后一帧
  * 的四边/四角镜像像素向外填充，而不是露出纯黑底。
  *
@@ -247,11 +386,8 @@ internal class PreparedBackdropRecordState {
  * 这样源图自身始终铺满屏幕，向外扩展时只需少量 overscan，边缘不会先
  * 混入透明像素再被模糊放大。静止时最多每秒更新一次缓存，避免高频双层录制。
  *
- * API 31+ 继续使用实时帧的镜像扩边与硬件模糊。API 27-30 不录制实时内容：
- * 标准/JB 读取 preview，内置图片读取原图，内置视频读取首帧，默认内置表盘
- * 生成固定封面；这些来源在后台预制清晰、浅色强模糊和深色强模糊三张缓存。
- * 手势帧只按 (1-progress)/progress 绘制两张全屏位图，因此 AndroidView、
- * TextureView 也不会再因为 GraphicsLayer 录制为空而露出浅色 Window 背景。
+ * 所有系统使用转场前的真实窗口帧。API 31+ 使用硬件模糊；API 27-30 在后台
+ * 为同一帧预制模糊，手势中仅混合缓存。材质关闭仍绘制清晰镜像扩边。
  */
 @Composable
 internal fun Modifier.flueBackdropFill(
@@ -262,6 +398,9 @@ internal fun Modifier.flueBackdropFill(
     legacyDarkMode: Boolean = true,
     contentScale: (() -> Float)? = null,
     contentTranslationYFraction: (() -> Float)? = null,
+    contentAlpha: (() -> Float)? = null,
+    /** Sample all transform values together instead of evaluating the spring once per property. */
+    contentFrame: (() -> LayerAnimValues)? = null,
     /** Same dp blur clock installed on the live face layer for API 31+. */
     contentBlurRadiusDp: (() -> Float)? = null,
     /** Actual window-composited frame for AndroidView / TextureView watch faces. */
@@ -283,19 +422,11 @@ internal fun Modifier.flueBackdropFill(
     val captureState = remember(visualKey) {
         BackdropCaptureState()
     }
+    val legacyPainter = remember { LegacyBackdropPainter() }
     val canHardwareBlur = overlayBlurBackend(
         sdkInt = Build.VERSION.SDK_INT,
         advancedMaterialEnabled = advancedMaterialEnabled,
     ) == OverlayBlurBackend.SYSTEM
-    // A first blur prepared after DOWN fades in; cache refreshes while an
-    // existing blur is retained do not restart this animation. Read in draw.
-    val legacyBlurAvailability = if (!canHardwareBlur) {
-        animateFloatAsState(
-            targetValue = if (legacyFrames != null) 1f else 0f,
-            animationSpec = tween(160),
-            label = "legacy_blur_ready",
-        )
-    } else null
     val hardwareCapturedImage = remember(hardwareCapturedFrame?.generation) {
         hardwareCapturedFrame
             ?.bitmap
@@ -303,31 +434,78 @@ internal fun Modifier.flueBackdropFill(
             ?.asImageBitmap()
     }
     return this.drawWithContent {
+        val sampledFrame = contentFrame?.invoke()
         val rawProgress = progress()
         val p = if (rawProgress.isFinite()) rawProgress.coerceIn(0f, 1f) else 0f
         val layerSize = size.toIntSize()
         val preparedFrames = captureState.frameSession.select(
             overlayActive = freezeLiveContentWhenCaptured || p > 0.001f,
-            allowLateFrame = !canHardwareBlur,
             candidate = legacyFrames?.takeIf {
                 it.visualKey == visualKey &&
                     legacyBackdropViewportMatches(it.viewportWidth, it.viewportHeight, layerSize) &&
-                    (!canHardwareBlur || !freezeLiveContentWhenCaptured ||
-                        it.capturedGeneration != Long.MIN_VALUE)
+                    it.capturedGeneration != Long.MIN_VALUE
             },
             isValid = {
                 it.visualKey == visualKey &&
                     legacyBackdropViewportMatches(it.viewportWidth, it.viewportHeight, layerSize)
             },
         )
-        val sessionCapturedAvailable = preparedFrames?.capturedGeneration?.let {
-            it != Long.MIN_VALUE
-        } == true
         // Zoom and shrink-disabled animations already cover the viewport.
         // Draw the real layer so its alpha/blur remain intact, including the
         // old animation's fade to zero. Edge fill is only needed for exposed edges.
-        val frameScale = contentScale?.invoke() ?: (1f - 0.08f * p)
-        val frameTranslationY = contentTranslationYFraction?.invoke() ?: (0.03f * p)
+        val frameScale = sampledFrame?.scale ?: contentScale?.invoke() ?: (1f - 0.08f * p)
+        val frameTranslationY = sampledFrame?.translationY ?: contentTranslationYFraction?.invoke() ?: (0.03f * p)
+        if (!canHardwareBlur) {
+            if (p <= 0.001f && !freezeLiveContentWhenCaptured) {
+                // Keep a clean display-list snapshot ready for the first old
+                // system transition frame. This is cheap compared with a
+                // PixelCopy and avoids exposing the window behind the face if
+                // the prepared PixelCopy/CPU blur arrives late.
+                if (!captureState.hasFrame || captureState.capturedSize != layerSize) {
+                    backdropLayer.record(this, layoutDirection, layerSize) {
+                        this@drawWithContent.drawContent()
+                    }
+                    captureState.hasFrame = true
+                    captureState.capturedSize = layerSize
+                    captureState.recordedProgress = Float.NaN
+                }
+                drawContent()
+                return@drawWithContent
+            }
+            if (preparedFrames == null) {
+                if (!captureState.hasFrame || captureState.capturedSize != layerSize) {
+                    backdropLayer.record(this, layoutDirection, layerSize) {
+                        this@drawWithContent.drawContent()
+                    }
+                    captureState.hasFrame = true
+                    captureState.capturedSize = layerSize
+                    captureState.recordedProgress = Float.NaN
+                }
+                // No stale preview or market thumbnail is allowed here. The
+                // clean display list is the only fallback until the real
+                // frame/blur cache is ready.
+                drawLegacyMirroredLayer(
+                    sourceLayer = backdropLayer,
+                    mirroredLayer = magnifiedLayer,
+                    layerSize = layerSize,
+                    contentScale = frameScale,
+                    translationYPx = frameTranslationY * size.height,
+                    progress = p,
+                    captureState = captureState,
+                    layoutDirection = layoutDirection,
+                )
+                drawRect(Color.Black.copy(alpha = 0.20f * p))
+                return@drawWithContent
+            }
+            val frameAlpha = (sampledFrame?.alpha ?: contentAlpha?.invoke())?.takeIf(Float::isFinite)?.coerceIn(0f, 1f) ?: 1f
+            val blurProgress = (sampledFrame?.blur ?: contentBlurRadiusDp?.invoke())?.takeIf(Float::isFinite)
+                ?.let { (it / 24f).coerceIn(0f, 1f) } ?: p
+            legacyPainter.draw(
+                this, preparedFrames, frameScale, frameTranslationY * size.height,
+                frameAlpha, p, blurProgress, advancedMaterialEnabled, legacyDarkMode,
+            )
+            return@drawWithContent
+        }
         if (canHardwareBlur && frameScale >= 1f && frameTranslationY == 0f) {
             drawContent()
             return@drawWithContent
@@ -420,80 +598,16 @@ internal fun Modifier.flueBackdropFill(
             return@drawWithContent
         }
 
-        if (!canHardwareBlur) {
-            // Old Android never enters the display-list recording path. The
-            // selected watch face has already prepared these frames off the UI
-            // thread, so a drag frame is exactly two bitmap draws + one veil.
-            // Never stretch a cache prepared for a different measured layer.
-            // The live face remains available while the correctly-sized blur
-            // triplet is rebuilt in the background.
-            val matchingFrames = preparedFrames?.takeIf {
-                legacyBackdropViewportMatches(it.viewportWidth, it.viewportHeight, layerSize)
-            }
-            val drawLiveContent = shouldDrawLiveBackdropContent(
-                overlayActive = freezeLiveContentWhenCaptured,
-                capturedFrameAvailable = sessionCapturedAvailable,
-                backend = OverlayBlurBackend.LEGACY,
-            )
-            val fallback = matchingFrames?.let { Color(it.fallbackArgb) } ?: Color(0xFF10151D)
-            drawRect(fallback.copy(alpha = 1f))
-            if (matchingFrames != null) {
-                val blend = legacyBackdropBlend(p)
-                val legacyScale = (contentScale?.invoke() ?: (1f - 0.08f * p))
-                    .coerceIn(0.01f, 4f)
-                val legacyTranslationY =
-                    (contentTranslationYFraction?.invoke() ?: (0.03f * p)) * size.height
-                val blurredFrame = if (legacyDarkMode) {
-                    matchingFrames.darkBlurred
-                } else {
-                    matchingFrames.lightBlurred
-                }
-                // The prepared blur is the opaque edge fill behind the
-                // shrinking live face. It never substitutes for the clear
-                // watch face itself.
-                drawLegacyBackdropCover(
-                    image = blurredFrame,
-                    frames = matchingFrames,
-                    layerSize = layerSize,
-                    contentScale = legacyScale,
-                    translationYPx = legacyTranslationY,
-                    alpha = blend.clearAlpha * (legacyBlurAvailability?.value ?: 1f),
-                )
-            }
-            // Android 12 以下始终保留真实表盘，只在上面渐变叠加预制模糊。
-            // 缓存缺失也不能插入一张静态清晰图；后台 tick 与绘制独立门控。
-            if (drawLiveContent) drawContent()
-            if (matchingFrames != null) {
-                drawLegacyBackdropCover(
-                    image = if (legacyDarkMode) matchingFrames.darkBlurred else matchingFrames.lightBlurred,
-                    frames = matchingFrames,
-                    layerSize = layerSize,
-                    contentScale = (contentScale?.invoke() ?: (1f - 0.08f * p)).coerceIn(0.01f, 4f),
-                    translationYPx =
-                        (contentTranslationYFraction?.invoke() ?: (0.03f * p)) * size.height,
-                    alpha = legacyBackdropBlend(p).blurredAlpha * (legacyBlurAvailability?.value ?: 1f),
-                )
-            }
-            drawRect(
-                if (legacyDarkMode) {
-                    Color.Black.copy(alpha = 0.16f * p)
-                } else {
-                    Color.White.copy(alpha = 0.06f * p)
-                }
-            )
-            return@drawWithContent
-        }
-
         // 仅保留给 API 27-30 的预制帧兼容分支；API 31+ 外部/视频表盘走下面
         // 的真实 PixelCopy 当前帧，不再允许 preview.jpg 或视频首帧插进来。
         val preparedHardwareFrames = preparedFrames?.takeIf {
             legacyBackdropViewportMatches(it.viewportWidth, it.viewportHeight, layerSize)
         }
         if (preparedHardwareFrames != null) {
-            val preparedScale = (contentScale?.invoke() ?: (1f - 0.08f * p))
+            val preparedScale = frameScale
                 .coerceIn(0.01f, 1f)
             val preparedTranslationY =
-                (contentTranslationYFraction?.invoke() ?: (0.03f * p)) * size.height
+                frameTranslationY * size.height
             drawRect(Color(preparedHardwareFrames.fallbackArgb))
             if (
                 captureState.preparedRecordState.shouldRecord(
@@ -515,7 +629,7 @@ internal fun Modifier.flueBackdropFill(
                     )
                 }
             }
-            val requestedBlurDp = contentBlurRadiusDp?.invoke()
+            val requestedBlurDp = (sampledFrame?.blur ?: contentBlurRadiusDp?.invoke())
                 ?.takeIf(Float::isFinite)
                 ?.coerceAtLeast(0f)
             val preparedBlurRadius = if (requestedBlurDp != null) {
@@ -529,7 +643,7 @@ internal fun Modifier.flueBackdropFill(
             } else {
                 null
             }
-            magnifiedLayer.alpha = 1f
+            magnifiedLayer.alpha = (sampledFrame?.alpha ?: contentAlpha?.invoke() ?: 1f).coerceIn(0f, 1f)
             clipRect { drawLayer(magnifiedLayer) }
             // 完整帧已经统一模糊，无需在其上再次绘制真实表盘。
             // 缓存缺失时上方分支直接绘制带自身 RenderEffect 的真实表盘。
@@ -577,7 +691,7 @@ internal fun Modifier.flueBackdropFill(
         // 实际所在的矩形；矩形外不是再放大一份中心画面，而是继续采样相邻
         // 边缘并翻转方向。contentScale 最大限制为 1：前景若在别的场景放大，
         // 自身已经覆盖全屏，不需要制造负宽度的镜像条带。
-        val insetScale = (contentScale?.invoke() ?: (1f - 0.08f * p))
+        val insetScale = frameScale
             .coerceIn(0.01f, 1f)
         val translationY = (contentTranslationYFraction?.invoke() ?: (0.03f * p)) * size.height
         val insetLeft = (size.width - size.width * insetScale) / 2f
