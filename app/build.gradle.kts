@@ -1,4 +1,4 @@
-﻿import java.io.FileInputStream
+import java.io.FileInputStream
 import java.util.Properties
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 
@@ -47,8 +47,8 @@ android {
         applicationId = "com.flue.launcher"
         minSdk = 27
         targetSdk = 36
-        versionCode = 28
-        versionName = "2.3.3"
+        versionCode = 30
+        versionName = "2.3.5"
         ndk { abiFilters += listOf("armeabi-v7a", "arm64-v8a") }
     }
 
@@ -116,6 +116,7 @@ dependencies {
     implementation(libs.datastore.preferences)
     implementation(libs.mediarouter)
     implementation(libs.recyclerview)
+    implementation("com.github.Dimezis:BlurView:version-3.2.0")
 
     implementation(platform(libs.compose.bom))
     implementation(libs.compose.ui)

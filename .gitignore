@@ -34,3 +34,11 @@ pr-body.md
 /honeycomb_main.txt
 /honeycomb_main_utf8.txt
 classes.jar
+
+# Session scratch: local checkouts, patches, one-off inspection output.
+# Never commit these - they may contain third-party source or large binaries.
+/.tmp-*/
+/.dsh-tmp-*/
+/*.patch
+/.tmp-transition-diff.txt
+/.tmp-backup-*.patch
