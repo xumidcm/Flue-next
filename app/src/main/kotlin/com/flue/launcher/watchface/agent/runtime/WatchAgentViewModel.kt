@@ -219,9 +219,16 @@ class WatchAgentViewModel(application: Application) : AndroidViewModel(applicati
         if (_state.value.isGenerating) return
         val watchScope = _state.value.watchScope
         viewModelScope.launch(Dispatchers.IO) {
-            runCatching { workspaceManager.bind(watchScope, id) }
-                .onSuccess { refreshChoices() }
-                .onFailure { error -> _choices.update { it.copy(error = error.displayableMessage()) } }
+            val current = workspaceManager.bindingFor(watchScope)?.workspaceId
+            if (current == id) {
+                runCatching { workspaceManager.unbind(watchScope) }
+                    .onSuccess { refreshChoices() }
+                    .onFailure { error -> _choices.update { it.copy(error = error.displayableMessage()) } }
+            } else {
+                runCatching { workspaceManager.bind(watchScope, id) }
+                    .onSuccess { refreshChoices() }
+                    .onFailure { error -> _choices.update { it.copy(error = error.displayableMessage()) } }
+            }
         }
     }
 
@@ -552,9 +559,13 @@ class WatchAgentViewModel(application: Application) : AndroidViewModel(applicati
                     val requestMessages = listOf(
                         AgentRequestMessage(AgentMessageRole.SYSTEM, WatchAgentPrompt.baseline + capabilityPrompt),
                     ) + history
+                    var currentRequestInputTokens = 0L
+                    var currentRequestOutputTokens = 0L
                     val loop = WatchAgentLoop(
                         acceptsImages = acceptsImages,
                         completionExecutor = AgentCompletionExecutor { request: AgentProviderRequest, onEvent: (AgentStreamEvent) -> Unit ->
+                            currentRequestInputTokens = 0L
+                            currentRequestOutputTokens = 0L
                             providerClient.send(
                                 profile = profile,
                                 apiKey = apiKey,
@@ -565,7 +576,9 @@ class WatchAgentViewModel(application: Application) : AndroidViewModel(applicati
                         toolRunner = WatchAgentToolRunner(
                             host = generationHost,
                             permissionProvider = permissionStore::load,
-                            workspaceImages = com.flue.launcher.watchface.agent.tools.AgentWorkspaceImageTools(workspaceManager, generation.watchScope),
+                            workspaceImages = com.flue.launcher.watchface.agent.tools.AgentWorkspaceImageTools(workspaceManager, generation.watchScope, generationHost),
+                            workspaceManager = workspaceManager,
+                            attachmentsDir = File(getApplication<Application>().filesDir, "agent-attachments"),
                             shellRunner = shellRunner,
                             workspaceId = workspaceManager.bindingFor(generation.watchScope)?.workspaceId.orEmpty(),
                             workspaceIdProvider = {
@@ -601,15 +614,24 @@ class WatchAgentViewModel(application: Application) : AndroidViewModel(applicati
                                 }
                             }
                             if (event is AgentStreamEvent.Usage) {
-                                turnInputTokens += event.input ?: 0L
-                                turnOutputTokens += event.output ?: 0L
-                                val turnTotal = turnInputTokens + turnOutputTokens
+                                event.input?.let { currentRequestInputTokens = maxOf(currentRequestInputTokens, it) }
+                                event.output?.let { currentRequestOutputTokens = maxOf(currentRequestOutputTokens, it) }
+                                val turnTotal = (turnInputTokens + currentRequestInputTokens) + (turnOutputTokens + currentRequestOutputTokens)
                                 updateGenerationState(generation) {
-                                    it.copy(inputTokens = event.input, outputTokens = event.output, turnTokens = turnTotal, conversationTokens = conversation.tokenCount + turnTotal)
+                                    it.copy(
+                                        inputTokens = if (currentRequestInputTokens > 0) currentRequestInputTokens else event.input,
+                                        outputTokens = if (currentRequestOutputTokens > 0) currentRequestOutputTokens else event.output,
+                                        turnTokens = turnTotal,
+                                        conversationTokens = conversation.tokenCount + turnTotal,
+                                    )
                                 }
                             }
                         },
                         onAssistantToolTurn = { content, calls ->
+                            turnInputTokens += currentRequestInputTokens
+                            turnOutputTokens += currentRequestOutputTokens
+                            currentRequestInputTokens = 0L
+                            currentRequestOutputTokens = 0L
                             updateGenerationState(generation) { current ->
                                 current.copy(
                                     generationStatus = if (calls.any { it.name == "preview_face" }) {
@@ -689,6 +711,8 @@ class WatchAgentViewModel(application: Application) : AndroidViewModel(applicati
                             } else null
                         },
                     )
+                    turnInputTokens += currentRequestInputTokens
+                    turnOutputTokens += currentRequestOutputTokens
                     val finalText = completion.text.ifBlank {
                         streamAccumulator.snapshot()
                     }

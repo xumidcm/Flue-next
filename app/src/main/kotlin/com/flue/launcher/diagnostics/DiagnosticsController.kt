@@ -185,6 +185,7 @@ object DiagnosticsController {
     private fun refreshInstrumentation() {
         val options = mutableConfig.value
         val needFrames = (options.fps || current != null) && probes.isNotEmpty()
+        TransitionPerformance.collector = if (needFrames) current?.performance else null
         if (needFrames && frameThread == null) frameThread = HandlerThread("FlueFrameMetrics").apply { start() }
         val handler = frameThread?.let { Handler(it.looper) }
         probes.values.forEach { it.configure(options, needFrames, handler) }
@@ -261,7 +262,20 @@ private class WindowProbe(val activity: Activity) {
     @Volatile private var tracking = false
     @Volatile private var frameBudgetNanos = 16_666_667L
     private val listener = Window.OnFrameMetricsAvailableListener { _, metrics, dropped ->
-        if (tracking) accumulator.record(metrics.getMetric(FrameMetrics.TOTAL_DURATION), frameBudgetNanos, dropped)
+        if (tracking) {
+            val total = metrics.getMetric(FrameMetrics.TOTAL_DURATION)
+            accumulator.record(total, frameBudgetNanos, dropped)
+            // Scene labels describe the launcher, not another resumed Flue window.
+            if (activity.javaClass.simpleName == "LauncherActivity") {
+                TransitionPerformance.collector?.let { performance ->
+                    val started = metrics.getMetric(FrameMetrics.INTENDED_VSYNC_TIMESTAMP)
+                    performance.recordFrame(started, total, frameBudgetNanos, dropped)
+                    FRAME_STAGES.forEach { (metric, stage) ->
+                        performance.record(stage, started, metrics.getMetric(metric))
+                    }
+                }
+            }
+        }
     }
 
     fun configure(config: DiagnosticsConfig, needFrames: Boolean, handler: Handler?) {
@@ -341,3 +355,14 @@ private class WindowProbe(val activity: Activity) {
         removeOverlay()
     }
 }
+
+private val FRAME_STAGES = listOf(
+    FrameMetrics.UNKNOWN_DELAY_DURATION to TransitionPerformance.Stage.FRAME_UNKNOWN_DELAY,
+    FrameMetrics.INPUT_HANDLING_DURATION to TransitionPerformance.Stage.FRAME_INPUT,
+    FrameMetrics.ANIMATION_DURATION to TransitionPerformance.Stage.FRAME_ANIMATION,
+    FrameMetrics.LAYOUT_MEASURE_DURATION to TransitionPerformance.Stage.FRAME_LAYOUT,
+    FrameMetrics.DRAW_DURATION to TransitionPerformance.Stage.FRAME_DRAW,
+    FrameMetrics.SYNC_DURATION to TransitionPerformance.Stage.FRAME_SYNC,
+    FrameMetrics.COMMAND_ISSUE_DURATION to TransitionPerformance.Stage.FRAME_COMMAND,
+    FrameMetrics.SWAP_BUFFERS_DURATION to TransitionPerformance.Stage.FRAME_SWAP,
+)

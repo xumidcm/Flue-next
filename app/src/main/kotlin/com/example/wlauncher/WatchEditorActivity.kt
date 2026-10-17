@@ -1401,6 +1401,7 @@ private fun WatchEditorRoute(
                                     watchXml = candidate.watchXml,
                                     globalScript = candidate.globalScript,
                                     resources = resources,
+                                    watchScope = scope,
                                 ),
                             ) { "镜像同步失败" }
                             agentContinuationStore.save(
@@ -1444,7 +1445,7 @@ private fun WatchEditorRoute(
         val resources = active.resourceInventory().associate { asset ->
             asset.relativePath to Files.readAllBytes(active.draftDirectory.toPath().resolve(asset.relativePath))
         }
-        agentWorkspaceManager.syncFaceMirror(workspaceId, candidate.watchXml, candidate.globalScript, resources)
+        agentWorkspaceManager.syncFaceMirror(workspaceId, candidate.watchXml, candidate.globalScript, resources, scope)
     }
 
     BackHandler(onBack = ::requestClose)
@@ -1826,7 +1827,7 @@ private fun WatchEditorRoute(
                                             val resources = active.resourceInventory().associate { asset ->
                                                 asset.relativePath to Files.readAllBytes(active.draftDirectory.toPath().resolve(asset.relativePath))
                                             }
-                                            agentWorkspaceManager.syncFaceMirror(workspaceId, candidate.watchXml, candidate.globalScript, resources)
+                                            agentWorkspaceManager.syncFaceMirror(workspaceId, candidate.watchXml, candidate.globalScript, resources, agentScope)
                                         }
                                         active.snapshot()
                                     }
@@ -2985,6 +2986,7 @@ private fun WatchEditorScreen(
                             },
                             fontWeight = FontWeight.SemiBold,
                             maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
                         )
                         Text(
                             stringResource(
@@ -2996,6 +2998,12 @@ private fun WatchEditorScreen(
                                 selectedLayerKeys.size,
                             ),
                             style = MaterialTheme.typography.labelSmall,
+                            // 圆屏顶栏两侧被返回键和浮动工具条夹住，weight(1f) 分给
+                            // 标题列的宽度很窄。以前这两行都没有 maxLines，Compose 会
+                            // 逐字换行 —— 「草稿已同步」被挤成竖排五字（老师报的问题）。
+                            // 限定单行 + 省略号，宽度不够时宁可截断也不竖排。
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
@@ -4631,7 +4639,11 @@ private fun WatchEditorPreview(
                 view.setGravityParallaxEnabled(true)
                 view.setTapHapticsEnabled(tapHapticsEnabled)
                 view.setGravityBackdropBlurEnabled(gravityBackdropBlurEnabled)
-                view.setEditorAnimatedImageLayer(animatedPreviewLayerIndex)
+                if (previewPlaying) {
+                    view.clearEditorAnimatedImageLayerLimit()
+                } else {
+                    view.setEditorAnimatedImageLayer(animatedPreviewLayerIndex)
+                }
                 // 统一的预览播放开关：序列帧、视频、重力景深三者同进同退。
                 view.setEditorPreviewPlaying(previewPlaying)
                 if (!previewPlaying) view.resetEditorPreviewViewpoint()

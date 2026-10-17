@@ -65,6 +65,7 @@ class WatchEditorSession private constructor(
         val layerKeys: List<WatchEditorLayerKey>,
         val resourcePaths: Set<String>,
         val scriptBytes: ByteArray?,
+        val resourceVersions: Map<String, Long>,
     )
 
     private val undoStack = ArrayDeque<EditorState>()
@@ -72,6 +73,11 @@ class WatchEditorSession private constructor(
     private var undoBytes = 0L
     private var redoBytes = 0L
     private val resourceStash = mutableMapOf<String, File>()
+    private data class ResourceVersion(val path: String, val version: Long)
+    private val resourceVersions = mutableMapOf<String, Long>()
+    private val resourceVersionFiles = mutableMapOf<ResourceVersion, File>()
+    private var nextResourceVersion = 0L
+    private var savedResourceVersions: Map<String, Long> = emptyMap()
     private val historyDirectory = File(
         draftDirectory.parentFile,
         ".${draftDirectory.name}-history",
@@ -125,6 +131,7 @@ class WatchEditorSession private constructor(
             ensureOpen()
             return !serializeDocument(document).contentEquals(savedXml) ||
                 resourcePathsInternal().toSet() != savedResourcePaths ||
+                resourceVersions.filterKeys { it in savedResourcePaths } != savedResourceVersions ||
                 !sameNullableBytes(scriptBytesInternal(), savedScriptBytes)
         }
 
@@ -287,8 +294,12 @@ class WatchEditorSession private constructor(
         watchXml: String,
         globalScript: String,
         resources: Map<String, ByteArray>,
+        expectedRevision: Long? = null,
     ): WatchEditorSnapshot {
         ensureOpen()
+        check(expectedRevision == null || agentRevisionCounter == expectedRevision) {
+            "stale_revision: expected_revision=$expectedRevision current_revision=$agentRevisionCounter"
+        }
         require(watchXml.isNotBlank()) { "镜像缺少 watch.xml" }
         require(watchXml.toByteArray(StandardCharsets.UTF_8).size <= MAX_AGENT_DOCUMENT_BYTES) {
             "镜像 watch.xml 超过 ${MAX_AGENT_DOCUMENT_BYTES / 1024 / 1024} MiB UTF-8 限制"
@@ -296,26 +307,27 @@ class WatchEditorSession private constructor(
         require(globalScript.toByteArray(StandardCharsets.UTF_8).size <= MAX_WATCH_SCRIPT_BYTES) {
             "镜像全局脚本超过 $MAX_WATCH_SCRIPT_BYTES 字节限制"
         }
+        val normalized = normalizeAgentWatchXmlPaths(watchXml)
+        val candidateDocument = parseXml(ByteArrayInputStream(normalized.toByteArray(StandardCharsets.UTF_8)), limits)
+        require(candidateDocument.documentElement.tagName.equals("Watch", true)) { "watch.xml root must be <Watch>" }
+        checkDepth(candidateDocument.documentElement, 0)
+        val desired = resources.keys.map { path ->
+            validateRelativePath(path).also { clean ->
+                require(clean != watchXmlRelativePath && clean != GLOBAL_SCRIPT_RELATIVE_PATH) {
+                    "镜像资源不能覆盖编辑器文档"
+                }
+                resolveDraftPath(clean) // Validate every destination before the first write.
+                require(resources.getValue(path).size <= limits.maxFileBytes) { "镜像资源超过文件大小限制：$clean" }
+            }
+        }.toSet()
+        require(desired.size == resources.size) { "镜像资源路径重复" }
+        require(resources.values.sumOf { it.size.toLong() } + normalized.toByteArray(StandardCharsets.UTF_8).size +
+            globalScript.toByteArray(StandardCharsets.UTF_8).size <= limits.maxTotalBytes) { "镜像资源总大小超过限制" }
         mutate {
-            val normalized = normalizeAgentWatchXmlPaths(watchXml)
-            document = parseXml(
-                ByteArrayInputStream(normalized.toByteArray(StandardCharsets.UTF_8)),
-                limits,
-            )
+            document = candidateDocument
             rebindLayerKeys(layerKeys.takeIf { it.size == topLevelLayerElements().size })
-
-            val desired = resources.keys.map { path ->
-                validateRelativePath(path).also { clean ->
-                    require(clean != watchXmlRelativePath && clean != GLOBAL_SCRIPT_RELATIVE_PATH) {
-                        "镜像资源不能覆盖编辑器文档"
-                    }
-                }
-            }.toSet()
             resourcePathsInternal().filterNot { it in desired }.forEach { path ->
-                val file = resolveDraftPath(path)
-                if (file.exists() && !file.delete()) {
-                    throw WatchEditorException("无法恢复镜像资源：$path")
-                }
+                stashResource(path)
             }
             resources.forEach { (path, bytes) ->
                 val clean = validateRelativePath(path)
@@ -328,7 +340,17 @@ class WatchEditorSession private constructor(
                         throw WatchEditorException("无法创建镜像资源目录：$clean")
                     }
                 }
-                writeAtomically(target, bytes)
+                if (!target.isFile || !target.readBytes().contentEquals(bytes)) {
+                    if (target.isFile) {
+                        archiveResourceVersion(clean, resourceVersions[clean] ?: 0L, target)
+                        val version = ++nextResourceVersion
+                        val archive = File(historyDirectory, UUID.randomUUID().toString())
+                        writeAtomically(archive, bytes)
+                        resourceVersionFiles[ResourceVersion(clean, version)] = archive
+                        resourceVersions[clean] = version
+                    }
+                    writeAtomically(target, bytes)
+                }
             }
             updateGlobalScriptDirect(globalScript)
         }
@@ -1107,6 +1129,7 @@ class WatchEditorSession private constructor(
         writeAtomically(watchXmlFile, bytes)
         savedXml = bytes
         savedResourcePaths = resourcePathsInternal().toSet()
+        savedResourceVersions = resourceVersions.filterKeys { it in savedResourcePaths }
         savedScriptBytes = scriptBytesInternal()
         return watchXmlFile
     }
@@ -1149,6 +1172,7 @@ class WatchEditorSession private constructor(
             targetPublished = true
             savedXml = xmlBytes
             savedResourcePaths = resourcePathsInternal().toSet()
+            savedResourceVersions = resourceVersions.filterKeys { it in savedResourcePaths }
             savedScriptBytes = scriptBytesInternal()
             return target
         } catch (error: Exception) {
@@ -1309,6 +1333,7 @@ class WatchEditorSession private constructor(
             atomicMove(temporary, output)
             savedXml = draftXmlBytes
             savedResourcePaths = resourcePathsInternal().toSet()
+            savedResourceVersions = resourceVersions.filterKeys { it in savedResourcePaths }
             savedScriptBytes = scriptBytesInternal()
             return WatchEditorExportResult(output, output.length(), entryCount)
         } catch (error: Exception) {
@@ -1624,6 +1649,7 @@ class WatchEditorSession private constructor(
         layerKeys = layerKeys.toList(),
         resourcePaths = resourcePathsInternal().toSet(),
         scriptBytes = scriptBytesInternal(),
+        resourceVersions = resourceVersions.filterKeys { resolveDraftPath(it).isFile },
     )
 
     private fun restoreState(state: EditorState) {
@@ -1647,6 +1673,18 @@ class WatchEditorSession private constructor(
             destination.parentFile?.mkdirs()
             atomicMove(stash, destination)
         }
+        for (path in state.resourcePaths) {
+            val desiredVersion = state.resourceVersions[path] ?: 0L
+            if (path !in currentResources || desiredVersion != (resourceVersions[path] ?: 0L)) {
+                resourceVersionFiles[ResourceVersion(path, desiredVersion)]?.let { archived ->
+                    val target = resolveDraftPath(path)
+                    target.parentFile?.mkdirs()
+                    Files.copy(archived.toPath(), target.toPath(), StandardCopyOption.REPLACE_EXISTING)
+                }
+            }
+        }
+        resourceVersions.clear()
+        resourceVersions.putAll(state.resourceVersions)
         val scriptFile = globalScriptFile()
         val scriptBytes = state.scriptBytes
         if (scriptBytes == null) {
@@ -1663,6 +1701,7 @@ class WatchEditorSession private constructor(
     private fun sameState(first: EditorState, second: EditorState): Boolean =
         first.layerKeys == second.layerKeys &&
             first.resourcePaths == second.resourcePaths &&
+            first.resourceVersions == second.resourceVersions &&
             sameNullableBytes(first.scriptBytes, second.scriptBytes) &&
             first.xml.contentEquals(second.xml)
 
@@ -1704,6 +1743,26 @@ class WatchEditorSession private constructor(
     }
 
     private fun pruneResourceStash() {
+        fun pruneVersions() {
+            val referencedVersions = buildSet {
+                for (state in undoStack + redoStack) {
+                    for (path in state.resourcePaths) add(ResourceVersion(path, state.resourceVersions[path] ?: 0L))
+                }
+                for ((path, version) in resourceVersions) add(ResourceVersion(path, version))
+            }
+            resourceVersionFiles.entries.removeAll { (version, file) ->
+                if (version in referencedVersions) false else { file.delete(); true }
+            }
+        }
+        pruneVersions()
+        // Resource versions are shared on disk, never copied into every undo
+        // snapshot. Trim the oldest undo steps if their unique files exceed budget.
+        while (resourceVersionFiles.values.sumOf(File::length) > limits.maxHistoryBytes &&
+            (undoStack.isNotEmpty() || redoStack.isNotEmpty())) {
+            if (undoStack.isNotEmpty()) undoBytes -= undoStack.removeFirst().historyBytes
+            else redoBytes -= redoStack.removeFirst().historyBytes
+            pruneVersions()
+        }
         if (resourceStash.isEmpty()) return
         val referenced = buildSet {
             undoStack.forEach { addAll(it.resourcePaths) }
@@ -1715,7 +1774,7 @@ class WatchEditorSession private constructor(
                 true
             }
         }
-        if (resourceStash.isEmpty()) historyDirectory.delete()
+        if (resourceStash.isEmpty() && resourceVersionFiles.isEmpty()) historyDirectory.delete()
     }
 
     private enum class HistorySide { UNDO, REDO }
@@ -2266,19 +2325,32 @@ class WatchEditorSession private constructor(
         candidates.filterNot(referenced::contains).forEach { path ->
             val source = resolveDraftPath(path)
             if (!source.isFile) return@forEach
-            if (!historyDirectory.exists() && !historyDirectory.mkdirs()) {
-                throw WatchEditorException("无法创建撤销资源缓存")
-            }
-            val stash = File(historyDirectory, UUID.randomUUID().toString())
-            atomicMove(source, stash)
-            resourceStash.remove(path)?.delete()
-            resourceStash[path] = stash
+            stashResource(path)
             var parent = source.parentFile
             while (parent != null && parent != draftDirectory && parent.list().isNullOrEmpty()) {
                 if (!parent.delete()) break
                 parent = parent.parentFile
             }
         }
+    }
+
+    private fun archiveResourceVersion(path: String, version: Long, source: File) {
+        val key = ResourceVersion(path, version)
+        if (key in resourceVersionFiles) return
+        check(historyDirectory.isDirectory || historyDirectory.mkdirs()) { "无法创建撤销资源缓存" }
+        val archive = File(historyDirectory, UUID.randomUUID().toString())
+        Files.copy(source.toPath(), archive.toPath())
+        resourceVersionFiles[key] = archive
+    }
+
+    private fun stashResource(path: String) {
+        val source = resolveDraftPath(path)
+        if (!source.isFile) return
+        check(historyDirectory.isDirectory || historyDirectory.mkdirs()) { "无法创建撤销资源缓存" }
+        val stash = File(historyDirectory, UUID.randomUUID().toString())
+        atomicMove(source, stash)
+        resourceStash.remove(path)?.delete()
+        resourceStash[path] = stash
     }
 
     private fun draftByteCount(): Long = draftFiles().sumOf { it.length() }

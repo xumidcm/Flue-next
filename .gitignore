@@ -42,3 +42,4 @@ classes.jar
 /*.patch
 /.tmp-transition-diff.txt
 /.tmp-backup-*.patch
+/.tmp-commit-msg.txt

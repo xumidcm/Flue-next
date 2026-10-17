@@ -54,6 +54,9 @@
     <string name="settings_scroll_indicator">滑动进度指示器</string>
     <string name="settings_scroll_indicator_on">屏幕右侧显示滑动进度，圆屏沿边缘走弧线</string>
     <string name="settings_scroll_indicator_off">不显示滑动进度指示器</string>
+    <string name="settings_app_list_edge_align">应用列表贴边对齐</string>
+    <string name="settings_app_list_edge_align_on">首行靠顶部、末行靠底部，按屏幕形状保留可见空间</string>
+    <string name="settings_app_list_edge_align_off">首末行对齐到屏幕中心</string>
     <string name="settings_md3_top_fisheye">MD3 顶部鱼眼效果</string>
     <string name="settings_md3_top_fisheye_sub">仅作用于网格布局顶部图标</string>
     <string name="settings_fisheye_strength">缩小幅度</string>
@@ -340,6 +343,7 @@
     <string name="search_d_folders">拖动合成文件夹</string>
     <string name="search_d_launch_mask">启动遮罩跟随表盘颜色</string>
     <string name="search_d_row_bg">列表行底色</string>
+    <string name="search_d_app_list_edge_align">首末行对齐到屏幕边缘而不居中</string>
     <string name="search_d_performance">动画开关与图标质量</string>
     <string name="search_d_stagger">逐行错峰进入</string>
     <string name="search_d_legacy">WatchOS 三段式之前的老动画</string>
@@ -980,7 +984,7 @@
     <string name="watch_editor_panel_layers">图层</string>
     <string name="watch_editor_panel_properties">属性</string>
     <string name="watch_editor_panel_watch">表盘</string>
-    <string name="watch_editor_panel_agent">AI生成</string>
+    <string name="watch_editor_panel_agent">AI</string>
     <string name="settings_agent_title">Agent 设置</string>
     <string name="settings_agent_subtitle">AI 服务商、模型、工作区和工具审批</string>
     <string name="watch_editor_error_decode_image">图片解码失败</string>

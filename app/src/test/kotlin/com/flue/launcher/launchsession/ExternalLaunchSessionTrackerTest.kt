@@ -247,16 +247,37 @@ class ExternalLaunchSessionTrackerTest {
     }
 
     @Test
-    fun `pause and resume without stop is invalid because background was not confirmed`() {
+    fun `pause and resume without stop and without external evidence keeps dispatched state for slow app launch`() {
         val id = tracker.begin(request())
         tracker.onDispatchResult(id, success = true)
         tracker.onPaused()
 
         tracker.onResumed()
 
-        val invalidated = tracker.state as ExternalLaunchState.Invalidated
-        assertSame(InvalidReason.NoConfirmedBackground, invalidated.reason)
-        assertFalse(invalidated.retainsLaunchIcon)
+        val dispatched = tracker.state as ExternalLaunchState.LaunchDispatched
+        assertEquals(id, dispatched.session.id)
+        assertTrue(dispatched.session.pausedAfterDispatch)
+        assertTrue(dispatched.retainsLaunchIcon)
+    }
+
+    @Test
+    fun `pause and resume with external evidence returns without stop for translucent app`() {
+        val id = tracker.begin(request("calendar"))
+        tracker.onDispatchResult(id, success = true)
+        tracker.onPaused()
+        tracker.recordEvidence(
+            ForegroundPackageEvidence(
+                packageName = "com.example.calendar",
+                observedAtElapsedMs = 2_000L,
+                sequence = 1L,
+            )
+        )
+
+        tracker.onResumed()
+
+        val returning = tracker.state as ExternalLaunchState.Returning
+        assertEquals(id, returning.session.id)
+        assertSame(ReturnKind.TargetReturn, returning.kind)
     }
 
     @Test

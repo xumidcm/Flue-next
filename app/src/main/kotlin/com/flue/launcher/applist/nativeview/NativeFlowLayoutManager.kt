@@ -29,6 +29,9 @@ internal class NativeFlowLayoutManager(
     private var geometryCellSize = Float.NaN
     private var geometryCrescentBulge = Float.NaN
     private var geometryCrescentToRight: Boolean? = null
+    private var geometryEdgeAlignEnabled = false
+    private var geometryEdgeAlignPadding = Float.NaN
+    private var geometryEdgeVisibility: NativeEdgeVisibilityKey? = null
 
     override fun hasSameGeometryConfig(
         config: NativeAppListConfig,
@@ -42,7 +45,10 @@ internal class NativeFlowLayoutManager(
             // 否则峰值那几行的基准还是旧的，弧会重新越界。
             geometryCrescentBulge == config.flowCrescentBulgeFraction &&
             geometryCrescentToRight ==
-            (config.flowCrescentDirection == FlowCrescentDirection.Right)
+            (config.flowCrescentDirection == FlowCrescentDirection.Right) &&
+            geometryEdgeAlignEnabled == config.edgeAlignEnabled &&
+            geometryEdgeAlignPadding == config.edgeAlignPaddingPx &&
+            geometryEdgeVisibility == config.edgeVisibilityKey()
 
     override fun rememberGeometryConfig(config: NativeAppListConfig) {
         geometryLeftInset = config.leftSafeInsetPx
@@ -52,6 +58,9 @@ internal class NativeFlowLayoutManager(
         geometryCellSize = config.flowCellSizePx
         geometryCrescentBulge = config.flowCrescentBulgeFraction
         geometryCrescentToRight = config.flowCrescentDirection == FlowCrescentDirection.Right
+        geometryEdgeAlignEnabled = config.edgeAlignEnabled
+        geometryEdgeAlignPadding = config.edgeAlignPaddingPx
+        geometryEdgeVisibility = config.edgeVisibilityKey()
     }
 
     override fun createGeometry(
@@ -59,19 +68,35 @@ internal class NativeFlowLayoutManager(
         viewportWidthPx: Int,
         viewportHeightPx: Int,
         config: NativeAppListConfig,
-    ): NativeAppGridGeometry = NativeFlowGeometry.create(
-        itemCount = itemCount,
-        viewportWidthPx = viewportWidthPx,
-        viewportHeightPx = viewportHeightPx,
-        leftSafeInsetPx = config.leftSafeInsetPx,
-        rightSafeInsetPx = config.rightSafeInsetPx,
-        columns = config.flowColumns,
-        iconSizePx = config.iconSizePx.toFloat(),
-        cellSizePx = config.flowCellSizePx.takeIf { it > 0f }
-            ?: (config.iconSizePx * 1.02f),
-        requestedCrescentBulgeFraction = config.flowCrescentBulgeFraction,
-        crescentToRight = config.flowCrescentDirection == FlowCrescentDirection.Right,
-    )
+    ): NativeAppGridGeometry {
+        val flow = NativeFlowGeometry.create(
+            itemCount = itemCount,
+            viewportWidthPx = viewportWidthPx,
+            viewportHeightPx = viewportHeightPx,
+            leftSafeInsetPx = config.leftSafeInsetPx,
+            rightSafeInsetPx = config.rightSafeInsetPx,
+            columns = config.flowColumns,
+            iconSizePx = config.iconSizePx.toFloat(),
+            cellSizePx = config.flowCellSizePx.takeIf { it > 0f }
+                ?: (config.iconSizePx * 1.02f),
+            requestedCrescentBulgeFraction = config.flowCrescentBulgeFraction,
+            crescentToRight = config.flowCrescentDirection == FlowCrescentDirection.Right,
+            edgePaddingPx = config.edgeAlignPaddingPx,
+            centerAligned = !config.edgeAlignEnabled,
+        )
+        val settled = config.copy(entryMotionEnabled = false, entryProgress = 1f)
+        val bounds = nativeVisibleEdgeBounds(flow, viewportWidthPx.toFloat(), config) { position, y ->
+            val visual = nativeHoneycombChildVisual(
+                flow.centerX(position), y, viewportWidthPx.toFloat(), viewportHeightPx.toFloat(),
+                settled, verticalOnlyFisheye = true,
+            )
+            visual.translationX += nativeFlowCrescentTranslationX(
+                flow.crescentBulgePx, flow.crescentToRight, y, viewportHeightPx.toFloat(), config.flowShapeCurve,
+            )
+            visual
+        }
+        return flow.withScrollBounds(bounds)
+    }
 
     override fun layoutChild(
         child: View,
@@ -132,10 +157,8 @@ internal class NativeFlowLayoutManager(
                 // 二维半径会把明暗和月牙的横向位移绑在一起。详见那个参数的注释。
                 verticalOnlyFisheye = true,
             )
-            // 月牙叠在基准之后。这里**不再**按 deviceShape 分叉：老师指定圆屏专属几何
-            // 只保留列表与星环，心流 / 蜂窝 / 密集网格在圆屏上与方屏一致（不收边）。
-            // 圆屏收边原本会把屏外那一两行拽进屏内钉在弧上，正是「顶上和底下图标重叠」
-            // 的来源之一；而心流本来就用月牙自己控制越界，不需要第二道轮廓。
+            // 月牙叠在基准之后，滚动中的图标不额外向圆屏轮廓收拢。
+            // 贴边开启时只在创建几何时为端行选择可见的停靠位置。
             val crescentX = nativeFlowCrescentTranslationX(
                 bulgePx = flow.crescentBulgePx,
                 toRight = flow.crescentToRight,

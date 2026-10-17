@@ -54,6 +54,9 @@
     <string name="settings_scroll_indicator">Scroll Indicator</string>
     <string name="settings_scroll_indicator_on">Show scroll progress along the right edge; curved on round screens</string>
     <string name="settings_scroll_indicator_off">Hide the scroll progress indicator</string>
+    <string name="settings_app_list_edge_align">App List Edge Align</string>
+    <string name="settings_app_list_edge_align_on">Move the first and last rows toward the edges, with room to stay visible on your screen</string>
+    <string name="settings_app_list_edge_align_off">First and last rows align to the screen centre</string>
     <string name="settings_md3_top_fisheye">MD3 Top Fisheye</string>
     <string name="settings_md3_top_fisheye_sub">Only affects icons above center in the grid layout</string>
     <string name="settings_fisheye_strength">Shrink Amount</string>
@@ -340,6 +343,7 @@
     <string name="search_d_folders">Drag icons together to create a folder</string>
     <string name="search_d_launch_mask">Launch overlay follows watch face colors</string>
     <string name="search_d_row_bg">Row background in list mode</string>
+    <string name="search_d_app_list_edge_align">Pin the first and last rows to the screen edges</string>
     <string name="search_d_performance">Animation toggles and icon quality</string>
     <string name="search_d_stagger">Rows enter one after another</string>
     <string name="search_d_legacy">Pre-WatchOS three-stage animation</string>
@@ -953,7 +957,7 @@
     <string name="watch_editor_panel_layers">Layers</string>
     <string name="watch_editor_panel_properties">Properties</string>
     <string name="watch_editor_panel_watch">Watch</string>
-    <string name="watch_editor_panel_agent">AI Generate</string>
+    <string name="watch_editor_panel_agent">AI</string>
     <string name="settings_agent_title">Agent settings</string>
     <string name="settings_agent_subtitle">Providers, models, workspaces and tool approvals</string>
     <string name="watch_editor_error_decode_image">Couldn\'t decode the image</string>

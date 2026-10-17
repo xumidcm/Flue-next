@@ -84,6 +84,8 @@ object DiagnosticsSnapshot {
                 .put("interval_ms", 1000)
                 .put("jank", "total duration exceeds current display frame budget")
                 .put("fps", "observed rendered frames divided by elapsed interval; idle is zero")
+                .put("p95", "0.5ms histogram upper bound, overflow uses observed maximum")
+                .put("transition_stages", "session.json transition_performance: capture, blur, preparation, layout/draw and FrameMetrics stages by scene start timestamp")
                 .put("scope", "resumed Flue Activity windows; includes diagnostics UI rendering overhead")
                 .put("background", "sampling paused; five minute elapsedRealtime deadline continues"))
             .toString(2)

@@ -110,7 +110,6 @@ class WorkspaceManager private constructor(
         return runCatching {
             val workspace = decodeMetadata(String(Files.readAllBytes(paths.metadata), Charsets.UTF_8), paths)
             workspace.copy(
-                quota = workspace.quota.withUsage(calculateUsage(paths.root)),
                 binding = firstBindingFor(workspace.id),
             )
         }.getOrNull()
@@ -293,25 +292,37 @@ class WorkspaceManager private constructor(
     @Synchronized
     fun listDirectory(workspaceId: String, relativeDirectory: String = "workspace"): List<DirectoryEntry> {
         val workspace = get(workspaceId) ?: return emptyList()
-        val relative = WorkspacePathPolicy.sanitizeRelative(relativeDirectory)
-        val directory = WorkspacePathPolicy.resolveInside(workspace.paths.root, relative)
-        require(Files.isDirectory(directory)) { "Workspace directory does not exist" }
+        val clean = relativeDirectory.trim().replace('\\', '/').trim('/')
+        val directory = if (clean.isEmpty()) {
+            workspace.paths.root
+        } else {
+            val sanitized = WorkspacePathPolicy.sanitizeRelative(clean)
+            WorkspacePathPolicy.resolveInside(workspace.paths.root, sanitized)
+        }
+        if (!Files.isDirectory(directory)) return emptyList()
         Files.list(directory).use { stream ->
-            return stream.map { path ->
-                val childRelative = workspace.paths.workspace.relativize(path).toString().replace('\\', '/')
-                DirectoryEntry(childRelative, path.fileName.toString(), Files.isDirectory(path), if (Files.isRegularFile(path)) Files.size(path) else 0L)
+            return stream.filter { path ->
+                path.fileName.toString() != "workspace.json" && !path.fileName.toString().startsWith(".linux-backup-")
+            }.map { path ->
+                val childRelative = if (path.startsWith(workspace.paths.workspace)) {
+                    workspace.paths.workspace.relativize(path).toString().replace('\\', '/')
+                } else {
+                    workspace.paths.root.relativize(path).toString().replace('\\', '/')
+                }
+                DirectoryEntry(childRelative, path.fileName.toString(), Files.isDirectory(path), if (Files.isRegularFile(path)) runCatching { Files.size(path) }.getOrDefault(0L) else 0L)
             }.sorted(compareBy<DirectoryEntry> { !it.isDirectory }.thenBy { it.name.lowercase() }).toList()
         }
     }
 
-    /** Deletes a file or directory inside /workspace, never protected runtime paths. */
+    /** Deletes a file or directory inside manageable workspace paths, never protected runtime paths. */
     @Synchronized
     fun deleteWorkspaceEntry(workspaceId: String, relativePath: String): Boolean {
         val workspace = get(workspaceId) ?: return false
-        val relative = WorkspacePathPolicy.sanitizeRelative(relativePath)
-        require(relative == "workspace" || relative.startsWith("workspace/")) { "Only workspace files can be deleted" }
-        val target = WorkspacePathPolicy.resolveInside(workspace.paths.root, relative)
-        require(target != workspace.paths.workspace && Files.exists(target)) { "Invalid workspace entry" }
+        val clean = WorkspacePathPolicy.sanitizeRelative(relativePath)
+        val rootName = clean.substringBefore('/')
+        require(rootName in setOf("workspace", "generated", "previews", "home", "faces") && clean != rootName) { "只能删除工作区可变目录内的文件" }
+        val target = WorkspacePathPolicy.resolveInside(workspace.paths.root, clean)
+        require(Files.exists(target)) { "Invalid workspace entry" }
         require(!Files.isSymbolicLink(target)) { "Symbolic links cannot be deleted" }
         deleteRecursively(target)
         refreshQuota(workspaceId)
@@ -381,8 +392,39 @@ class WorkspaceManager private constructor(
 
     /** Returns the isolated mirror directory for the face bound to this workspace. */
     @Synchronized
-    fun faceMirrorDirectory(workspaceId: String): Path? =
-        get(workspaceId)?.paths?.face?.also { Files.createDirectories(it) }
+    fun faceMirrorDirectory(workspaceId: String, watchScope: String? = null): Path? {
+        val workspace = get(workspaceId) ?: return null
+        val target = if (!watchScope.isNullOrBlank()) {
+            // A digest prevents scopes such as face:a and face/a sharing one mirror.
+            val safeScope = UUID.nameUUIDFromBytes(watchScope.toByteArray(Charsets.UTF_8)).toString()
+            val scoped = WorkspacePathPolicy.resolveInside(workspace.paths.root, "faces/$safeScope")
+            if (!Files.exists(scoped)) {
+                Files.createDirectories(scoped)
+                // Only migrate a legacy mirror whose owner is known. Other scopes
+                // are rebuilt from their own editor candidate, never from this face.
+                if (workspace.watchScope == watchScope) {
+                    val oldName = watchScope.trim().replace(Regex("[^a-zA-Z0-9._-]"), "_")
+                    val oldScoped = WorkspacePathPolicy.resolveInside(workspace.paths.root, "faces/$oldName")
+                    val legacy = if (Files.isDirectory(oldScoped)) oldScoped else workspace.paths.face
+                    if (Files.isDirectory(legacy) && !Files.isSymbolicLink(legacy)) {
+                        Files.walk(legacy).use { stream ->
+                            stream.filter { Files.isRegularFile(it, LinkOption.NOFOLLOW_LINKS) }.forEach { source ->
+                                val relative = legacy.relativize(source).toString()
+                                val checkedSource = WorkspacePathPolicy.resolveInside(legacy, relative)
+                                val targetFile = WorkspacePathPolicy.resolveInside(scoped, relative)
+                                Files.createDirectories(targetFile.parent)
+                                Files.copy(checkedSource, targetFile, StandardCopyOption.REPLACE_EXISTING)
+                            }
+                        }
+                    }
+                }
+            }
+            scoped
+        } else {
+            workspace.paths.face.also { Files.createDirectories(it) }
+        }
+        return target
+    }
 
     data class FaceMirrorSnapshot(
         val watchXml: String,
@@ -397,8 +439,9 @@ class WorkspaceManager private constructor(
         watchXml: String,
         globalScript: String,
         resources: Map<String, ByteArray> = emptyMap(),
+        watchScope: String? = null,
     ): Boolean {
-        val face = faceMirrorDirectory(workspaceId) ?: return false
+        val face = faceMirrorDirectory(workspaceId, watchScope) ?: return false
         require(watchXml.toByteArray(Charsets.UTF_8).size <= MAX_FACE_MIRROR_FILE_BYTES) {
             "watch.xml exceeds mirror file limit"
         }
@@ -408,17 +451,6 @@ class WorkspaceManager private constructor(
         writeAtomically(face.resolve("watch.xml"), watchXml)
         val scripts = face.resolve("scripts"); Files.createDirectories(scripts)
         writeAtomically(scripts.resolve("script.txt"), globalScript)
-        val keep = resources.keys.map { WorkspacePathPolicy.sanitizeRelative(it) }.toSet()
-        Files.walk(face).use { stream ->
-            stream.filter { path ->
-                path != face && Files.isRegularFile(path, LinkOption.NOFOLLOW_LINKS)
-            }.forEach { path ->
-                val relative = face.relativize(path).toString().replace('\\', '/')
-                if (relative != "watch.xml" && relative != "scripts/script.txt" && relative !in keep) {
-                    Files.deleteIfExists(path)
-                }
-            }
-        }
         resources.forEach { (relativePath, bytes) ->
             val clean = WorkspacePathPolicy.sanitizeRelative(relativePath)
             require(isAllowedFaceResource(clean)) {
@@ -434,8 +466,8 @@ class WorkspaceManager private constructor(
     }
 
     @Synchronized
-    fun readFaceMirror(workspaceId: String): FaceMirrorSnapshot? {
-        val face = faceMirrorDirectory(workspaceId) ?: return null
+    fun readFaceMirror(workspaceId: String, watchScope: String? = null): FaceMirrorSnapshot? {
+        val face = faceMirrorDirectory(workspaceId, watchScope) ?: return null
         val xml = face.resolve("watch.xml")
         val script = face.resolve("scripts/script.txt")
         val watchXml = if (Files.isRegularFile(xml, LinkOption.NOFOLLOW_LINKS)) String(Files.readAllBytes(xml), Charsets.UTF_8) else ""
@@ -453,14 +485,22 @@ class WorkspaceManager private constructor(
 
     /** Resolves only explicitly managed workspace directories for Bash/import tools. */
     @Synchronized
-    fun resolveWorkspaceFile(workspaceId: String, relativePath: String): Path? {
+    fun resolveWorkspaceFile(workspaceId: String, relativePath: String, watchScope: String? = null): Path? {
         val workspace = get(workspaceId) ?: return null
-        val clean = WorkspacePathPolicy.sanitizeRelative(relativePath)
-        val rootName = clean.substringBefore('/')
-        if (rootName !in ALLOWED_WORKSPACE_MOUNTS) throw WorkspacePathViolation("Workspace mount is not allowed: $rootName")
-        val target = WorkspacePathPolicy.resolveInside(workspace.paths.root, clean)
-        if (Files.isSymbolicLink(target)) throw WorkspacePathViolation("Symbolic links are not allowed")
-        return target
+        return AgentWorkspacePathResolver(this, workspaceId, watchScope ?: workspace.watchScope)
+            .resolve(relativePath).file
+    }
+
+    @Synchronized
+    fun writeAgentFile(workspaceId: String, relativePath: String, bytes: ByteArray, watchScope: String?): String {
+        val workspace = requireNotNull(get(workspaceId)) { "工作区不存在" }
+        val resolved = AgentWorkspacePathResolver(this, workspaceId, watchScope).resolve(relativePath)
+        val oldSize = if (Files.isRegularFile(resolved.file, LinkOption.NOFOLLOW_LINKS)) Files.size(resolved.file) else 0L
+        require(calculateUsage(workspace.paths.root) - oldSize <= workspace.quota.limitBytes - bytes.size) { "工作区配额不足" }
+        Files.createDirectories(resolved.file.parent)
+        writeAtomically(resolved.file, bytes)
+        refreshQuota(workspaceId)
+        return resolved.canonicalPath
     }
 
     /** Imports an archive into a new UUID after validating every entry as a relative path. */
@@ -591,11 +631,14 @@ class WorkspaceManager private constructor(
 
     private fun calculateUsage(root: Path): Long {
         if (!Files.exists(root)) return 0L
-        return Files.walk(root).use { stream ->
-            stream.filter { Files.isRegularFile(it) && it.fileName.toString() != "workspace.json" }
-                .mapToLong { runCatching { Files.size(it) }.getOrDefault(0L) }
-                .sum()
-        }
+        return runCatching {
+            Files.walk(root).use { stream ->
+                stream.filter { path ->
+                    runCatching { Files.isRegularFile(path, LinkOption.NOFOLLOW_LINKS) }.getOrDefault(false) &&
+                        path.fileName.toString() != "workspace.json"
+                }.mapToLong { runCatching { Files.size(it) }.getOrDefault(0L) }.sum()
+            }
+        }.getOrDefault(0L)
     }
 
     private fun writeAtomically(target: Path, content: String) {

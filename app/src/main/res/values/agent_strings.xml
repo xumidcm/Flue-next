@@ -52,6 +52,7 @@
     <string name="agent_clear_key">清除密钥</string>
     <string name="agent_test_connection">测试连接</string>
     <string name="agent_saved">已保存</string>
+    <string name="agent_deleted">已删除</string>
     <string name="agent_key_cleared">已清除密钥</string>
     <string name="agent_save_failed">保存失败：%1$s</string>
     <string name="agent_connect_success">连接成功，发现 %1$d 个模型</string>

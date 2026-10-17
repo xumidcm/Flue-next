@@ -1440,6 +1440,19 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
         }
     }
 
+    /** Clears animated image playback limitation so the entire watch face runs like desktop watch face. */
+    fun clearEditorAnimatedImageLayerLimit() {
+        if (!editorAnimationPlaybackLimited && editorAnimatedImageLayerIndex == null) return
+        editorAnimationPlaybackLimited = false
+        editorAnimatedImageLayerIndex = null
+        frameStartedAtUptimeMs = SystemClock.uptimeMillis()
+        cancelTicks()
+        if (!disposed) {
+            scheduleTicks()
+            requestFullRepaint()
+        }
+    }
+
     /**
      * 编辑器拖动/缩放/旋转循环背景时固定在手势开始那一帧。松手后从同一播放
      * 位置继续，不跳回首帧；同时停止 30fps invalidate，避免拖动与解码争抢 UI。
@@ -2657,7 +2670,8 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
             val usable = requestedBitmap?.takeIf { !it.isRecycled }
             if (usable != null) {
                 rememberLastDrawnFrame(fallbackKey, usable)
-                while (lastDrawnFrameByLayer.size > MAX_LAST_FRAME_ENTRIES) {
+                val maxFrames = maxOf(MAX_LAST_FRAME_ENTRIES, (source?.definition?.layers?.size ?: 0) + 16)
+                while (lastDrawnFrameByLayer.size > maxFrames) {
                     val iterator = lastDrawnFrameByLayer.entries.iterator()
                     if (!iterator.hasNext()) break
                     val removed = iterator.next().value
@@ -5770,9 +5784,11 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
             if (previous !== bitmap) retireBitmapAfterRender(previous)
         }
         bitmapCacheBytes += bitmap.safeAllocationByteCount()
+        val maxEntries = maxOf(MAX_BITMAP_CACHE_ENTRIES, (source?.definition?.layers?.size ?: 0) + 32)
+        val maxBytes = if ((source?.definition?.layers?.size ?: 0) > 100) 64L * 1024L * 1024L else MAX_BITMAP_CACHE_BYTES
         while (
-            bitmapCache.size > MAX_BITMAP_CACHE_ENTRIES ||
-            (bitmapCache.size > 1 && bitmapCacheBytes > MAX_BITMAP_CACHE_BYTES)
+            bitmapCache.size > maxEntries ||
+            (bitmapCache.size > 1 && bitmapCacheBytes > maxBytes)
         ) {
             val iterator = bitmapCache.entries.iterator()
             if (!iterator.hasNext()) break
@@ -7243,7 +7259,7 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
          * 的 IO 线程池上，主线程只承担 `withContext(Main)` 里的入缓存，所以放宽的是
          * 后台并行度，不是主线程负载；真正的内存护栏仍是各 LRU 的字节预算。
          */
-        private const val MAX_CONCURRENT_ASSET_LOADS = 8
+        private const val MAX_CONCURRENT_ASSET_LOADS = 16
 
         /**
          * 一帧最多预暖几个 opacity 门控图片层（见 [warmOpacityGatedImages]）。
@@ -7299,8 +7315,8 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
          * 真正的护栏是 [MAX_BITMAP_CACHE_BYTES]：条数放宽只让小图都留得住，
          * 大图仍然被字节预算挡着，不会把内存吃穿。
          */
-        private const val MAX_BITMAP_CACHE_ENTRIES = 128
-        private const val MAX_BITMAP_CACHE_BYTES = 24L * 1024L * 1024L
+        private const val MAX_BITMAP_CACHE_ENTRIES = 256
+        private const val MAX_BITMAP_CACHE_BYTES = 48L * 1024L * 1024L
         /** 染色滤镜缓存上限；超过按整表清空（一张表盘的色值远到不了这个量）。 */
         private const val TINT_FILTER_CACHE_LIMIT = 64
         /** 渐变小缓存（环/进度条/进度环）的槽数；一张表盘的渐变层就那么几个。 */
@@ -7355,7 +7371,7 @@ class WatchmakerWatchFaceView @JvmOverloads constructor(
          * 缓存里那张），只有被 LRU 淘汰过的才真正额外占内存，而它们下一次该层绘制
          * 就会被替换、由 [recycleDetachedLastFrame] 释放。
          */
-        private const val MAX_LAST_FRAME_ENTRIES = 24
+        private const val MAX_LAST_FRAME_ENTRIES = 192
         private const val MAX_LAST_MOVIE_ENTRIES = 4
         private const val MAX_TYPEFACE_CACHE_ENTRIES = 16
         private const val MAX_BITMAP_FAILURE_ENTRIES = 64

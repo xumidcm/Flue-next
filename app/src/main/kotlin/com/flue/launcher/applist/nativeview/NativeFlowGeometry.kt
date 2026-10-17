@@ -42,6 +42,11 @@ internal class NativeFlowGeometry private constructor(
     override val maximumScrollOffsetPx: Float,
 ) : NativeAppGridGeometry {
 
+    fun withScrollBounds(bounds: Pair<Float, Float>) = NativeFlowGeometry(
+        viewportHeightPx, iconSizePx, columns, rowStridePx, crescentBulgePx,
+        crescentToRight, placements, bounds.first, bounds.second,
+    )
+
     override val itemCount: Int
         get() = placements.size
 
@@ -118,6 +123,12 @@ internal class NativeFlowGeometry private constructor(
              */
             requestedCrescentBulgeFraction: Float = 0f,
             crescentToRight: Boolean = true,
+            /**
+             * 贴边对齐时首末行保留的空白（像素）。[centerAligned] 为假时生效。
+             */
+            edgePaddingPx: Float = 0f,
+            /** false = 贴边对齐（首行贴顶、末行贴底），true = 既有居中。 */
+            centerAligned: Boolean = true,
         ): NativeFlowGeometry {
             require(itemCount >= 0)
             require(viewportWidthPx > 0 && viewportHeightPx > 0)
@@ -163,6 +174,16 @@ internal class NativeFlowGeometry private constructor(
             }
             val firstY = placements.firstOrNull()?.centerY ?: 0f
             val lastY = placements.lastOrNull()?.centerY ?: 0f
+            // 月牙那条弧锚的是 **视口中心**，与这里的滚动上下界无关：贴边之后弧仍然
+            // 贴着屏幕中线，行从弧上滑过，观感不变。
+            val (minimumScroll, maximumScroll) = nativeAppListScrollBounds(
+                viewportHeightPx = viewportHeightPx,
+                firstY = firstY,
+                lastY = lastY,
+                itemHeightPx = iconSizePx,
+                edgePaddingPx = edgePaddingPx,
+                centerAligned = centerAligned,
+            )
             return NativeFlowGeometry(
                 viewportHeightPx = viewportHeightPx,
                 iconSizePx = iconSizePx,
@@ -171,8 +192,8 @@ internal class NativeFlowGeometry private constructor(
                 crescentBulgePx = bulge,
                 crescentToRight = crescentToRight,
                 placements = placements,
-                minimumScrollOffsetPx = -lastY,
-                maximumScrollOffsetPx = -firstY,
+                minimumScrollOffsetPx = minimumScroll,
+                maximumScrollOffsetPx = maximumScroll,
             )
         }
 

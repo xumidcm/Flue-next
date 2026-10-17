@@ -23,6 +23,10 @@ enum class WatchAgentToolName(
     FETCH_WEB_PAGE("fetch_web_page", WatchAgentToolAccess.READ_ONLY),
     GENERATE_IMAGE("generate_image", WatchAgentToolAccess.WRITE),
     EDIT_IMAGE("edit_image", WatchAgentToolAccess.WRITE),
+    READ_FILE("read_file", WatchAgentToolAccess.READ_ONLY),
+    LIST_ARCHIVE("list_archive", WatchAgentToolAccess.READ_ONLY),
+    EXTRACT_ARCHIVE("extract_archive", WatchAgentToolAccess.WRITE),
+    CROP_IMAGE("crop_image", WatchAgentToolAccess.WRITE),
     ;
 
     val isReadOnly: Boolean get() = access == WatchAgentToolAccess.READ_ONLY
@@ -110,6 +114,39 @@ object WatchAgentToolContracts {
             ),
         ),
     )
+
+    val extended: List<WatchAgentToolContract> = listOf(
+        WatchAgentToolContract(
+            WatchAgentToolName.READ_FILE,
+            "读取当前工作区、表盘或会话附件目录中的文件内容文本。",
+            listOf(WatchAgentToolParameter("path", "string", required = true)),
+        ),
+        WatchAgentToolContract(
+            WatchAgentToolName.LIST_ARCHIVE,
+            "读取 ZIP 压缩包中的文件列表，无需 Bash 即可查看压缩包内容。",
+            listOf(WatchAgentToolParameter("path", "string", required = true)),
+        ),
+        WatchAgentToolContract(
+            WatchAgentToolName.EXTRACT_ARCHIVE,
+            "将 ZIP 压缩包解压到工作区目标目录中，受工作区边界和配额保护。",
+            listOf(
+                WatchAgentToolParameter("path", "string", required = true),
+                WatchAgentToolParameter("target_dir", "string", required = false),
+            ),
+        ),
+        WatchAgentToolContract(
+            WatchAgentToolName.CROP_IMAGE,
+            "将工作区或表盘内的图片按像素区域裁剪并输出为新文件，无需依赖 Bash。",
+            listOf(
+                WatchAgentToolParameter("input_path", "string", required = true),
+                WatchAgentToolParameter("x", "integer", required = true),
+                WatchAgentToolParameter("y", "integer", required = true),
+                WatchAgentToolParameter("width", "integer", required = true),
+                WatchAgentToolParameter("height", "integer", required = true),
+                WatchAgentToolParameter("output_path", "string", required = false),
+            ),
+        ),
+    )
     val mirror: List<WatchAgentToolContract> = listOf(
         WatchAgentToolContract(WatchAgentToolName.SYNC_FACE_MIRROR, "同步当前表盘到绑定工作区 face/ 镜像。"),
         WatchAgentToolContract(WatchAgentToolName.VALIDATE_FACE_MIRROR, "校验 face/ 镜像。"),
@@ -169,7 +206,7 @@ object WatchAgentToolContracts {
         WatchAgentToolName.fromWireName(name)?.let(::find)
 
     fun find(name: WatchAgentToolName): WatchAgentToolContract? =
-        (all + mirror + optional).firstOrNull { it.name == name }
+        (all + extended + mirror + optional).firstOrNull { it.name == name }
 }
 
 data class WatchAgentToolCall(

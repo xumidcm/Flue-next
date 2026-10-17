@@ -13,6 +13,9 @@ internal class NativeHoneycombLayoutManager(
     private var geometryNarrowColumns = Int.MIN_VALUE
     private var geometryIconSize = Int.MIN_VALUE
     private var geometryCellSize = Float.NaN
+    private var geometryEdgeAlignEnabled = false
+    private var geometryEdgeAlignPadding = Float.NaN
+    private var geometryEdgeVisibility: NativeEdgeVisibilityKey? = null
 
     override fun hasSameGeometryConfig(
         config: NativeAppListConfig,
@@ -21,7 +24,10 @@ internal class NativeHoneycombLayoutManager(
         geometryRightInset == config.rightSafeInsetPx &&
             geometryNarrowColumns == config.honeycombNarrowColumns &&
             geometryIconSize == config.iconSizePx &&
-            geometryCellSize == config.honeycombCellSizePx
+            geometryCellSize == config.honeycombCellSizePx &&
+            geometryEdgeAlignEnabled == config.edgeAlignEnabled &&
+            geometryEdgeAlignPadding == config.edgeAlignPaddingPx &&
+            geometryEdgeVisibility == config.edgeVisibilityKey()
 
     override fun rememberGeometryConfig(config: NativeAppListConfig) {
         geometryLeftInset = config.leftSafeInsetPx
@@ -29,6 +35,9 @@ internal class NativeHoneycombLayoutManager(
         geometryNarrowColumns = config.honeycombNarrowColumns
         geometryIconSize = config.iconSizePx
         geometryCellSize = config.honeycombCellSizePx
+        geometryEdgeAlignEnabled = config.edgeAlignEnabled
+        geometryEdgeAlignPadding = config.edgeAlignPaddingPx
+        geometryEdgeVisibility = config.edgeVisibilityKey()
     }
 
     override fun createGeometry(
@@ -36,17 +45,28 @@ internal class NativeHoneycombLayoutManager(
         viewportWidthPx: Int,
         viewportHeightPx: Int,
         config: NativeAppListConfig,
-    ): NativeAppGridGeometry = NativeHoneycombGeometry.create(
-        itemCount = itemCount,
-        viewportWidthPx = viewportWidthPx,
-        viewportHeightPx = viewportHeightPx,
-        leftSafeInsetPx = config.leftSafeInsetPx,
-        rightSafeInsetPx = config.rightSafeInsetPx,
-        narrowColumns = config.honeycombNarrowColumns,
-        iconSizePx = config.iconSizePx.toFloat(),
-        cellSizePx = config.honeycombCellSizePx.takeIf { it > 0f }
-            ?: config.iconSizePx * 1.02f,
-    )
+    ): NativeAppGridGeometry {
+        val grid = NativeHoneycombGeometry.create(
+            itemCount = itemCount,
+            viewportWidthPx = viewportWidthPx,
+            viewportHeightPx = viewportHeightPx,
+            leftSafeInsetPx = config.leftSafeInsetPx,
+            rightSafeInsetPx = config.rightSafeInsetPx,
+            narrowColumns = config.honeycombNarrowColumns,
+            iconSizePx = config.iconSizePx.toFloat(),
+            cellSizePx = config.honeycombCellSizePx.takeIf { it > 0f }
+                ?: config.iconSizePx * 1.02f,
+            edgePaddingPx = config.edgeAlignPaddingPx,
+            centerAligned = !config.edgeAlignEnabled,
+        )
+        val settled = config.copy(entryMotionEnabled = false, entryProgress = 1f)
+        val bounds = nativeVisibleEdgeBounds(grid, viewportWidthPx.toFloat(), config) { position, y ->
+            nativeHoneycombChildVisual(
+                grid.centerX(position), y, viewportWidthPx.toFloat(), viewportHeightPx.toFloat(), settled,
+            )
+        }
+        return grid.withScrollBounds(bounds)
+    }
 
     override fun layoutChild(
         child: View,

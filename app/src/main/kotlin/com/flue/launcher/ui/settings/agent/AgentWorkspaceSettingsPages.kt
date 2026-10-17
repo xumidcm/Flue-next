@@ -189,16 +189,27 @@ internal fun AgentWorkspaceDetailPage(
     }
     val importPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri: Uri? ->
         if (uri != null) scope.launch {
-            val name = uri.lastPathSegment?.substringAfterLast('/')?.takeIf { it.isNotBlank() } ?: "imported-file"
+            val name = resolveDisplayName(context, uri)
+            val targetDir = currentDirectory.ifEmpty { "workspace" }
             val result = withContext(Dispatchers.IO) {
                 val temp = File(context.cacheDir, "agent-import-${UUID.randomUUID()}")
                 try {
                     context.contentResolver.openInputStream(uri)?.use { input -> temp.outputStream().use(input::copyTo) }
                         ?: return@withContext null
-                    workspaceManager.importFile(workspace.id, temp.toPath(), "$currentDirectory/$name")
+                    workspaceManager.importFile(workspace.id, temp.toPath(), "$targetDir/$name")
+                } catch (_: Exception) {
+                    null
                 } finally { temp.delete() }
             }
-            if (result == com.flue.launcher.watchface.agent.workspace.ImportResult.IMPORTED) onWorkspaceChanged(workspaceManager.get(workspace.id) ?: workspace)
+            if (result == com.flue.launcher.watchface.agent.workspace.ImportResult.IMPORTED) {
+                android.widget.Toast.makeText(context, "导入成功: $name", android.widget.Toast.LENGTH_SHORT).show()
+                onWorkspaceChanged(workspaceManager.get(workspace.id) ?: workspace)
+                files = withContext(Dispatchers.IO) {
+                    runCatching { workspaceManager.listDirectory(workspace.id, currentDirectory) }.getOrDefault(emptyList())
+                }
+            } else {
+                android.widget.Toast.makeText(context, "导入失败: ${result?.name ?: "无法读取文件"}", android.widget.Toast.LENGTH_SHORT).show()
+            }
         }
     }
     LaunchedEffect(workspace.id, workspace.quota.usedBytes, currentDirectory) {
@@ -326,11 +337,25 @@ internal fun AgentWorkspaceDetailPage(
                 )
             }
             installProgress?.takeIf { installJob != null }?.let { progress ->
-                LinearProgressIndicator(Modifier.fillMaxWidth())
-                Text(
-                    stringResource(progress.stage.labelResource()),
-                    style = MaterialTheme.typography.bodySmall,
-                )
+                val total = progress.totalBytes
+                if (total != null && total > 0L) {
+                    val frac = (progress.bytesCopied.toFloat() / total.toFloat()).coerceIn(0f, 1f)
+                    LinearProgressIndicator(
+                        progress = { frac },
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    Text(
+                        "${stringResource(progress.stage.labelResource())} - ${formatWorkspaceBytes(progress.bytesCopied)} / ${formatWorkspaceBytes(total)} (${(frac * 100).toInt()}%)",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                } else {
+                    LinearProgressIndicator(Modifier.fillMaxWidth())
+                    val copiedText = if (progress.bytesCopied > 0L) " - ${formatWorkspaceBytes(progress.bytesCopied)}" else ""
+                    Text(
+                        "${stringResource(progress.stage.labelResource())}$copiedText",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
                 if (installJob != null) {
                     FlueOutlinedButton(
                         onClick = {
@@ -362,10 +387,17 @@ internal fun AgentWorkspaceDetailPage(
                 style = MaterialTheme.typography.titleMedium,
             )
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                if (currentDirectory != "workspace") FlueOutlinedButton(onClick = { currentDirectory = currentDirectory.substringBeforeLast('/') }, modifier = Modifier.weight(1f)) { Text("返回上级") }
+                if (currentDirectory.isNotEmpty()) {
+                    FlueOutlinedButton(
+                        onClick = {
+                            currentDirectory = if (currentDirectory.contains('/')) currentDirectory.substringBeforeLast('/') else ""
+                        },
+                        modifier = Modifier.weight(1f)
+                    ) { Text("返回上级") }
+                }
                 FlueButton(onClick = { importPicker.launch(arrayOf("*/*")) }, modifier = Modifier.weight(1f)) { Text("导入文件") }
             }
-            Text("/$currentDirectory", fontFamily = FontFamily.Monospace, style = MaterialTheme.typography.bodySmall)
+            Text(if (currentDirectory.isEmpty()) "/" else "/$currentDirectory", fontFamily = FontFamily.Monospace, style = MaterialTheme.typography.bodySmall)
             if (files.isEmpty()) {
                 Text(
                     stringResource(R.string.agent_workspace_empty),
@@ -374,8 +406,16 @@ internal fun AgentWorkspaceDetailPage(
             } else {
                 files.forEach { entry ->
                     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                        Text((if (entry.isDirectory) "📁 " else "📄 ") + entry.name, modifier = Modifier.weight(1f).then(if (entry.isDirectory) Modifier.clickable { currentDirectory = "$currentDirectory/${entry.name}" } else Modifier), fontFamily = FontFamily.Monospace, style = MaterialTheme.typography.bodySmall)
-                        FlueOutlinedButton(onClick = { fileToDelete = entry.copy(relativePath = "$currentDirectory/${entry.name}") }) { Text("删除") }
+                        val fullPath = if (currentDirectory.isEmpty()) entry.name else "$currentDirectory/${entry.name}"
+                        Text(
+                            (if (entry.isDirectory) "📁 " else "📄 ") + entry.name,
+                            modifier = Modifier
+                                .weight(1f)
+                                .then(if (entry.isDirectory) Modifier.clickable { currentDirectory = fullPath } else Modifier),
+                            fontFamily = FontFamily.Monospace,
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                        FlueOutlinedButton(onClick = { fileToDelete = entry.copy(relativePath = fullPath) }) { Text("删除") }
                     }
                 }
             }
@@ -440,7 +480,15 @@ internal fun AgentWorkspaceDetailPage(
     fileToDelete?.let { entry ->
         FlueAlertDialog(onDismissRequest = { fileToDelete = null }, title = "删除 ${entry.name}？", text = "此操作会从当前工作区移除该项目。", confirmText = stringResource(R.string.agent_delete), dismissText = stringResource(R.string.agent_cancel), dangerous = true, onConfirm = {
             fileToDelete = null
-            scope.launch(Dispatchers.IO) { workspaceManager.deleteWorkspaceEntry(workspace.id, entry.relativePath); onWorkspaceChanged(workspaceManager.get(workspace.id) ?: workspace) }
+            scope.launch {
+                withContext(Dispatchers.IO) {
+                    workspaceManager.deleteWorkspaceEntry(workspace.id, entry.relativePath)
+                }
+                onWorkspaceChanged(workspaceManager.get(workspace.id) ?: workspace)
+                files = withContext(Dispatchers.IO) {
+                    runCatching { workspaceManager.listDirectory(workspace.id, currentDirectory) }.getOrDefault(emptyList())
+                }
+            }
         })
     }
 }
@@ -669,4 +717,17 @@ private fun formatWorkspaceBytes(bytes: Long): String = when {
     bytes >= 1024L * 1024L -> "%.1f MB".format(bytes / (1024.0 * 1024.0))
     bytes >= 1024L -> "%.1f KB".format(bytes / 1024.0)
     else -> "$bytes B"
+}
+
+private fun resolveDisplayName(context: Context, uri: Uri): String {
+    runCatching {
+        context.contentResolver.query(uri, arrayOf(android.provider.OpenableColumns.DISPLAY_NAME), null, null, null)?.use { cursor ->
+            val index = cursor.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
+            if (index >= 0 && cursor.moveToFirst()) {
+                val name = cursor.getString(index)
+                if (!name.isNullOrBlank()) return name
+            }
+        }
+    }
+    return uri.lastPathSegment?.substringAfterLast('/')?.takeIf { it.isNotBlank() } ?: "imported-file"
 }

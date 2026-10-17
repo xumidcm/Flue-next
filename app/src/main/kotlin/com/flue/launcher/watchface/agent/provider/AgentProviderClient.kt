@@ -67,11 +67,12 @@ class UrlConnectionAgentHttpTransport : AgentHttpTransport {
                         }
                     }
                     if (continuation.isActive) continuation.resume(AgentHttpResponse(status, responseBody))
-                    opened.disconnect()
                 } catch (cancelled: InterruptedException) {
                     if (continuation.isActive) continuation.resumeWithException(CancellationException("请求已取消", cancelled))
                 } catch (error: Throwable) {
                     if (continuation.isActive) continuation.resumeWithException(error)
+                } finally {
+                    connection?.disconnect()
                 }
             }.apply {
                 name = "flue-agent-provider"
@@ -182,14 +183,12 @@ class AgentProviderClient(
             body = body,
         )
         val decoder = AgentStreamParser.SseDecoder(profile.protocol)
-        var delivered = 0
         return try {
             val response = transport.execute(request) { chunk ->
                 if (!stream) return@execute
                 chunk.lineSequence().forEach { line ->
                     decoder.acceptLine(line)
-                    val all = decoder.snapshot()
-                    while (delivered < all.size) onEvent(all[delivered++])
+                    decoder.drain().forEach(onEvent)
                 }
             }
             if (response.statusCode !in 200..299) {
@@ -203,7 +202,7 @@ class AgentProviderClient(
                 return parsed.toCompletion()
             }
             val allEvents = decoder.finish()
-            while (delivered < allEvents.size) onEvent(allEvents[delivered++])
+            decoder.drain().forEach(onEvent)
             if (allEvents.isEmpty() && response.body.isNotBlank()) {
                 val parsed = AgentStreamParser.parseResponse(profile.protocol, response.body)
                 parsed.events.forEach(onEvent)

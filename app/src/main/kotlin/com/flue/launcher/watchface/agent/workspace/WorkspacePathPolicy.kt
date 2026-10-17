@@ -38,9 +38,17 @@ object WorkspacePathPolicy {
     fun resolveInside(root: Path, relativePath: String): Path {
         val clean = sanitizeRelative(relativePath)
         val absoluteRoot = root.toAbsolutePath().normalize()
+        if (Files.isSymbolicLink(absoluteRoot)) {
+            throw WorkspacePathViolation("Symbolic workspace roots are not allowed")
+        }
         val candidate = absoluteRoot.resolve(clean).normalize()
         if (!candidate.startsWith(absoluteRoot)) {
             throw WorkspacePathViolation("Resolved path escapes workspace")
+        }
+        var checked = absoluteRoot
+        for (segment in absoluteRoot.relativize(candidate)) {
+            checked = checked.resolve(segment)
+            if (Files.isSymbolicLink(checked)) throw WorkspacePathViolation("Symbolic links are not allowed")
         }
 
         // Existing symlinks are resolved before a write so a managed path cannot

@@ -16,6 +16,7 @@ internal class DiagnosticsRecording private constructor(
     private val writer: BufferedWriter,
 ) {
     private var closed = false
+    val performance = TransitionPerformanceCollector()
 
     @Synchronized
     fun append(nowMs: Long, activity: String, frame: FrameSample, process: ProcessSample) {
@@ -27,6 +28,7 @@ internal class DiagnosticsRecording private constructor(
             decimal(frame.jankPercent), frame.droppedCallbacks.toString(),
             process.pssKb?.toString().orEmpty(), process.javaHeapBytes?.toString().orEmpty(),
             process.nativeHeapBytes?.toString().orEmpty(), process.threads?.toString().orEmpty(),
+            decimal(frame.p95Ms),
         ).joinToString(",")).append('\n')
         writer.flush()
     }
@@ -37,7 +39,7 @@ internal class DiagnosticsRecording private constructor(
             closed = true
             writer.close()
         }
-        return archive(directory, (nowMs - window.startMs).coerceIn(0, MAX_RECORDING_DURATION_MS), reason)
+        return archive(directory, (nowMs - window.startMs).coerceIn(0, MAX_RECORDING_DURATION_MS), reason, performance.toJson())
     }
 
     companion object {
@@ -49,7 +51,7 @@ internal class DiagnosticsRecording private constructor(
             File(directory, "info.json").writeText(info, Charsets.UTF_8)
             // Presence of samples.csv without completed identifies recoverable process-death data.
             val writer = File(directory, "samples.csv").bufferedWriter(Charsets.UTF_8)
-            writer.append("elapsed_ms,activity,frames,fps,average_frame_ms,max_frame_ms,jank_percent,dropped_callbacks,pss_kb,java_heap_bytes,native_heap_bytes,threads\n")
+            writer.append("elapsed_ms,activity,frames,fps,average_frame_ms,max_frame_ms,jank_percent,dropped_callbacks,pss_kb,java_heap_bytes,native_heap_bytes,threads,p95_frame_ms\n")
             writer.flush()
             return DiagnosticsRecording(directory, RecordingWindow(nowMs), writer)
         }
@@ -63,10 +65,10 @@ internal class DiagnosticsRecording private constructor(
             return root.listFiles()?.filter { it.isFile && it.extension == "zip" }?.maxByOrNull(File::lastModified)
         }
 
-        private fun archive(directory: File, elapsedMs: Long?, reason: String): File {
+        private fun archive(directory: File, elapsedMs: Long?, reason: String, performance: String = "null"): File {
             require(reason in setOf("manual", "deadline", "process_interrupted", "io_error"))
             File(directory, "session.json").writeText(
-                "{\"reason\":\"$reason\",\"elapsed_ms\":${elapsedMs ?: "null"},\"max_duration_ms\":$MAX_RECORDING_DURATION_MS,\"partial\":${reason == "process_interrupted" || reason == "io_error"}}",
+                "{\"reason\":\"$reason\",\"elapsed_ms\":${elapsedMs ?: "null"},\"max_duration_ms\":$MAX_RECORDING_DURATION_MS,\"partial\":${reason == "process_interrupted" || reason == "io_error"},\"transition_performance\":$performance}",
                 Charsets.UTF_8,
             )
             val output = File(directory.parentFile, "${directory.name}.zip")

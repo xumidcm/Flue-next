@@ -19,6 +19,7 @@ data class ShellCommandRequest(
     val maxOutputBytes: Long = 64L * 1024L,
     val dryRun: Boolean = false,
     val runId: String? = null,
+    val watchScope: String? = null,
 )
 
 enum class BashApproval {
@@ -38,6 +39,8 @@ data class ProcessGroupSpec(
     val home: Path,
     val workingDirectory: Path,
     val faceMirrorDirectory: Path? = null,
+    val previewsDirectory: Path? = null,
+    val generatedDirectory: Path? = null,
     val command: String,
     val timeoutSeconds: Long,
     val maxOutputBytes: Long,
@@ -96,6 +99,10 @@ fun androidProotCommand(
         add("-b")
         add("$face:/workspace/face")
     }
+    spec.previewsDirectory?.let { add("-b"); add("$it:/workspace/previews") }
+    spec.generatedDirectory?.let { add("-b"); add("$it:/workspace/generated") }
+    add("-b")
+    add("${spec.home}:/workspace/home")
     add("-b")
     add("${spec.home}:/root")
     kernelFsMounts.forEach { kernelPath ->
@@ -346,7 +353,10 @@ class SafeProotShellRunner(
                     rootfs = workspace.paths.linux,
                     home = workspace.paths.home,
                     workingDirectory = workspace.paths.workspace,
-                    faceMirrorDirectory = workspace.paths.face,
+                    faceMirrorDirectory = manager.faceMirrorDirectory(request.workspaceId, request.watchScope ?: workspace.watchScope)
+                        ?: workspace.paths.face,
+                    previewsDirectory = workspace.paths.previews,
+                    generatedDirectory = workspace.paths.generated,
                     command = request.command,
                     timeoutSeconds = request.timeoutSeconds,
                     maxOutputBytes = request.maxOutputBytes,

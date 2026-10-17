@@ -20,6 +20,10 @@ internal class NativeHoneycombGeometry private constructor(
     override val minimumScrollOffsetPx: Float,
     override val maximumScrollOffsetPx: Float,
 ) : NativeAppGridGeometry {
+    fun withScrollBounds(bounds: Pair<Float, Float>) = NativeHoneycombGeometry(
+        viewportHeightPx, iconSizePx, placements, bounds.first, bounds.second,
+    )
+
     private val narrowRowColumns = placements.indexOfFirst { it.row != 0 }
         .takeIf { it > 0 }
         ?: placements.size
@@ -114,6 +118,12 @@ internal class NativeHoneycombGeometry private constructor(
             narrowColumns: Int,
             iconSizePx: Float,
             cellSizePx: Float = iconSizePx * 1.02f,
+            /**
+             * 贴边对齐时首末行保留的空白（像素）。[centerAligned] 为假时生效。
+             */
+            edgePaddingPx: Float = 0f,
+            /** false = 贴边对齐（首行贴顶、末行贴底），true = 既有居中。 */
+            centerAligned: Boolean = true,
         ): NativeHoneycombGeometry {
             require(itemCount >= 0)
             require(viewportWidthPx > 0 && viewportHeightPx > 0)
@@ -149,15 +159,25 @@ internal class NativeHoneycombGeometry private constructor(
             val totalHeight = (row - 1).coerceAtLeast(0) * rowHeight
             val yCenterOffset = totalHeight / 2f
             val placements = mutable.map { it.copy(centerY = it.centerY - yCenterOffset) }
-            val viewportCenterY = viewportHeightPx / 2f
             val firstY = placements.firstOrNull()?.centerY ?: 0f
             val lastY = placements.lastOrNull()?.centerY ?: 0f
+            // placement 的 y 保持「整张网格居中到 0」不变，只改滚动上下界：贴边档
+            // 下首行贴顶、末行贴底，布局管理器那条「初始滚动 = maximumScrollOffsetPx」
+            // 的兜底路径于是自动落到贴顶位置。
+            val (minimumScroll, maximumScroll) = nativeAppListScrollBounds(
+                viewportHeightPx = viewportHeightPx,
+                firstY = firstY,
+                lastY = lastY,
+                itemHeightPx = iconSizePx,
+                edgePaddingPx = edgePaddingPx,
+                centerAligned = centerAligned,
+            )
             return NativeHoneycombGeometry(
                 viewportHeightPx = viewportHeightPx,
                 iconSizePx = iconSizePx,
                 placements = placements,
-                minimumScrollOffsetPx = viewportCenterY - (viewportCenterY + lastY),
-                maximumScrollOffsetPx = viewportCenterY - (viewportCenterY + firstY),
+                minimumScrollOffsetPx = minimumScroll,
+                maximumScrollOffsetPx = maximumScroll,
             )
         }
     }

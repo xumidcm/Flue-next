@@ -54,6 +54,9 @@
     <string name="settings_scroll_indicator">スクロールインジケーター</string>
     <string name="settings_scroll_indicator_on">画面右端にスクロール位置を表示し、丸型では縁に沿って弧を描きます</string>
     <string name="settings_scroll_indicator_off">スクロールインジケーターを表示しません</string>
+    <string name="settings_app_list_edge_align">アプリ一覧の端寄せ</string>
+    <string name="settings_app_list_edge_align_on">先頭行を上端、最終行を下端に寄せ、画面の形に合わせて見える余白を確保します</string>
+    <string name="settings_app_list_edge_align_off">先頭・最終行を画面中央に揃えます</string>
     <string name="settings_md3_top_fisheye">MD3 上部魚眼</string>
     <string name="settings_md3_top_fisheye_sub">グリッドレイアウトの中央より上のアイコンのみに適用</string>
     <string name="settings_fisheye_strength">縮小の度合い</string>
@@ -339,6 +342,7 @@
     <string name="search_d_folders">アイコンをドラッグしてフォルダーを作成</string>
     <string name="search_d_launch_mask">起動オーバーレイを文字盤の色に合わせる</string>
     <string name="search_d_row_bg">リストモードの行の背景色</string>
+    <string name="search_d_app_list_edge_align">先頭と最終行を画面の端に寄せます</string>
     <string name="search_d_performance">アニメーションの切り替えとアイコン品質</string>
     <string name="search_d_stagger">行ごとに時間差で入場</string>
     <string name="search_d_legacy">watchOS 三段式以前の旧アニメーション</string>
@@ -951,6 +955,7 @@
     <string name="watch_editor_panel_layers">レイヤー</string>
     <string name="watch_editor_panel_properties">プロパティ</string>
     <string name="watch_editor_panel_watch">文字盤</string>
+    <string name="watch_editor_panel_agent">AI</string>
     <string name="watch_editor_error_decode_image">画像をデコードできません</string>
     <string name="watch_editor_error_preview_load">プレビューを読み込めません</string>
     <string name="watch_editor_crop_image">画像を切り抜く</string>

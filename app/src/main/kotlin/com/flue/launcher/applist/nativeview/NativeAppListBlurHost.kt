@@ -57,11 +57,28 @@ class NativeAppListBlurHost internal constructor(
     private var frameReady = false
     private var contentDirty = true
     private var radiusDirty = true
+    /**
+     * 混合权重变了但半径没变时也要重算合成位图。
+     *
+     * [compose] 只被 [ManualBlurController.blur] 调用，而 [dispatchDraw] 里那道闸门
+     * 是 `radiusDirty || !prepared.hasResult`。覆层的核固定在最强档、淡入只动权重，
+     * 半径全程不变 —— 只靠 radiusDirty 的话权重永远推不进合成位图，菜单背景会
+     * 一直停在第一帧的权重上（表现为「一打开就是满模糊」或「完全不糊」）。
+     */
+    private var blendDirty = true
     private var transitionFailed = false
     private var released = false
     private var detached = false
     private var radiusSource: (() -> Float)? = null
     private var alphaSource: (() -> Float)? = null
+    /**
+     * 可选：显式的清晰/模糊混合权重（0..1），在绘制期逐帧采样。
+     *
+     * 为 null 时沿用原来的约定 —— 权重由半径换算（半径同时也是权重旋钮），
+     * 适合「转场里半径和淡入同一条曲线」的场景。覆层背景模糊需要另一种组合：
+     * 核要一次烘到**最强**（烤完就复用），淡入只动权重，所以必须能把两者拆开。
+     */
+    private var blendSource: (() -> Float)? = null
     private var sourceEnabled = false
     private var sourceVisible = false
     private var observedTree: ViewTreeObserver? = null
@@ -71,7 +88,13 @@ class NativeAppListBlurHost internal constructor(
         // actual frame, without putting spring state into Compose recomposition.
         Snapshot.withoutReadObservation {
             radiusSource?.let { source ->
-                updateBlurFrame(source(), alphaSource?.invoke() ?: 1f, sourceEnabled, sourceVisible)
+                updateBlurFrame(
+                    source(),
+                    alphaSource?.invoke() ?: 1f,
+                    sourceEnabled,
+                    sourceVisible,
+                    blendSource?.invoke(),
+                )
             }
         }
         if (canRun() && !transitionFailed && (active || controller != null)) prepareBlur()
@@ -114,6 +137,7 @@ class NativeAppListBlurHost internal constructor(
         if (released) return
         radiusSource = radiusDp
         alphaSource = alpha
+        blendSource = null
         sourceEnabled = enabled
         sourceVisible = visible
         Snapshot.withoutReadObservation { updateBlurFrame(radiusDp(), alpha(), enabled, visible) }
@@ -122,27 +146,62 @@ class NativeAppListBlurHost internal constructor(
         if (canRun() && !transitionFailed && (active || controller != null)) prepareBlur()
     }
 
-    fun updateBlurFrame(radiusDp: Float, alpha: Float, enabled: Boolean, visible: Boolean) {
+    /**
+     * 覆层背景模糊用的采样源：核固定在 [kernelRadiusDp]，只有混合权重跟着
+     * [blend]（0..1）走。烘焙一次、整段菜单存活期复用，旧系统上不产生逐帧卷积。
+     */
+    fun setOverlayBlurFrameSource(
+        kernelRadiusDp: Float,
+        blend: () -> Float,
+        enabled: Boolean,
+        visible: Boolean,
+    ) {
+        if (released) return
+        val radius = kernelRadiusDp.takeIf { it.isFinite() }?.coerceAtLeast(0f) ?: 0f
+        radiusSource = { radius }
+        alphaSource = { 1f }
+        blendSource = blend
+        sourceEnabled = enabled
+        sourceVisible = visible
+        Snapshot.withoutReadObservation {
+            updateBlurFrame(radius, 1f, enabled, visible, blend())
+        }
+        if (canRun() && !transitionFailed && (active || controller != null)) prepareBlur()
+    }
+
+    fun updateBlurFrame(
+        radiusDp: Float,
+        alpha: Float,
+        enabled: Boolean,
+        visible: Boolean,
+        blendOverride: Float? = null,
+    ) {
         if (released) return
         val nextRadius = radiusDp.takeIf { it.isFinite() }?.coerceAtLeast(0f) ?: 0f
         requested = target != null && enabled && visible
         val nextActive = canRun() && alpha.isFinite() && alpha > 0f && nextRadius > 0f
-        val changed = this.radiusDp != nextRadius || active != nextActive
-        radiusDirty = radiusDirty || this.radiusDp != nextRadius
-        this.radiusDp = nextRadius
-        active = nextActive
         // Keep the small-radius contract used by direct host callers (0..1 is
         // already a blend fraction), while normal transition values use the
-        // 0..10dp list blur range.
-        val blendFraction = if (nextRadius <= 1f) {
-            nextRadius
-        } else {
-            nextRadius / LEGACY_LIST_MAX_BLUR_RADIUS_DP
-        }
-        blurWeightAlpha = blendFraction
-            .coerceIn(0f, 1f)
-            .times(255f)
-            .roundToInt()
+        // 0..10dp list blur range. An explicit override wins: the overlay path
+        // bakes one strong kernel and animates only this weight.
+        val blendFraction = blendOverride
+            ?.takeIf(Float::isFinite)
+            ?.coerceIn(0f, 1f)
+            ?: if (nextRadius <= 1f) {
+                nextRadius
+            } else {
+                nextRadius / LEGACY_LIST_MAX_BLUR_RADIUS_DP
+            }
+        val nextWeightAlpha = (blendFraction.coerceIn(0f, 1f) * 255f).roundToInt()
+        // 权重也要进 changed：覆层的半径全程固定，只有权重在淡入的每一帧变化，
+        // 漏掉它就不会请求重绘，菜单背景会停在第一帧的权重上。
+        val changed = this.radiusDp != nextRadius || active != nextActive ||
+            blurWeightAlpha != nextWeightAlpha
+        radiusDirty = radiusDirty || this.radiusDp != nextRadius
+        blendDirty = blendDirty || blurWeightAlpha != nextWeightAlpha
+        this.radiusDp = nextRadius
+        active = nextActive
+        blurWeightAlpha = nextWeightAlpha
         if (!nextActive) {
             frameReady = false
             transitionFailed = false
@@ -191,10 +250,12 @@ class NativeAppListBlurHost internal constructor(
                         contentDirty = false
                         prepared.capture()
                         radiusDirty = true
+                        blendDirty = true
                     }
-                    if (radiusDirty || !prepared.hasResult) {
+                    if (radiusDirty || blendDirty || !prepared.hasResult) {
                         prepared.blur(radiusDp)
                         radiusDirty = false
+                        blendDirty = false
                     }
                     frameReady = prepared.hasResult
                 } catch (failure: Throwable) {
@@ -259,6 +320,7 @@ class NativeAppListBlurHost internal constructor(
                 prepared.prepare(width, height)
                 contentDirty = true
                 radiusDirty = true
+                blendDirty = true
             }
         } catch (failure: Throwable) {
             failTransition("prepare", failure)
@@ -277,6 +339,7 @@ class NativeAppListBlurHost internal constructor(
         runCatching { blurView?.let(FlueBlurControllerAccess::clear) }
         contentDirty = true
         radiusDirty = true
+        blendDirty = true
     }
 
     private fun canRun() = requested && !released && !detached &&

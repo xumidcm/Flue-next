@@ -19,8 +19,7 @@ class NativeListDrawerConfigTest {
     }
 
     @Test
-    fun mapsComposeListGeometryAndSettingsWithoutDoubleScaling() {
-        val config = nativeListDrawerConfig(
+    fun mapsComposeListGeometryAndSettingsWithoutDoubleScaling() {        val config = nativeListDrawerConfig(
             request(
                 density = 2f,
                 viewportWidthPx = 400,
@@ -45,6 +44,32 @@ class NativeListDrawerConfigTest {
         assertTrue(config.centerEdgeItems)
         assertTrue(config.rowBorder.enabled)
         assertEquals(NativeAppListTheme.DARK, config.theme)
+    }
+
+    /**
+     * 贴边对齐的留白按屏形换算：方屏 24dp，圆屏 48dp（圆屏同高度处弦宽窄得多，
+     * 进一步调大边距避免首尾行图标贴紧屏幕顶底边缘）。关掉开关时必须是 0，不能留任何白边。
+     */
+    @Test
+    fun scalesEdgeAlignPaddingByScreenShapeAndDisablesItCleanly() {
+        assertEquals(
+            0f,
+            nativeListDrawerConfig(request(edgeAlignEnabled = false)).edgeAlignPaddingPx,
+            0f,
+        )
+        assertFalse(nativeListDrawerConfig(request(edgeAlignEnabled = false)).edgeAlignEnabled)
+
+        val square = nativeListDrawerConfig(
+            request(density = 2f, edgeAlignEnabled = true, isRoundDevice = false),
+        )
+        assertTrue(square.edgeAlignEnabled)
+        assertEquals(48f, square.edgeAlignPaddingPx, 0.001f)
+
+        val round = nativeListDrawerConfig(
+            request(density = 2f, edgeAlignEnabled = true, isRoundDevice = true),
+        )
+        assertTrue(round.edgeAlignEnabled)
+        assertEquals(96f, round.edgeAlignPaddingPx, 0.001f)
     }
 
     @Test
@@ -379,6 +404,8 @@ class NativeListDrawerConfigTest {
         presentation: NativeAppListPresentation = NativeAppListPresentation.LINEAR,
         honeycombNarrowColumns: Int = 4,
         appleWatchIconShape: Boolean = true,
+        edgeAlignEnabled: Boolean = false,
+        isRoundDevice: Boolean = false,
     ) = NativeListDrawerConfigRequest(
         density = density,
         fontScale = fontScale,
@@ -418,5 +445,7 @@ class NativeListDrawerConfigTest {
         labelArgb = 0xffffffffL,
         pressedArgb = 0x22ffffffL,
         fadeEdgeArgb = 0xff000000L,
+        edgeAlignEnabled = edgeAlignEnabled,
+        isRoundDevice = isRoundDevice,
     )
 }

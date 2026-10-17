@@ -105,6 +105,8 @@ class NativeFlowGeometryTest {
             val scroll = flow.minimumScrollOffsetPx +
                 (flow.maximumScrollOffsetPx - flow.minimumScrollOffsetPx) * step / steps
             repeat(rows) { row ->
+                val y = flow.screenCenterY(row * flow.columns, scroll)
+                if (y !in 0f..viewportHeight.toFloat()) return@repeat
                 val span = rowSpan(flow, row, scroll)
                 assertTrue(
                     "row $row at scroll $scroll starts at ${span.start}",
@@ -181,6 +183,8 @@ class NativeFlowGeometryTest {
         assertEquals(viewportWidth - inset - rowWidth, flow.crescentBulgePx, 1e-3f)
         val scroll = flow.maximumScrollOffsetPx
         repeat(flow.placements.maxOf { it.row } + 1) { row ->
+            val y = flow.screenCenterY(row * flow.columns, scroll)
+            if (y !in 0f..viewportHeight.toFloat()) return@repeat
             val span = rowSpan(flow, row, scroll)
             assertTrue("row $row started at ${span.start}", span.start >= inset - 0.5f)
         }

@@ -904,6 +904,30 @@ class NativeAppListRowViewBehaviorTest {
     }
 
     @Test
+    fun edgeAlignReplacesTheHalfScreenLinearPaddingWithATopAndBottomGap() {
+        val view = NativeAppListView(RuntimeEnvironment.getApplication())
+        view.setConfig(
+            drawingConfig().copy(
+                rowHeightPx = 40,
+                centerEdgeItems = true,
+                edgeAlignEnabled = true,
+                edgeAlignPaddingPx = 24f,
+            ),
+        )
+
+        view.measure(
+            View.MeasureSpec.makeMeasureSpec(100, View.MeasureSpec.EXACTLY),
+            View.MeasureSpec.makeMeasureSpec(120, View.MeasureSpec.EXACTLY),
+        )
+        view.layout(0, 0, 100, 120)
+
+        // 居中档会给 (120 - 40) / 2 = 40；贴边档换成开关指定的那条留白。
+        assertEquals(24, view.paddingTop)
+        assertEquals(24, view.paddingBottom)
+        view.release()
+    }
+
+    @Test
     fun switchingFromLinearToSpatialGridClearsLinearViewportPadding() {
         val entries = (0 until 20).map { appEntry("component:grid-padding-$it") }
         val view = NativeAppListView(RuntimeEnvironment.getApplication()).apply {

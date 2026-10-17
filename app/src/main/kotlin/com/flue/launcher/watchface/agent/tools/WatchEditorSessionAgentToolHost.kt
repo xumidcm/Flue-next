@@ -5,6 +5,7 @@ import com.flue.launcher.watchface.editor.WatchEditorSession
 import com.flue.launcher.watchface.agent.workspace.WorkspaceManager
 import java.nio.file.Files
 import java.nio.file.LinkOption
+import java.nio.file.Path
 
 /** Bridges Agent document tools to the real lossless editor session. */
 class WatchEditorSessionAgentToolHost(
@@ -20,6 +21,7 @@ class WatchEditorSessionAgentToolHost(
     @Volatile private var lastSyncedGlobalScript: String? = null
     override val currentRevision: Long
         get() = session.agentRevision()
+    override val boundWatchScope: String? get() = watchScope
 
     override fun inspectFace(request: WatchAgentInspectFaceRequest): WatchAgentInspectFaceResult {
         checkRevision(request.expectedRevision)
@@ -172,22 +174,8 @@ class WatchEditorSessionAgentToolHost(
     override fun validateFaceMirror(): Any {
         val manager = workspaceManager ?: throw WatchAgentToolException("mirror_unavailable", "当前宿主未绑定工作区")
         val id = watchScope?.let { manager.bindingFor(it)?.workspaceId } ?: throw WatchAgentToolException("mirror_unavailable", "当前表盘未绑定工作区")
-        val mirror = manager.readFaceMirror(id) ?: throw WatchAgentToolException("mirror_unavailable", "镜像目录不存在")
-        val diagnostics = mutableListOf<WatchAgentDiagnostic>()
-        val classifications = WatchAgentExpressionClassifier.classifyXml(mirror.watchXml)
-        classifications.filter { it.kind == WatchAgentExpressionKind.INVALID }.forEach { classification ->
-            diagnostics += WatchAgentDiagnostic(WatchAgentDiagnosticSeverity.ERROR, "invalid_expression", classification.reason ?: "表达式无效")
-        }
-        validateGlobalScript(mirror.globalScript)?.let { diagnostics += it }
-        IMAGE_PATH_PATTERN.findAll(mirror.watchXml).forEach { match ->
-            match.groupValues[2].split('`').map(String::trim).filter { it.isNotBlank() }.forEach { raw ->
-                val clean = raw.removePrefix("/")
-                val canonical = clean.let { if (it.startsWith("images/", true)) it else "images/$it" }
-                if (clean !in mirror.resources && canonical !in mirror.resources) {
-                    diagnostics += WatchAgentDiagnostic(WatchAgentDiagnosticSeverity.ERROR, "missing_resource", "镜像缺少资源：$clean")
-                }
-            }
-        }
+        val mirror = manager.readFaceMirror(id, watchScope) ?: throw WatchAgentToolException("mirror_unavailable", "镜像目录不存在")
+        val diagnostics = validateMirrorSnapshot(mirror)
         return mapOf(
             "valid" to diagnostics.none { it.severity == WatchAgentDiagnosticSeverity.ERROR },
             "revision" to currentRevision,
@@ -201,51 +189,127 @@ class WatchEditorSessionAgentToolHost(
         val manager = workspaceManager ?: throw WatchAgentToolException("mirror_unavailable", "当前宿主未绑定工作区")
         val id = watchScope?.let { manager.bindingFor(it)?.workspaceId } ?: throw WatchAgentToolException("mirror_unavailable", "当前表盘未绑定工作区")
         val current = session.agentCandidate()
-        val mirror = manager.readFaceMirror(id) ?: throw WatchAgentToolException("mirror_unavailable", "镜像目录不存在")
+        val mirror = manager.readFaceMirror(id, watchScope) ?: throw WatchAgentToolException("mirror_unavailable", "镜像目录不存在")
         // The mirror is a Bash working copy. If the editor changed since the last
         // editor-to-mirror sync, an older mirror must never overwrite that newer
         // document. Refresh it and report a safe no-op instead.
         if (lastSyncedWatchXml == null || lastSyncedWatchXml != current.watchXml || lastSyncedGlobalScript != current.globalScript) {
-            syncFaceMirror()
-            return mapOf("committed" to false, "skipped" to "stale_mirror", "revision" to currentRevision)
+            throw WatchAgentToolException(
+                "stale_mirror",
+                "编辑器内容已在 Bash 镜像准备后变化；候选镜像保留在 face/，请重新读取并确认后再提交",
+            )
         }
-        val validation = validateFaceMirror() as Map<*, *>
-        if (validation["valid"] != true) throw WatchAgentToolException("mirror_invalid", "镜像校验失败，拒绝写回编辑器")
-        var revision = expectedRevision
-        val existing = session.resourceInventory().map { it.relativePath }.toSet()
-        mirror.resources.forEach { relative ->
-            if (relative in existing) return@forEach
-            val source = manager.resolveWorkspaceFile(id, "face/$relative")
+        val diagnostics = validateMirrorSnapshot(mirror)
+        if (diagnostics.any { it.severity == WatchAgentDiagnosticSeverity.ERROR }) {
+            throw WatchAgentToolException("mirror_invalid", "镜像校验失败，拒绝写回编辑器")
+        }
+        val resources = mirror.resources.associateWith { relative ->
+            val source = manager.resolveWorkspaceFile(id, "face/$relative", watchScope)
                 ?: throw WatchAgentToolException("mirror_unavailable", "镜像资源不存在：$relative")
-            if (!Files.isRegularFile(source, LinkOption.NOFOLLOW_LINKS)) throw WatchAgentToolException("invalid_resource", "镜像资源不是普通文件：$relative")
-            val directory = relative.substringBefore('/')
-            val name = relative.substringAfterLast('/')
-            session.importResource(Files.newInputStream(source), name, directory)
-            revision = currentRevision
+            if (!Files.isRegularFile(source, LinkOption.NOFOLLOW_LINKS)) {
+                throw WatchAgentToolException("invalid_resource", "镜像资源不是普通文件：$relative")
+            }
+            Files.readAllBytes(source)
         }
-        if (mirror.watchXml != current.watchXml) {
-            writeDocument(WatchAgentWriteDocumentRequest(WatchAgentDocumentPath.WATCH_XML, mirror.watchXml, revision))
-            revision = currentRevision
+        val snapshot = session.restoreAgentMirror(
+            watchXml = mirror.watchXml,
+            globalScript = mirror.globalScript,
+            resources = resources,
+            expectedRevision = expectedRevision,
+        )
+        val candidate = session.agentCandidate()
+        syncMirrorFromEditor(candidate)
+        onDocumentMutated(candidate)
+        return mapOf("committed" to true, "revision" to candidate.revision, "resources" to mirror.resources)
+    }
+
+    private fun validateMirrorSnapshot(mirror: WorkspaceManager.FaceMirrorSnapshot): List<WatchAgentDiagnostic> {
+        val diagnostics = mutableListOf<WatchAgentDiagnostic>()
+        val classifications = WatchAgentExpressionClassifier.classifyXml(mirror.watchXml)
+        classifications.filter { it.kind == WatchAgentExpressionKind.INVALID }.forEach { classification ->
+            diagnostics += WatchAgentDiagnostic(
+                WatchAgentDiagnosticSeverity.ERROR,
+                "invalid_expression",
+                classification.reason ?: "表达式无效",
+            )
         }
-        if (mirror.globalScript != session.globalScript()) {
-            writeDocument(WatchAgentWriteDocumentRequest(WatchAgentDocumentPath.GLOBAL_SCRIPT, mirror.globalScript, revision))
-            revision = currentRevision
+        validateGlobalScript(mirror.globalScript)?.let { diagnostics += it }
+        IMAGE_PATH_PATTERN.findAll(mirror.watchXml).forEach { match ->
+            match.groupValues[2].split('`').map(String::trim).filter { it.isNotBlank() }.forEach { raw ->
+                val clean = raw.removePrefix("/")
+                if (clean.contains('{') || clean.contains('}')) {
+                    diagnostics += WatchAgentDiagnostic(
+                        WatchAgentDiagnosticSeverity.WARNING,
+                        "dynamic_resource",
+                        "动态图片路径无法静态校验：$clean；请使用 image_cond 或为每个候选路径提供素材",
+                    )
+                    return@forEach
+                }
+                val canonical = clean.let { if (it.startsWith("images/", true)) it else "images/$it" }
+                if (clean !in mirror.resources && canonical !in mirror.resources) {
+                    diagnostics += WatchAgentDiagnostic(
+                        WatchAgentDiagnosticSeverity.ERROR,
+                        "missing_resource",
+                        "镜像缺少资源：$clean",
+                    )
+                }
+            }
         }
-        return mapOf("committed" to true, "revision" to revision, "resources" to mirror.resources)
+        return diagnostics
     }
 
     override fun importFaceResource(path: String): Any {
         val manager = workspaceManager ?: throw WatchAgentToolException("mirror_unavailable", "当前宿主未绑定工作区")
         val id = watchScope?.let { manager.bindingFor(it)?.workspaceId } ?: throw WatchAgentToolException("mirror_unavailable", "当前表盘未绑定工作区")
-        val clean = path.trim().replace('\\', '/').removePrefix("face/")
-        val source = manager.resolveWorkspaceFile(id, "face/$clean")
-            ?: throw WatchAgentToolException("source_not_found", "镜像资源不存在：$clean")
-        if (!Files.isRegularFile(source, LinkOption.NOFOLLOW_LINKS)) throw WatchAgentToolException("invalid_resource", "镜像资源不是普通文件")
-        val directory = clean.substringBefore('/')
-        val imported = session.importResource(Files.newInputStream(source), clean.substringAfterLast('/'), directory)
+        val normalized = path.trim().replace('\\', '/').removePrefix("/").removePrefix("workspace/")
+        val candidateRelativePaths = linkedSetOf<String>()
+        if (normalized.startsWith("face/")) {
+            candidateRelativePaths += normalized
+            candidateRelativePaths += normalized.removePrefix("face/")
+        } else {
+            candidateRelativePaths += "face/$normalized"
+            candidateRelativePaths += normalized
+            if (!normalized.startsWith("images/")) {
+                candidateRelativePaths += "face/images/$normalized"
+                candidateRelativePaths += "images/$normalized"
+            }
+        }
+        var sourcePath: Path? = null
+        var matchedRelative: String? = null
+        for (candidate in candidateRelativePaths) {
+            val resolved = runCatching { manager.resolveWorkspaceFile(id, candidate) }.getOrNull()
+            if (resolved != null && Files.exists(resolved)) {
+                sourcePath = resolved
+                matchedRelative = candidate
+                break
+            }
+        }
+        val source = sourcePath
+            ?: throw WatchAgentToolException("source_not_found", "资源文件不存在：$path (已搜索候选路径: $candidateRelativePaths)")
+        if (!Files.isRegularFile(source, LinkOption.NOFOLLOW_LINKS)) {
+            throw WatchAgentToolException("invalid_resource", "资源路径不是普通文件：$path (实际物理路径: $source)")
+        }
+        val cleanRelative = (matchedRelative ?: normalized).removePrefix("face/")
+        val fileName = cleanRelative.substringAfterLast('/')
+        val directory = if (cleanRelative.contains('/')) cleanRelative.substringBeforeLast('/') else "images"
+        val imported = session.importResource(Files.newInputStream(source), fileName, directory)
         syncMirrorFromEditor(session.agentCandidate())
         onDocumentMutated(session.agentCandidate())
-        return mapOf("imported" to imported, "revision" to currentRevision)
+        return mapOf(
+            "imported" to imported,
+            "revision" to currentRevision,
+            "name" to fileName,
+            "directory" to directory,
+            "resolved_path" to source.toString(),
+        )
+    }
+
+    override fun readHostResource(relativePath: String): ByteArray? {
+        val clean = relativePath.trim().replace('\\', '/').removePrefix("face/").removePrefix("/")
+        if (clean == "watch.xml") return session.agentCandidate().watchXml.toByteArray(Charsets.UTF_8)
+        if (clean == "scripts/script.txt") return session.agentCandidate().globalScript.toByteArray(Charsets.UTF_8)
+        val file = session.draftDirectory.toPath().resolve(clean)
+        return if (Files.isRegularFile(file, LinkOption.NOFOLLOW_LINKS)) Files.readAllBytes(file) else null
     }
 
     private fun syncMirrorFromEditor(candidate: WatchEditorAgentCandidate): Map<String, ByteArray>? {
@@ -255,7 +319,7 @@ class WatchEditorSessionAgentToolHost(
             val resources = session.resourceInventory().associate { asset ->
                 asset.relativePath to session.draftDirectory.toPath().resolve(asset.relativePath).let(Files::readAllBytes)
             }
-            check(manager.syncFaceMirror(id, candidate.watchXml, candidate.globalScript, resources)) { "镜像同步失败" }
+            check(manager.syncFaceMirror(id, candidate.watchXml, candidate.globalScript, resources, watchScope)) { "镜像同步失败" }
             lastSyncedWatchXml = candidate.watchXml
             lastSyncedGlobalScript = candidate.globalScript
             resources

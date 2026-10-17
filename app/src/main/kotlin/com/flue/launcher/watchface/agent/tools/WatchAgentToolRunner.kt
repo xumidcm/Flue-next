@@ -4,8 +4,19 @@ import com.flue.launcher.watchface.agent.prompt.WatchAgentPrompt
 import com.flue.launcher.watchface.agent.workspace.WorkspacePermissionSettings
 import com.flue.launcher.watchface.agent.workspace.ProotShellRunner
 import com.flue.launcher.watchface.agent.workspace.ShellCommandRequest
+import com.flue.launcher.watchface.agent.workspace.WorkspaceManager
+import com.flue.launcher.watchface.agent.workspace.WorkspacePathPolicy
+import com.flue.launcher.watchface.agent.workspace.AgentWorkspacePathResolver
 import com.flue.launcher.watchface.agent.provider.AgentImageGenerationClient
 import com.flue.launcher.watchface.agent.provider.ImageGenerationOptions
+import com.flue.launcher.watchface.agent.provider.AgentImageInput
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import java.io.File
+import java.nio.file.Files
+import java.nio.file.LinkOption
+import java.util.UUID
+import java.util.zip.ZipInputStream
 
 /** Executes provider tool calls against a host-owned editor session. */
 class WatchAgentToolRunner(
@@ -16,6 +27,8 @@ class WatchAgentToolRunner(
     private val shellRunner: ProotShellRunner? = null,
     private val workspaceId: String = "",
     private val workspaceIdProvider: () -> String = { workspaceId },
+    private val workspaceManager: WorkspaceManager? = null,
+    private val attachmentsDir: File? = null,
     private val imageClient: AgentImageGenerationClient? = null,
     private val webClient: WatchAgentWebResearchClient? = null,
     private val imageDefaults: ImageGenerationOptions = ImageGenerationOptions(),
@@ -28,7 +41,7 @@ class WatchAgentToolRunner(
     val toolContracts: List<WatchAgentToolContract>
         get() {
             val permissions = currentPermissions()
-            return (WatchAgentToolContracts.all + WatchAgentToolContracts.mirror + WatchAgentToolContracts.optional).filter { it.name != WatchAgentToolName.COMMIT_FACE_MIRROR && permissions.allows(it.access) &&
+            return (WatchAgentToolContracts.all + WatchAgentToolContracts.extended + WatchAgentToolContracts.mirror + WatchAgentToolContracts.optional).filter { it.name != WatchAgentToolName.COMMIT_FACE_MIRROR && permissions.allows(it.access) &&
                 (workspaceImages != null || it.name !in setOf(WatchAgentToolName.LIST_WORKSPACE_FILES, WatchAgentToolName.READ_IMAGE)) &&
                 (shellRunner?.capability(workspaceIdProvider())?.bashAvailable == true || it.name != WatchAgentToolName.RUN_BASH) &&
                 (imageClient != null || it.name !in setOf(WatchAgentToolName.GENERATE_IMAGE, WatchAgentToolName.EDIT_IMAGE)) &&
@@ -44,9 +57,9 @@ class WatchAgentToolRunner(
     suspend fun execute(
         calls: List<WatchAgentToolCall>,
         manageUndoGroup: Boolean = true,
-    ): List<WatchAgentToolResult> {
+    ): List<WatchAgentToolResult> = withContext(Dispatchers.IO) {
         val undoGroup = if (manageUndoGroup) beginRequestUndoGroup() else null
-        return try {
+        try {
             val results = scheduler.execute(calls)
             // Keep mutations that completed before a later stale/invalid call;
             // a failed operation has no right to erase visible live edits.
@@ -81,23 +94,28 @@ class WatchAgentToolRunner(
         }
         when (name) {
             WatchAgentToolName.LIST_WORKSPACE_FILES -> success(call, host.currentRevision,
-                requireNotNull(workspaceImages) { "未绑定工作区图片工具" }.listFiles())
+                requireNotNull(workspaceImages) { "未绑定工作区图片工具" }.listWorkspaceFiles())
             WatchAgentToolName.READ_IMAGE -> success(call, host.currentRevision,
                 requireNotNull(workspaceImages) { "未绑定工作区图片工具" }.readImage(call.requiredString("path")))
             WatchAgentToolName.RUN_BASH -> {
                 val runner = requireNotNull(shellRunner) { "工作区 Bash 尚未初始化" }
                 val command = call.requiredString("command")
-                // Sync editor -> face/ before the command. Without this
-                // preflight, the first Bash call after an editor-side change
-                // had no baseline and the post-run commit could discard the
-                // command's own mirror edits as "stale".
                 host.prepareBashMirror()
-                val result = runner.run(ShellCommandRequest(
-                    workspaceId = workspaceIdProvider(),
-                    command = command,
-                    timeoutSeconds = (call.arguments["timeout_seconds"] as? Number)?.toLong() ?: 30L,
-                    maxOutputBytes = 256 * 1024,
-                ))
+                val bashRevision = host.currentRevision
+                val runId = UUID.randomUUID().toString()
+                val result = try {
+                    runner.run(ShellCommandRequest(
+                        workspaceId = workspaceIdProvider(),
+                        command = command,
+                        timeoutSeconds = (call.arguments["timeout_seconds"] as? Number)?.toLong() ?: 30L,
+                        maxOutputBytes = 256 * 1024,
+                        runId = runId,
+                        watchScope = host.boundWatchScope,
+                    ))
+                } catch (cancelled: Throwable) {
+                    runner.cancel(runId)
+                    throw cancelled
+                }
                 when (result) {
                     is com.flue.launcher.watchface.agent.workspace.ShellRunResult.RootfsNotInstalled ->
                         failure(call, "rootfs_not_installed", "工作区 ${result.workspaceId} 的 Rootfs 未完成安装或状态尚未刷新")
@@ -106,21 +124,11 @@ class WatchAgentToolRunner(
                     is com.flue.launcher.watchface.agent.workspace.ShellRunResult.RuntimeUnavailable ->
                         failure(call, "runtime_unavailable", "工作区 ${result.workspaceId} 的 Bash 运行时不可用，请检查 Rootfs 自检和 Proot native 文件")
                     is com.flue.launcher.watchface.agent.workspace.ShellRunResult.Completed -> {
-                        // Bash is mounted against the current face mirror.
-                        // Publish valid mirror edits immediately so the editor
-                        // and preview reflect the command without a second
-                        // model-authored commit_face_mirror call. Resolve the
-                        // revision *after* this synchronization: a mirror
-                        // write can advance the live editor revision.
                         var faceMirror: Any? = null
                         var faceMirrorSyncError: String? = null
-                        runCatching { host.commitFaceMirror(host.currentRevision) }
+                        runCatching { host.commitFaceMirror(bashRevision) }
                             .onSuccess { faceMirror = it }
                             .onFailure { error ->
-                                // A command that did not touch face/ (or a
-                                // workspace without a mirror) remains a valid
-                                // Bash result; expose the sync issue as data so
-                                // the Agent can act on it when relevant.
                                 faceMirrorSyncError = error.message ?: error.javaClass.simpleName
                             }
                         success(call, host.currentRevision, buildMap {
@@ -199,7 +207,9 @@ class WatchAgentToolRunner(
                 val client = requireNotNull(imageClient) { "图片修改尚未配置" }
                 val images = requireNotNull(workspaceImages) { "未绑定工作区图片工具" }
                 val input = images.readImage(call.requiredString("input_path"))
-                val mask = call.arguments["mask_path"]?.toString()?.takeIf { it.isNotBlank() }?.let(images::readImage)
+                val mask = call.arguments["mask_path"]?.toString()?.takeIf { it.isNotBlank() }?.let { path ->
+                    images.readImage(path)
+                }
                 val options = call.imageOptions(imageDefaults)
                 val output = client.edit(
                     prompt = call.requiredString("prompt"),
@@ -232,6 +242,108 @@ class WatchAgentToolRunner(
                 val result = host.writeDocument(request)
                 success(call, result.revision, result)
             }
+            WatchAgentToolName.READ_FILE -> {
+                val path = call.requiredString("path")
+                val resolved = resolvePathRead(path)
+                    ?: throw IllegalArgumentException("文件不存在或无法读取：$path")
+                val bytes = resolved.bytes
+                val isBinary = bytes.any { it == 0.toByte() }
+                val content = if (isBinary) null else String(bytes, Charsets.UTF_8)
+                success(call, host.currentRevision, buildMap {
+                    put("path", resolved.path)
+                    put("source", resolved.source)
+                    put("byte_count", bytes.size)
+                    put("is_binary", isBinary)
+                    if (content != null) put("content", content)
+                })
+            }
+            WatchAgentToolName.LIST_ARCHIVE -> {
+                val path = call.requiredString("path")
+                val bytes = resolvePathBytes(path)
+                    ?: throw IllegalArgumentException("压缩包不存在或无法读取：$path")
+                val entries = run {
+                    val list = mutableListOf<Map<String, Any>>()
+                    ZipInputStream(bytes.inputStream()).use { zip ->
+                        while (true) {
+                            val entry = zip.nextEntry ?: break
+                            list += mapOf(
+                                "name" to entry.name,
+                                "size" to entry.size,
+                                "is_directory" to entry.isDirectory,
+                            )
+                            zip.closeEntry()
+                            if (list.size >= 500) break
+                        }
+                    }
+                    list
+                }
+                success(call, host.currentRevision, mapOf("path" to path, "entries" to entries, "total" to entries.size))
+            }
+            WatchAgentToolName.EXTRACT_ARCHIVE -> {
+                val path = call.requiredString("path")
+                val targetDir = AgentWorkspacePathResolver.canonicalPath(call.arguments["target_dir"]?.toString()?.ifBlank { "workspace" } ?: "workspace")
+                val manager = requireNotNull(workspaceManager) { "解压需要已绑定的工作区" }
+                val wsId = workspaceIdProvider().takeIf { it.isNotBlank() } ?: throw WatchAgentToolException("workspace_required", "请先绑定工作区")
+                val bytes = resolvePathBytes(path)
+                    ?: throw IllegalArgumentException("压缩包不存在或无法读取：$path")
+                val extractedCount = run {
+                    val ws = manager.get(wsId) ?: throw WatchAgentToolException("workspace_not_found", "工作区不存在")
+                    val targetRoot = AgentWorkspacePathResolver(manager, ws.id, host.boundWatchScope).resolve(targetDir).file
+                    Files.createDirectories(targetRoot)
+                    var count = 0
+                    ZipInputStream(bytes.inputStream()).use { zip ->
+                        while (true) {
+                            val entry = zip.nextEntry ?: break
+                            val out = WorkspacePathPolicy.resolveInside(targetRoot, entry.name)
+                            if (entry.isDirectory) {
+                                Files.createDirectories(out)
+                            } else {
+                                Files.createDirectories(out.parent)
+                                val data = zip.readBytesLimited(20 * 1024 * 1024)
+                                manager.writeAgentFile(wsId, "$targetDir/${entry.name}", data, host.boundWatchScope)
+                                count++
+                                require(count <= 2000) { "压缩包文件数量超过 2000" }
+                            }
+                            zip.closeEntry()
+                        }
+                    }
+                    manager.refreshQuota(wsId)
+                    count
+                }
+                success(call, host.currentRevision, mapOf("path" to path, "target_dir" to targetDir, "extracted_files" to extractedCount))
+            }
+            WatchAgentToolName.CROP_IMAGE -> {
+                val inputPath = call.requiredString("input_path")
+                val x = (call.arguments["x"] as? Number)?.toInt() ?: throw IllegalArgumentException("缺少 x")
+                val y = (call.arguments["y"] as? Number)?.toInt() ?: throw IllegalArgumentException("缺少 y")
+                val width = (call.arguments["width"] as? Number)?.toInt() ?: throw IllegalArgumentException("缺少 width")
+                val height = (call.arguments["height"] as? Number)?.toInt() ?: throw IllegalArgumentException("缺少 height")
+                require(width > 0 && height > 0) { "width 和 height 必须大于 0" }
+                val bytes = resolvePathBytes(inputPath)
+                    ?: throw IllegalArgumentException("图片不存在或无法读取：$inputPath")
+                val bmp = android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+                    ?: throw IllegalArgumentException("无法解码图片：$inputPath")
+                require(x >= 0 && y >= 0 && x + width <= bmp.width && y + height <= bmp.height) {
+                    "裁剪区域超出图片尺寸 (图宽: ${bmp.width}, 图高: ${bmp.height})"
+                }
+                val cropped = android.graphics.Bitmap.createBitmap(bmp, x, y, width, height)
+                val bos = java.io.ByteArrayOutputStream()
+                cropped.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, bos)
+                val croppedBytes = bos.toByteArray()
+                val outputPath = call.arguments["output_path"]?.toString()?.takeIf { it.isNotBlank() }
+                val stored = if (outputPath != null && workspaceManager != null) {
+                    val wsId = workspaceIdProvider().takeIf { it.isNotBlank() } ?: throw WatchAgentToolException("workspace_required", "请先绑定工作区")
+                    val ws = workspaceManager.get(wsId) ?: throw WatchAgentToolException("workspace_not_found", "工作区不存在")
+                    workspaceManager.writeAgentFile(wsId, outputPath, croppedBytes, host.boundWatchScope)
+                    AgentWorkspacePathResolver.canonicalPath(outputPath)
+                } else if (workspaceImages != null) {
+                    val saved = workspaceImages.saveGeneratedImage(croppedBytes, "png", "crop", "${width}x${height}")
+                    saved.path
+                } else {
+                    throw WatchAgentToolException("workspace_required", "保存裁剪图片需要工作区")
+                }
+                success(call, host.currentRevision, mapOf("path" to stored, "width" to width, "height" to height, "byte_count" to croppedBytes.size))
+            }
             null -> failure(call, "unknown_tool", "未知工具：${call.name}")
         }
     } catch (error: WatchAgentToolException) {
@@ -239,6 +351,7 @@ class WatchAgentToolRunner(
     } catch (error: IllegalArgumentException) {
         failure(call, "invalid_arguments", error.message ?: "工具参数无效")
     } catch (error: Throwable) {
+        if (error is kotlinx.coroutines.CancellationException) throw error
         failure(call, "tool_failed", error.displayableMessage())
     }
 
@@ -260,6 +373,30 @@ class WatchAgentToolRunner(
             revision = host.currentRevision,
             error = WatchAgentToolError(code, message),
         )
+
+    private data class PathRead(val path: String, val source: String, val bytes: ByteArray)
+
+    private fun resolvePathRead(rawPath: String): PathRead? {
+        val canonical = AgentWorkspacePathResolver.canonicalPath(rawPath)
+        val manager = workspaceManager
+        val id = workspaceIdProvider()
+        if (manager != null && id.isNotBlank()) {
+            val resolved = AgentWorkspacePathResolver(manager, id, host.boundWatchScope).resolve(canonical)
+            if (Files.isRegularFile(resolved.file, LinkOption.NOFOLLOW_LINKS)) {
+                val bytes = Files.newInputStream(resolved.file).use { it.readBytesLimited(20 * 1024 * 1024) }
+                return PathRead(resolved.canonicalPath, resolved.source, bytes)
+            }
+        }
+        if (canonical.startsWith("face/")) {
+            host.readHostResource(canonical.removePrefix("face/"))?.let {
+                return PathRead(canonical, "editor_draft", it)
+            }
+        }
+        return null
+    }
+
+    private fun resolvePathBytes(rawPath: String): ByteArray? = resolvePathRead(rawPath)?.bytes
+
 }
 
 private val DENY_ALL_PERMISSIONS = WorkspacePermissionSettings(
@@ -366,4 +503,16 @@ private fun WatchAgentToolCall.imageOptions(defaults: ImageGenerationOptions): I
         inputFidelity = enum("input_fidelity", setOf("low", "high"), defaults.inputFidelity),
         moderation = defaults.moderation,
     )
+}
+
+private fun java.io.InputStream.readBytesLimited(limit: Int): ByteArray {
+    val output = java.io.ByteArrayOutputStream()
+    val buffer = ByteArray(8192)
+    while (true) {
+        val count = read(buffer)
+        if (count < 0) break
+        require(output.size().toLong() + count <= limit) { "文件超过 ${limit / 1024 / 1024} MiB 读取限制" }
+        output.write(buffer, 0, count)
+    }
+    return output.toByteArray()
 }

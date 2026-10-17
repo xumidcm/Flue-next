@@ -142,8 +142,9 @@ class WatchFaceLuaRuntime private constructor(
             "face snippet is too large"
         }
         resolveTag = resolver
-        compile(spliceTags(source), "=watch_tap").call()
-        dynamicFaceNames += declaredFaceNames(source)
+        val sanitized = sanitizeWatchmakerScript(source)
+        compile(spliceTags(sanitized), "=watch_tap").call()
+        dynamicFaceNames += declaredFaceNames(sanitized)
         // 脚本可以改任何全局，缓存里的结果一律不能再信。
         invalidateEvaluatedAttributes()
         Unit
@@ -282,6 +283,17 @@ class WatchFaceLuaRuntime private constructor(
         expression: String,
         resolver: (String) -> WatchTagResolution,
     ): Double? = if (!referencesFaceState(expression)) null else {
+        val trimmed = expression.trim()
+        val bareVar = if (trimmed.startsWith("{") && trimmed.endsWith("}")) {
+            trimmed.substring(1, trimmed.length - 1).trim()
+        } else trimmed
+        if (bareVar.startsWith("var_") && bareVar.all { it.isLetterOrDigit() || it == '_' }) {
+            val fastVal = globals.rawget(bareVar)
+            if (!fastVal.isnil()) {
+                val num = if (fastVal.isnumber()) fastVal.todouble() else fastVal.tojstring().toDoubleOrNull()
+                if (num != null && num.isFinite()) return num
+            }
+        }
         evaluateValue(expression, resolver)?.let { value ->
             when {
                 value.isnumber() -> value.todouble()
@@ -295,6 +307,16 @@ class WatchFaceLuaRuntime private constructor(
         expression: String,
         resolver: (String) -> WatchTagResolution,
     ): String? = if (!referencesFaceState(expression)) null else {
+        val trimmed = expression.trim()
+        val bareVar = if (trimmed.startsWith("{") && trimmed.endsWith("}")) {
+            trimmed.substring(1, trimmed.length - 1).trim()
+        } else trimmed
+        if (bareVar.startsWith("var_") && bareVar.all { it.isLetterOrDigit() || it == '_' }) {
+            val fastVal = globals.rawget(bareVar)
+            if (!fastVal.isnil()) {
+                return renderLuaValue(fastVal)
+            }
+        }
         // Once a layer references a face-owned name, a Lua nil is a valid
         // rendered value (blank), not a signal to fall back to the raw WM
         // template. Compile/runtime failures also stay blank so `var_s_t4 +`
@@ -965,12 +987,39 @@ class WatchFaceLuaRuntime private constructor(
                 ),
             )
             if (script.isNotBlank()) {
+                val sanitizedScript = sanitizeWatchmakerScript(script)
                 runtime.runLimited {
-                    runtime.compile(spliceTags(script), "=watch_script").call()
+                    runtime.compile(spliceTags(sanitizedScript), "=watch_script").call()
                     Unit
                 }.getOrThrow()
             }
             return runtime
+        }
+
+        /**
+         * 兼容转换大型表盘脚本：LuaJ 单函数局部变量上限为 200（LUAI_MAXVARS = 200）。
+         * 当表盘脚本单函数内声明超过 200 个局部变量时（如 TetoLive2D 的 step 函数内有 266 个 local），
+         * LuaJ 编译期直接抛出 NullPointerException / LuaError。
+         * 在表盘沙箱内将普通的局部变量声明安全规范化为变量赋值，保证脚本顺利编译执行。
+         */
+        internal fun sanitizeWatchmakerScript(script: String): String {
+            if (!script.contains("local ")) return script
+            return script.lineSequence().map { line ->
+                val trimmed = line.trimStart()
+                if (trimmed.startsWith("local ") && !trimmed.startsWith("local function ")) {
+                    val leading = line.substring(0, line.indexOf("local "))
+                    val rest = line.substring(line.indexOf("local ") + 6).trim()
+                    if (rest.contains("=")) {
+                        leading + rest
+                    } else {
+                        val count = rest.count { it == ',' } + 1
+                        val nils = (1..count).joinToString(", ") { "nil" }
+                        leading + rest + " = " + nils
+                    }
+                } else {
+                    line
+                }
+            }.joinToString("\n")
         }
 
         /**

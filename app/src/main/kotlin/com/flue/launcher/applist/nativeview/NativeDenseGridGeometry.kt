@@ -23,6 +23,11 @@ internal class NativeDenseGridGeometry private constructor(
     override val minimumScrollOffsetPx: Float,
     override val maximumScrollOffsetPx: Float,
 ) : NativeAppGridGeometry {
+    fun withScrollBounds(bounds: Pair<Float, Float>) = NativeDenseGridGeometry(
+        viewportHeightPx, itemWidthPx, itemHeightPx, itemSpacingPx,
+        verticalEdgePaddingPx, placements, bounds.first, bounds.second,
+    )
+
     private val columnCount = placements.firstOrNull()?.let { first ->
         placements.indexOfFirst { it.row != first.row }
             .takeIf { it > 0 }
@@ -86,6 +91,13 @@ internal class NativeDenseGridGeometry private constructor(
             minimumItemHeightPx: Float,
             minimumItemWidthPx: Float = minimumItemHeightPx,
             minimumVerticalPaddingPx: Float = 8f,
+            /**
+             * 贴边对齐时首末行保留的空白（像素）。非有限值或 <= 0 表示沿用
+             * 「整张网格垂直居中」的既有行为。
+             */
+            edgePaddingPx: Float = 0f,
+            /** false = 贴边对齐（首行贴顶、末行贴底），true = 既有居中。 */
+            centerAligned: Boolean = true,
         ): NativeDenseGridGeometry {
             require(itemCount >= 0)
             require(viewportWidthPx > 0 && viewportHeightPx > 0)
@@ -124,9 +136,14 @@ internal class NativeDenseGridGeometry private constructor(
             val rowCount = if (itemCount == 0) 0 else {
                 (itemCount + effectiveColumns - 1) / effectiveColumns
             }
-            val verticalPadding = (
-                (viewportHeightPx - itemHeight) / 2f
-                ).coerceAtLeast(minimumVerticalPaddingPx)
+            // 密集网格的垂直定位走这条 padding：`max` 恒为 0，首行落点由它决定。
+            // 居中档就是「把整张网格推到屏心」，贴边档直接把首行抬到离顶 edgePaddingPx
+            // 的位置 —— 末行贴底由下面的 minimumScroll 自动跟上，不必另算。
+            val verticalPadding = if (centerAligned) {
+                ((viewportHeightPx - itemHeight) / 2f).coerceAtLeast(minimumVerticalPaddingPx)
+            } else {
+                edgePaddingPx.coerceAtLeast(0f)
+            }
             val firstCenterY = verticalPadding + itemHeight / 2f
             val firstRelativeCenterY = firstCenterY - viewportHeightPx / 2f
             val placements = ArrayList<NativeDenseGridPlacement>(itemCount)

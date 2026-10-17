@@ -181,6 +181,11 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         val KEY_APP_LIST_GRID_ICON_PLATE = booleanPreferencesKey("app_list_grid_icon_plate_enabled")
         val KEY_APP_LIST_FOLDERS_ENABLED = booleanPreferencesKey("app_list_folders_enabled")
         val KEY_APP_LIST_SCROLL_INDICATOR = booleanPreferencesKey("app_list_scroll_indicator_enabled")
+        /**
+         * 贴边对齐：首行贴顶、末行贴底，不再把首末行都对齐到视口中心。
+         * 默认关闭，已有用户按 DataStore 里存的值读取。
+         */
+        val KEY_APP_LIST_EDGE_ALIGN = booleanPreferencesKey("app_list_edge_align_enabled")
         private val KEY_REMOVED_FAST_FLOW_ANIMATION = booleanPreferencesKey("fast_flow_animation_enabled")
         val KEY_MUSIC_TEXT_SWITCH_ANIMATION = stringPreferencesKey("music_text_switch_animation")
         private val KEY_REMOVED_TWO_TONE_ICONS = booleanPreferencesKey("two_tone_icons_enabled")
@@ -536,6 +541,9 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     private val _appListScrollIndicatorEnabled = MutableStateFlow(true)
     val appListScrollIndicatorEnabled: StateFlow<Boolean> =
         _appListScrollIndicatorEnabled.asStateFlow()
+    /** 贴边对齐：新安装默认关闭，避免悄悄改变既有观感。 */
+    private val _appListEdgeAlignEnabled = MutableStateFlow(false)
+    val appListEdgeAlignEnabled: StateFlow<Boolean> = _appListEdgeAlignEnabled.asStateFlow()
     private val _musicTextSwitchAnimation = MutableStateFlow(MusicTextSwitchAnimations.DEFAULT_ID)
     val musicTextSwitchAnimation: StateFlow<String> = _musicTextSwitchAnimation.asStateFlow()
     private val _iconShadowEnabled = MutableStateFlow(true)
@@ -1122,6 +1130,11 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                     _appListScrollIndicatorEnabled.value = loadedAppListScrollIndicator
                 }
 
+                val loadedAppListEdgeAlign = prefs[KEY_APP_LIST_EDGE_ALIGN] ?: false
+                if (_appListEdgeAlignEnabled.value != loadedAppListEdgeAlign) {
+                    _appListEdgeAlignEnabled.value = loadedAppListEdgeAlign
+                }
+
                 // One-way migration: old builds may have persisted this key,
                 // but fast-flow no longer has a runtime state or UI surface.
                 if (prefs[KEY_REMOVED_FAST_FLOW_ANIMATION] != null) {
@@ -1654,12 +1667,6 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
             externalLaunchTracker.onDispatchResult(sessionId, launched)
             publishExternalLaunchState()
             applyExternalLaunchState(showFailureToast = !launched)
-            if (launched) {
-                delay(EXTERNAL_LAUNCH_BACKGROUND_TIMEOUT_MS)
-                externalLaunchTracker.onBackgroundConfirmationTimedOut(sessionId)
-                publishExternalLaunchState()
-                applyExternalLaunchState()
-            }
         }
     }
 
@@ -1699,12 +1706,6 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
             externalLaunchTracker.onDispatchResult(sessionId, opened)
             publishExternalLaunchState()
             applyExternalLaunchState(showFailureToast = !opened)
-            if (opened) {
-                delay(EXTERNAL_LAUNCH_BACKGROUND_TIMEOUT_MS)
-                externalLaunchTracker.onBackgroundConfirmationTimedOut(sessionId)
-                publishExternalLaunchState()
-                applyExternalLaunchState()
-            }
         }
         return true
     }
@@ -2391,6 +2392,11 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
     fun setAppListScrollIndicatorEnabled(enabled: Boolean) {
         _appListScrollIndicatorEnabled.value = enabled
         persist { store.edit { it[KEY_APP_LIST_SCROLL_INDICATOR] = enabled } }
+    }
+
+    fun setAppListEdgeAlignEnabled(enabled: Boolean) {
+        _appListEdgeAlignEnabled.value = enabled
+        persist { store.edit { it[KEY_APP_LIST_EDGE_ALIGN] = enabled } }
     }
 
     fun setMusicTextSwitchAnimation(id: String) {
@@ -3940,6 +3946,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
         _appListGridIconPlateEnabled.value = false
         _appListFoldersEnabled.value = false
         _appListScrollIndicatorEnabled.value = true
+        _appListEdgeAlignEnabled.value = false
         _musicTextSwitchAnimation.value = MusicTextSwitchAnimations.DEFAULT_ID
         _iconShadowEnabled.value = true
         _appListReturnShrinkEnabled.value = true
@@ -4075,6 +4082,7 @@ class LauncherViewModel(application: Application) : AndroidViewModel(application
                 it[KEY_APP_LIST_GRID_ICON_PLATE] = true
                 it[KEY_APP_LIST_FOLDERS_ENABLED] = false
                 it[KEY_APP_LIST_SCROLL_INDICATOR] = true
+                it[KEY_APP_LIST_EDGE_ALIGN] = false
                 it.remove(KEY_REMOVED_FAST_FLOW_ANIMATION)
                 it[KEY_MUSIC_TEXT_SWITCH_ANIMATION] = MusicTextSwitchAnimations.DEFAULT_ID
                 it.remove(KEY_REMOVED_TWO_TONE_ICONS)

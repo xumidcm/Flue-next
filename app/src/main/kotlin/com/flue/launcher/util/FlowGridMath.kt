@@ -86,7 +86,8 @@ fun generateFlowRows(count: Int, cols: Int, cellSize: Float): List<Offset> {
  * 月牙偏移：整行一起往一侧平移多少像素。
  *
  * 形状是抛物线 `bulge * (1 - t²)`，`t` 是该行离**视口中心**的归一化距离。于是屏幕
- * 正中那行鼓出最多、上下边缘那两行归零，连成一道月牙。
+ * 正中那行鼓出最多、上下边缘那两行归零，连成一道月牙；屏外继续延伸，
+ * 保证图标尚未完全移出视口时仍沿曲线移动。
  *
  * **锚在视口中心而不是内容中心**是关键：锚内容的话弧会跟着内容一起滚，滚两屏之后
  * 弧就散了；锚视口则弧永远贴着屏幕中线，行从弧上滑过。这也正是它该并进鱼眼设置的
@@ -118,6 +119,18 @@ fun flowCrescentOffsetPx(
     }
     val distance = kotlin.math.abs(
         (rowCenterY - viewportCenterY) / (viewportHeight / 2f),
-    ).coerceIn(0f, 1f)
-    return direction.signum * bulgePx * (1f - flowShapeCurveProgress(distance, curve))
+    )
+    // A row is still partly visible after its centre crosses the viewport edge.
+    // Continue the same curve there instead of freezing X and exiting vertically.
+    // Bound extrapolation only well outside the visible icon footprint.
+    val boundedDistance = distance.coerceAtMost(2f)
+    val progress = if (curve.sanitized() == FlowShapeCurve.Crescent) {
+        boundedDistance * boundedDistance
+    } else if (boundedDistance <= 1f) {
+        flowShapeCurveProgress(boundedDistance, curve)
+    } else {
+        val edgeSlope = (1f - flowShapeCurveProgress(0.99f, curve)) / 0.01f
+        1f + (boundedDistance - 1f) * edgeSlope
+    }
+    return direction.signum * bulgePx * (1f - progress)
 }

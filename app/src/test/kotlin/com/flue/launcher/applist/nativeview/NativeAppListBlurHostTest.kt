@@ -48,15 +48,56 @@ class NativeAppListBlurHostTest {
         activities.forEach { it.pause().stop().destroy() }
     }
     @Test
-    fun composeHostConnectsLegacyBlurAndSamplesTransitionDuringDraw() {
+    fun composeHostKeepsTheNativeListDirectAndDoesNotBlurRows() {
         val source = listOf(
             File("src/main/kotlin/com/flue/launcher/applist/nativeview/NativeAppListHost.kt"),
             File("app/src/main/kotlin/com/flue/launcher/applist/nativeview/NativeAppListHost.kt"),
         ).first(File::isFile).readText()
-        assertTrue("Legacy Android must receive the blur container", source.contains("NativeAppListBlurHost(context)"))
-        assertTrue("Animation state must be sampled during draw", source.contains("drawWithContent"))
-        assertTrue("The current frame must reach the container", source.contains("updateBlurFrame("))
+        assertTrue("The native list must be drawn directly", source.contains("NativeAppListView(context)"))
+        assertTrue(
+            "Android 12 and below must still wrap the list for overlay background blur",
+            source.contains("NativeAppListBlurHost(context)"),
+        )
+        assertTrue(
+            "The overlay blur kernel must be sampled during draw",
+            source.contains("overlayBlurRadiusDp()"),
+        )
+        assertFalse(
+            "Legacy row/transition blur must stay removed; only the overlay path may use the host",
+            source.contains("transitionBlurRadiusDp()"),
+        )
         assertTrue("Android 12 must retain its direct native list", source.contains("Build.VERSION_CODES.S"))
+        assertTrue("The current motion profile must remain stable", source.contains("remember(config, motionProfile)"))
+    }
+
+    @Test
+    fun overlayBlurKeepsTheKernelRadiusFixedAndOnlyRecomposesOnAWeightChange() {
+        val algorithm = RecordingAlgorithm()
+        val host = host { algorithm }
+        host.contentView.background = leftHalfDrawable(Color.argb(128, 255, 0, 0))
+        host.setOverlayBlurFrameSource(16f, { 1f }, enabled = true, visible = true)
+
+        draw(host)
+        assertEquals(1, algorithm.radii.size)
+
+        // 覆层展开后画面静止：权重不变就一次卷积都不该再跑。
+        repeat(4) {
+            host.viewTreeObserver.dispatchOnPreDraw()
+            draw(host).recycle()
+        }
+        assertEquals("An unchanged overlay must reuse the baked kernel", 1, algorithm.radii.size)
+
+        // 权重由 1 降到 0.4 必须触发重算 —— 否则菜单背景会一直停在第一帧的权重。
+        host.setOverlayBlurFrameSource(16f, { 0.4f }, enabled = true, visible = true)
+        draw(host).recycle()
+        assertEquals("A weight-only change must recompose the blend", 2, algorithm.radii.size)
+        // 关键契约：重算的是混合权重，不是核 —— 核半径全程钉在同一个值上，
+        // 绝不跟着权重漂移（那会让菜单在淡入过程里越糊越浅）。
+        assertTrue(
+            "The overlay kernel radius must never drift with the blend",
+            algorithm.radii.distinct().size == 1,
+        )
+        host.release()
     }
 
     @Test

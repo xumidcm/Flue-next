@@ -11,8 +11,8 @@ import kotlin.math.roundToInt
  * 生命周期 / 回收 / 滚动度量。差别只在几何换成 [NativeRingGeometry]（铺满可用宽度的
  * 正方格）。
  *
- * 圆屏不再有任何专属路径（2026-08 老师要求删掉径向收拢与安全轮廓，星环两种屏形
- * 一律按方屏平铺渲染）：子项视觉就是 [nativeRingChildVisual] —— 按行数触发的上下
+ * 星环两种屏形一律平铺渲染，不做径向收拢；贴边开启时按屏形计算端行可见的停靠位置。
+ * 子项视觉就是 [nativeRingChildVisual] —— 按行数触发的上下
  * 边缘鱼眼 + 入场动效 + 边缘模糊，鱼眼关掉时全部图标同一尺寸。
  */
 internal class NativeRingLayoutManager(
@@ -23,6 +23,9 @@ internal class NativeRingLayoutManager(
     private var geometryRightInset = Int.MIN_VALUE
     private var geometryColumns = Int.MIN_VALUE
     private var geometryCellSize = Float.NaN
+    private var geometryEdgeAlignEnabled = false
+    private var geometryEdgeAlignPadding = Float.NaN
+    private var geometryEdgeVisibility: NativeEdgeVisibilityKey? = null
 
     override fun hasSameGeometryConfig(
         config: NativeAppListConfig,
@@ -30,13 +33,19 @@ internal class NativeRingLayoutManager(
         geometryLeftInset == config.leftSafeInsetPx &&
         geometryRightInset == config.rightSafeInsetPx &&
             geometryColumns == config.honeycombNarrowColumns &&
-            geometryCellSize == config.ringCellSizePx
+            geometryCellSize == config.ringCellSizePx &&
+            geometryEdgeAlignEnabled == config.edgeAlignEnabled &&
+            geometryEdgeAlignPadding == config.edgeAlignPaddingPx &&
+            geometryEdgeVisibility == config.edgeVisibilityKey()
 
     override fun rememberGeometryConfig(config: NativeAppListConfig) {
         geometryLeftInset = config.leftSafeInsetPx
         geometryRightInset = config.rightSafeInsetPx
         geometryColumns = config.honeycombNarrowColumns
         geometryCellSize = config.ringCellSizePx
+        geometryEdgeAlignEnabled = config.edgeAlignEnabled
+        geometryEdgeAlignPadding = config.edgeAlignPaddingPx
+        geometryEdgeVisibility = config.edgeVisibilityKey()
     }
 
     override fun createGeometry(
@@ -44,21 +53,32 @@ internal class NativeRingLayoutManager(
         viewportWidthPx: Int,
         viewportHeightPx: Int,
         config: NativeAppListConfig,
-    ): NativeAppGridGeometry = NativeRingGeometry.create(
-        itemCount = itemCount,
-        viewportWidthPx = viewportWidthPx,
-        viewportHeightPx = viewportHeightPx,
-        leftSafeInsetPx = config.leftSafeInsetPx,
-        rightSafeInsetPx = config.rightSafeInsetPx,
-        columns = config.honeycombNarrowColumns,
-        cellSizePx = config.ringCellSizePx.takeIf { it.isFinite() && it > 0f }
-            ?: nativeRingCellSizePx(
-                viewportWidthPx = viewportWidthPx,
-                leftSafeInsetPx = config.leftSafeInsetPx,
-                rightSafeInsetPx = config.rightSafeInsetPx,
-                columns = config.honeycombNarrowColumns,
-            ),
-    )
+    ): NativeAppGridGeometry {
+        val ring = NativeRingGeometry.create(
+            itemCount = itemCount,
+            viewportWidthPx = viewportWidthPx,
+            viewportHeightPx = viewportHeightPx,
+            leftSafeInsetPx = config.leftSafeInsetPx,
+            rightSafeInsetPx = config.rightSafeInsetPx,
+            columns = config.honeycombNarrowColumns,
+            cellSizePx = config.ringCellSizePx.takeIf { it.isFinite() && it > 0f }
+                ?: nativeRingCellSizePx(
+                    viewportWidthPx = viewportWidthPx,
+                    leftSafeInsetPx = config.leftSafeInsetPx,
+                    rightSafeInsetPx = config.rightSafeInsetPx,
+                    columns = config.honeycombNarrowColumns,
+                ),
+            edgePaddingPx = config.edgeAlignPaddingPx,
+            centerAligned = !config.edgeAlignEnabled,
+        )
+        val settled = config.copy(entryMotionEnabled = false, entryProgress = 1f)
+        val bounds = nativeVisibleEdgeBounds(ring, viewportWidthPx.toFloat(), config) { position, y ->
+            nativeRingChildVisual(
+                ring.centerX(position), y, viewportWidthPx.toFloat(), viewportHeightPx.toFloat(), settled,
+            )
+        }
+        return ring.withScrollBounds(bounds)
+    }
 
     override fun layoutChild(
         child: View,

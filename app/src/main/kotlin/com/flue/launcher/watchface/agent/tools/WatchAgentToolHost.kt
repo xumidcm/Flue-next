@@ -2,6 +2,7 @@ package com.flue.launcher.watchface.agent.tools
 
 interface WatchAgentToolHost {
     val currentRevision: Long
+    val boundWatchScope: String? get() = null
 
     fun inspectFace(request: WatchAgentInspectFaceRequest): WatchAgentInspectFaceResult
     fun readDocument(request: WatchAgentReadDocumentRequest): WatchAgentDocumentResult
@@ -25,6 +26,7 @@ interface WatchAgentToolHost {
     fun validateFaceMirror(): Any = throw WatchAgentToolException("mirror_unavailable", "当前宿主未绑定表盘镜像")
     fun commitFaceMirror(expectedRevision: Long): Any = throw WatchAgentToolException("mirror_unavailable", "当前宿主未绑定表盘镜像")
     fun importFaceResource(path: String): Any = throw WatchAgentToolException("mirror_unavailable", "当前宿主未绑定表盘镜像")
+    fun readHostResource(relativePath: String): ByteArray? = null
 }
 
 interface WatchAgentUndoHost {

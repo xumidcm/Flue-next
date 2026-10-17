@@ -23,6 +23,7 @@ data class FrameSample(
     val maxMs: Double = 0.0,
     val jankPercent: Double = 0.0,
     val droppedCallbacks: Long = 0,
+    val p95Ms: Double = 0.0,
 )
 
 /** Fixed-size counters: an idle window produces 0 FPS, without scheduling synthetic frames. */
@@ -32,6 +33,7 @@ class FrameIntervalAccumulator {
     private var maxNanos = 0L
     private var jank = 0L
     private var dropped = 0L
+    private val durations = DurationHistogram()
 
     @Synchronized
     fun record(durationNanos: Long, budgetNanos: Long, droppedCallbacks: Int) {
@@ -41,6 +43,7 @@ class FrameIntervalAccumulator {
         maxNanos = maxOf(maxNanos, durationNanos)
         if (durationNanos > budgetNanos.coerceAtLeast(1L)) jank++
         dropped += droppedCallbacks.coerceAtLeast(0)
+        durations.record(durationNanos)
     }
 
     @Synchronized
@@ -52,8 +55,10 @@ class FrameIntervalAccumulator {
             maxMs = maxNanos / 1_000_000.0,
             jankPercent = if (frames == 0L) 0.0 else jank * 100.0 / frames,
             droppedCallbacks = dropped,
+            p95Ms = durations.percentile95Ms(),
         )
         frames = 0; totalNanos = 0; maxNanos = 0; jank = 0; dropped = 0
+        durations.clear()
         return sample
     }
 }
@@ -68,6 +73,7 @@ private val DIAGNOSTIC_CONFIG_KEYS = setOf(
     "app_list_scale_percent", "app_list_fisheye_enabled", "app_list_fisheye_range_rows",
     "app_list_fisheye_strength_percent", "app_list_edge_spacing_compression_enabled",
     "app_list_left_safe_inset_percent", "app_list_flow_crescent_bulge_percent", "app_list_flow_crescent_to_right",
+    "app_list_edge_align_enabled",
     "motion_profile_id", "reduce_dynamic_effects", "transition_motion",
 ) + listOf("app_list_enter", "app_launch", "app_return", "pull_to_face", "edge_bounce").flatMap { phase ->
     listOf("duration_ms", "handoff_ms", "easing", "x1", "x2", "y1", "y2", "damping_ratio", "stiffness")

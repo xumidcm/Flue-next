@@ -279,10 +279,10 @@ class ExternalLaunchSessionTracker(
                         session = current.session,
                         kind = ReturnKind.HomeReentry,
                     )
-                } else if (current.session.pausedAfterDispatch) {
-                    ExternalLaunchState.Invalidated(
+                } else if (current.session.lastExternalEvidence != null) {
+                    ExternalLaunchState.Returning(
                         session = current.session,
-                        reason = InvalidReason.NoConfirmedBackground,
+                        kind = classifyReturn(current.session),
                     )
                 } else {
                     current
@@ -389,7 +389,7 @@ class ExternalLaunchSessionTracker(
             ?: return ReturnKind.UnverifiedReturn
         val evidence = session.lastExternalEvidence
             ?: return ReturnKind.UnverifiedReturn
-        return if (evidence.packageName == expectedPackage) {
+        return if (evidence.packageName == expectedPackage || isSystemOverlayPackage(evidence.packageName)) {
             ReturnKind.TargetReturn
         } else {
             ReturnKind.ForeignReturn
@@ -407,3 +407,8 @@ class ExternalLaunchSessionTracker(
         is ExternalLaunchState.Invalidated -> session
     }
 }
+
+fun isSystemOverlayPackage(packageName: String): Boolean =
+    packageName == "com.android.systemui" ||
+        packageName == "com.google.android.wearable.sysui" ||
+        packageName == "android"

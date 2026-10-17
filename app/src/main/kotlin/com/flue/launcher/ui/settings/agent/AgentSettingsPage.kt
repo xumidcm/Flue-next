@@ -108,8 +108,6 @@ fun AgentSettingsPage(onBack: () -> Unit) {
     var apiKeyInput by remember { mutableStateOf("") }
     var savedKey by remember { mutableStateOf<String?>(null) }
     var showKey by remember { mutableStateOf(false) }
-    var status by remember { mutableStateOf<String?>(null) }
-    var statusIsError by remember { mutableStateOf(false) }
     var busy by remember { mutableStateOf(false) }
     var models by remember { mutableStateOf(store.cachedModels(selectedId)) }
     var confirmDelete by remember { mutableStateOf(false) }
@@ -133,34 +131,36 @@ fun AgentSettingsPage(onBack: () -> Unit) {
 
     var workspaces by remember { mutableStateOf<List<AgentWorkspace>>(emptyList()) }
     var workspaceName by rememberSaveable { mutableStateOf("") }
-    var destination by rememberSaveable { mutableStateOf(AgentSettingsDestination.OVERVIEW) }
+    var destinationStack by rememberSaveable { mutableStateOf(listOf(AgentSettingsDestination.OVERVIEW)) }
+    val destination = destinationStack.lastOrNull() ?: AgentSettingsDestination.OVERVIEW
     var selectedWorkspaceId by rememberSaveable { mutableStateOf<String?>(null) }
     var workspacePermissions by remember { mutableStateOf(permissionStore.load()) }
 
+    val scrollPositions = remember { mutableMapOf<String, Pair<Int, Int>>() }
+    val pageKey = "${destination.name}_${selectedId}_${selectedWorkspaceId.orEmpty()}"
+    val listState = remember(pageKey) {
+        val (index, offset) = scrollPositions[pageKey] ?: (0 to 0)
+        androidx.compose.foundation.lazy.LazyListState(index, offset)
+    }
+    LaunchedEffect(listState) {
+        androidx.compose.runtime.snapshotFlow { listState.firstVisibleItemIndex to listState.firstVisibleItemScrollOffset }
+            .collect { scrollPositions[pageKey] = it }
+    }
+
+    fun navigateTo(dest: AgentSettingsDestination) {
+        destinationStack = destinationStack + dest
+    }
+
     fun navigateBack() {
-        destination = when (destination) {
-            AgentSettingsDestination.OVERVIEW -> {
-                onBack()
-                AgentSettingsDestination.OVERVIEW
-            }
-            AgentSettingsDestination.PROVIDERS,
-            AgentSettingsDestination.FEATURES,
-            AgentSettingsDestination.WORKSPACES,
-            AgentSettingsDestination.BASH_PERMISSIONS,
-            AgentSettingsDestination.DATA,
-            -> AgentSettingsDestination.OVERVIEW
-            AgentSettingsDestination.PROVIDER_DETAIL -> AgentSettingsDestination.PROVIDERS
-            AgentSettingsDestination.PROVIDER_CONNECTION,
-            AgentSettingsDestination.PROVIDER_MODEL,
-            AgentSettingsDestination.PROVIDER_ADVANCED,
-            -> AgentSettingsDestination.PROVIDER_DETAIL
-            AgentSettingsDestination.IMAGE_GENERATION,
-            AgentSettingsDestination.WEB_SEARCH,
-            AgentSettingsDestination.WORKSPACE_FEATURES,
-            -> AgentSettingsDestination.FEATURES
-            AgentSettingsDestination.WORKSPACE_DETAIL -> AgentSettingsDestination.WORKSPACES
-            AgentSettingsDestination.TERMINAL -> AgentSettingsDestination.WORKSPACE_DETAIL
+        if (confirmDelete) {
+            confirmDelete = false
+            return
         }
+        if (destinationStack.size > 1) {
+            destinationStack = destinationStack.dropLast(1)
+            return
+        }
+        onBack()
     }
 
     fun persistPermissions(next: WorkspacePermissionSettings) {
@@ -186,8 +186,6 @@ fun AgentSettingsPage(onBack: () -> Unit) {
         savedKey = null
         showKey = false
         models = store.cachedModels(id)
-        status = null
-        statusIsError = false
         scope.launch {
             val key = withContext(Dispatchers.IO) { store.apiKey(id) }
             if (selectedId == id) savedKey = key
@@ -211,8 +209,6 @@ fun AgentSettingsPage(onBack: () -> Unit) {
     fun saveProvider() {
         if (busy) return
         busy = true
-        status = null
-        statusIsError = false
         val profile = draftProfile()
         val operationProviderId = selectedId
         providerOperationVersion += 1L
@@ -240,14 +236,14 @@ fun AgentSettingsPage(onBack: () -> Unit) {
                 profiles = persisted?.first.orEmpty()
                 savedKey = persisted?.second
                 apiKeyInput = ""
-                status = context.getString(R.string.agent_saved)
-                statusIsError = false
+                val msg = context.getString(R.string.agent_saved)
+                android.widget.Toast.makeText(context, msg, android.widget.Toast.LENGTH_SHORT).show()
             }.onFailure {
-                status = context.getString(
+                val msg = context.getString(
                     R.string.agent_save_failed,
                     it.message ?: context.getString(R.string.agent_unknown_error),
                 )
-                statusIsError = true
+                android.widget.Toast.makeText(context, msg, android.widget.Toast.LENGTH_SHORT).show()
             }
         }
     }
@@ -255,8 +251,6 @@ fun AgentSettingsPage(onBack: () -> Unit) {
     fun testConnection() {
         if (busy || baseUrl.isBlank()) return
         busy = true
-        status = null
-        statusIsError = false
         val profile = draftProfile()
         val operationProviderId = selectedId
         providerOperationVersion += 1L
@@ -271,14 +265,14 @@ fun AgentSettingsPage(onBack: () -> Unit) {
             result.onSuccess {
                 models = it
                 store.cacheModels(selectedId, it)
-                status = context.getString(R.string.agent_connect_success, it.size)
-                statusIsError = false
+                val msg = context.getString(R.string.agent_connect_success, it.size)
+                android.widget.Toast.makeText(context, msg, android.widget.Toast.LENGTH_SHORT).show()
             }.onFailure {
-                status = context.getString(
+                val msg = context.getString(
                     R.string.agent_connect_failed,
                     it.message ?: context.getString(R.string.agent_unknown_error),
                 )
-                statusIsError = true
+                android.widget.Toast.makeText(context, msg, android.widget.Toast.LENGTH_SHORT).show()
             }
         }
     }
@@ -309,11 +303,11 @@ fun AgentSettingsPage(onBack: () -> Unit) {
                 savedTavilyKey = withContext(Dispatchers.IO) { featureStore.tavilyApiKey() }
                 imageKey = ""
                 tavilyKey = ""
-                status = context.getString(R.string.agent_feature_saved)
-                statusIsError = false
+                val msg = context.getString(R.string.agent_feature_saved)
+                android.widget.Toast.makeText(context, msg, android.widget.Toast.LENGTH_SHORT).show()
             } else {
-                status = context.getString(R.string.agent_feature_save_failed)
-                statusIsError = true
+                val msg = context.getString(R.string.agent_feature_save_failed)
+                android.widget.Toast.makeText(context, msg, android.widget.Toast.LENGTH_SHORT).show()
             }
             busy = false
         }
@@ -347,14 +341,12 @@ fun AgentSettingsPage(onBack: () -> Unit) {
     }
 
     AgentSettingsScreen(
-        stateKey = destination,
+        stateKey = pageKey,
         title = pageTitle,
         subtitle = pageSubtitle,
         onBack = ::navigateBack,
+        listState = listState,
     ) {
-        if (status != null && destination != AgentSettingsDestination.OVERVIEW) {
-            item(key = "agent_status") { AgentSettingsStatus(status.orEmpty(), statusIsError) }
-        }
         when (destination) {
             AgentSettingsDestination.OVERVIEW -> {
                 item("agent_overview_ai") {
@@ -372,19 +364,19 @@ fun AgentSettingsPage(onBack: () -> Unit) {
                         AgentSettingsEntry(
                             title = stringResource(R.string.agent_overview_provider),
                             subtitle = stringResource(R.string.agent_overview_provider_summary),
-                            onClick = { destination = AgentSettingsDestination.PROVIDERS },
+                            onClick = { navigateTo(AgentSettingsDestination.PROVIDERS) },
                             leading = { SettingsIcon(MiuixIcons.Settings, MiuixIcons.Settings) },
                         )
                         AgentSettingsEntry(
                             title = stringResource(R.string.agent_overview_features),
                             subtitle = stringResource(R.string.agent_overview_features_summary),
-                            onClick = { destination = AgentSettingsDestination.FEATURES },
+                            onClick = { navigateTo(AgentSettingsDestination.FEATURES) },
                             leading = { SettingsIcon(MiuixIcons.Sparkle, MiuixIcons.Sparkle) },
                         )
                         AgentSettingsEntry(
                             title = stringResource(R.string.agent_bash_permissions),
                             subtitle = stringResource(R.string.agent_bash_manual_summary),
-                            onClick = { destination = AgentSettingsDestination.BASH_PERMISSIONS },
+                            onClick = { navigateTo(AgentSettingsDestination.BASH_PERMISSIONS) },
                             leading = { SettingsIcon(MiuixIcons.Tool, MiuixIcons.Tool) },
                             last = true,
                         )
@@ -395,7 +387,7 @@ fun AgentSettingsPage(onBack: () -> Unit) {
                         AgentSettingsEntry(
                             title = stringResource(R.string.agent_workspaces),
                             subtitle = stringResource(R.string.agent_workspace_management_summary),
-                            onClick = { destination = AgentSettingsDestination.WORKSPACES },
+                            onClick = { navigateTo(AgentSettingsDestination.WORKSPACES) },
                             leading = { SettingsIcon(MiuixIcons.Grid, MiuixIcons.Grid) },
                             last = true,
                         )
@@ -406,7 +398,7 @@ fun AgentSettingsPage(onBack: () -> Unit) {
                         AgentSettingsEntry(
                             title = stringResource(R.string.agent_data),
                             subtitle = stringResource(R.string.agent_data_summary),
-                            onClick = { destination = AgentSettingsDestination.DATA },
+                            onClick = { navigateTo(AgentSettingsDestination.DATA) },
                             leading = { SettingsIcon(MiuixIcons.Info, MiuixIcons.Info) },
                             last = true,
                         )
@@ -424,7 +416,7 @@ fun AgentSettingsPage(onBack: () -> Unit) {
                                 subtitle = if (active) stringResource(R.string.agent_provider_active) else profile.protocol.label() + " · " + profile.baseUrl,
                                 onClick = {
                                     load(profile.id)
-                                    destination = AgentSettingsDestination.PROVIDER_DETAIL
+                                    navigateTo(AgentSettingsDestination.PROVIDER_DETAIL)
                                 },
                                 leading = { SettingsIcon(MiuixIcons.Sparkle, MiuixIcons.Sparkle) },
                                 trailing = {
@@ -446,7 +438,7 @@ fun AgentSettingsPage(onBack: () -> Unit) {
                                 store.save(profile)
                                 profiles = store.list()
                                 load(id)
-                                destination = AgentSettingsDestination.PROVIDER_CONNECTION
+                                navigateTo(AgentSettingsDestination.PROVIDER_CONNECTION)
                             },
                             leading = { SettingsIcon(MiuixIcons.Add, MiuixIcons.Add) },
                             last = true,
@@ -465,19 +457,19 @@ fun AgentSettingsPage(onBack: () -> Unit) {
                                 append(" · ")
                                 append(stringResource(if (savedKey != null) R.string.agent_api_key_configured else R.string.agent_api_key_missing))
                             },
-                            onClick = { destination = AgentSettingsDestination.PROVIDER_CONNECTION },
+                            onClick = { navigateTo(AgentSettingsDestination.PROVIDER_CONNECTION) },
                             leading = { SettingsIcon(MiuixIcons.Wifi, MiuixIcons.Wifi) },
                         )
                         AgentSettingsEntry(
                             title = stringResource(R.string.agent_provider_model),
                             subtitle = listOf(protocol.label(), model.ifBlank { stringResource(R.string.agent_model_automatic) }).joinToString(" · "),
-                            onClick = { destination = AgentSettingsDestination.PROVIDER_MODEL },
+                            onClick = { navigateTo(AgentSettingsDestination.PROVIDER_MODEL) },
                             leading = { SettingsIcon(MiuixIcons.Sparkle, MiuixIcons.Sparkle) },
                         )
                         AgentSettingsEntry(
                             title = stringResource(R.string.agent_provider_advanced),
                             subtitle = stringResource(R.string.agent_provider_advanced_summary),
-                            onClick = { destination = AgentSettingsDestination.PROVIDER_ADVANCED },
+                            onClick = { navigateTo(AgentSettingsDestination.PROVIDER_ADVANCED) },
                             leading = { SettingsIcon(MiuixIcons.Tool, MiuixIcons.Tool) },
                             last = true,
                         )
@@ -497,8 +489,8 @@ fun AgentSettingsPage(onBack: () -> Unit) {
                             subtitle = stringResource(R.string.agent_provider_make_active_summary),
                             onClick = {
                                 store.setActiveProvider(selectedId)
-                                status = context.getString(R.string.agent_provider_active)
-                                statusIsError = false
+                                val msg = context.getString(R.string.agent_provider_active)
+                                android.widget.Toast.makeText(context, msg, android.widget.Toast.LENGTH_SHORT).show()
                             },
                             leading = { SettingsIcon(MiuixIcons.Check, MiuixIcons.Check) },
                             last = true,
@@ -554,8 +546,8 @@ fun AgentSettingsPage(onBack: () -> Unit) {
                                         savedKey = null
                                         apiKeyInput = ""
                                         showKey = false
-                                        status = context.getString(R.string.agent_key_cleared)
-                                        statusIsError = false
+                                        val msg = context.getString(R.string.agent_key_cleared)
+                                        android.widget.Toast.makeText(context, msg, android.widget.Toast.LENGTH_SHORT).show()
                                         busy = false
                                     }
                                 },
@@ -621,19 +613,19 @@ fun AgentSettingsPage(onBack: () -> Unit) {
                         AgentSettingsEntry(
                             title = stringResource(R.string.agent_image_generation),
                             subtitle = stringResource(R.string.agent_image_generation_summary),
-                            onClick = { destination = AgentSettingsDestination.IMAGE_GENERATION },
+                            onClick = { navigateTo(AgentSettingsDestination.IMAGE_GENERATION) },
                             leading = { SettingsIcon(MiuixIcons.Sparkle, MiuixIcons.Sparkle) },
                         )
                         AgentSettingsEntry(
                             title = stringResource(R.string.agent_web_search),
                             subtitle = stringResource(R.string.agent_web_search_summary),
-                            onClick = { destination = AgentSettingsDestination.WEB_SEARCH },
+                            onClick = { navigateTo(AgentSettingsDestination.WEB_SEARCH) },
                             leading = { SettingsIcon(MiuixIcons.Search, MiuixIcons.Search) },
                         )
                         AgentSettingsEntry(
                             title = stringResource(R.string.agent_workspace_search),
                             subtitle = stringResource(R.string.agent_workspace_search_summary),
-                            onClick = { destination = AgentSettingsDestination.WORKSPACE_FEATURES },
+                            onClick = { navigateTo(AgentSettingsDestination.WORKSPACE_FEATURES) },
                             leading = { SettingsIcon(MiuixIcons.Grid, MiuixIcons.Grid) },
                             last = true,
                         )
@@ -754,7 +746,7 @@ fun AgentSettingsPage(onBack: () -> Unit) {
                                     },
                                     onClick = {
                                         selectedWorkspaceId = workspace.id
-                                        destination = AgentSettingsDestination.WORKSPACE_DETAIL
+                                        navigateTo(AgentSettingsDestination.WORKSPACE_DETAIL)
                                     },
                                     leading = { SettingsIcon(MiuixIcons.Grid, MiuixIcons.Grid) },
                                     trailing = { Icon(MiuixIcons.Forward, contentDescription = null) },
@@ -776,11 +768,11 @@ fun AgentSettingsPage(onBack: () -> Unit) {
                                     result.onSuccess {
                                         workspaces = withContext(Dispatchers.IO) { workspaceManager.list() }
                                         workspaceName = ""
-                                        status = context.getString(R.string.agent_workspace_created)
-                                        statusIsError = false
+                                        val msg = context.getString(R.string.agent_workspace_created)
+                                        android.widget.Toast.makeText(context, msg, android.widget.Toast.LENGTH_SHORT).show()
                                     }.onFailure {
-                                        status = context.getString(R.string.agent_workspace_create_failed, it.message ?: context.getString(R.string.agent_unknown_error))
-                                        statusIsError = true
+                                        val msg = context.getString(R.string.agent_workspace_create_failed, it.message ?: context.getString(R.string.agent_unknown_error))
+                                        android.widget.Toast.makeText(context, msg, android.widget.Toast.LENGTH_SHORT).show()
                                     }
                                     busy = false
                                 }
@@ -796,7 +788,7 @@ fun AgentSettingsPage(onBack: () -> Unit) {
                     workspace = workspaces.firstOrNull { it.id == selectedWorkspaceId },
                     workspaceManager = workspaceManager,
                     onWorkspaceChanged = { updated -> workspaces = workspaces.map { if (it.id == updated.id) updated else it } },
-                    onOpenTerminal = { destination = AgentSettingsDestination.TERMINAL },
+                    onOpenTerminal = { navigateTo(AgentSettingsDestination.TERMINAL) },
                     onRename = { workspaceId, nextName ->
                         if (!busy) {
                             busy = true
@@ -807,14 +799,14 @@ fun AgentSettingsPage(onBack: () -> Unit) {
                                 busy = false
                                 result.onSuccess { updated ->
                                     workspaces = updated
-                                    status = context.getString(R.string.agent_saved)
-                                    statusIsError = false
+                                    val msg = context.getString(R.string.agent_saved)
+                                    android.widget.Toast.makeText(context, msg, android.widget.Toast.LENGTH_SHORT).show()
                                 }.onFailure { error ->
-                                    status = context.getString(
+                                    val msg = context.getString(
                                         R.string.agent_save_failed,
                                         error.message ?: context.getString(R.string.agent_unknown_error),
                                     )
-                                    statusIsError = true
+                                    android.widget.Toast.makeText(context, msg, android.widget.Toast.LENGTH_SHORT).show()
                                 }
                             }
                         }
@@ -833,13 +825,15 @@ fun AgentSettingsPage(onBack: () -> Unit) {
                                 result.onSuccess { updated ->
                                     workspaces = updated
                                     selectedWorkspaceId = null
-                                    destination = AgentSettingsDestination.WORKSPACES
+                                    destinationStack = listOf(AgentSettingsDestination.OVERVIEW, AgentSettingsDestination.WORKSPACES)
+                                    val msg = context.getString(R.string.agent_deleted)
+                                    android.widget.Toast.makeText(context, msg, android.widget.Toast.LENGTH_SHORT).show()
                                 }.onFailure { error ->
-                                    status = context.getString(
+                                    val msg = context.getString(
                                         R.string.agent_save_failed,
                                         error.message ?: context.getString(R.string.agent_unknown_error),
                                     )
-                                    statusIsError = true
+                                    android.widget.Toast.makeText(context, msg, android.widget.Toast.LENGTH_SHORT).show()
                                 }
                             }
                         }
@@ -882,22 +876,13 @@ fun AgentSettingsPage(onBack: () -> Unit) {
                 val next = store.active() ?: profiles.firstOrNull()
                 if (next != null) {
                     load(next.id)
-                    destination = AgentSettingsDestination.PROVIDER_DETAIL
-                } else destination = AgentSettingsDestination.PROVIDERS
+                    destinationStack = listOf(AgentSettingsDestination.OVERVIEW, AgentSettingsDestination.PROVIDERS, AgentSettingsDestination.PROVIDER_DETAIL)
+                } else {
+                    destinationStack = listOf(AgentSettingsDestination.OVERVIEW, AgentSettingsDestination.PROVIDERS)
+                }
             },
             dismissText = stringResource(R.string.agent_cancel),
             dangerous = true,
-        )
-    }
-}
-
-@Composable
-private fun AgentSettingsStatus(message: String, error: Boolean) {
-    AgentSettingsFormCard {
-        Text(
-            text = message,
-            color = if (error) MaterialTheme.colorScheme.error else LauncherTheme.style.accentColor,
-            style = MaterialTheme.typography.bodyMedium,
         )
     }
 }
