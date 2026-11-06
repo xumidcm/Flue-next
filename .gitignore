@@ -43,3 +43,17 @@ classes.jar
 /.tmp-transition-diff.txt
 /.tmp-backup-*.patch
 /.tmp-commit-msg.txt
+
+# Release signing: never commit keys or their passwords.
+# Provide them through keystore.properties (local), Gradle properties, or
+# the FLUE_SIGNING_* environment variables used by CI.
+keystore.properties
+keystore/
+*.jks
+*.keystore
+*.p12
+
+# Internal working notes: kept local, not part of the published tree.
+/plan-Claude/
+/docs/tasks/
+/.codex_untracked_backup_*/

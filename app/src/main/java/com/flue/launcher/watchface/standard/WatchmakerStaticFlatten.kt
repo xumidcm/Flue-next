@@ -3,7 +3,7 @@ package com.flue.launcher.watchface.standard
 import java.util.Locale
 
 /**
- * 阶段 3：静态图层烘焙（`plan-Claude/watchface-precompile-and-canvas.md` §三·阶段 3）。
+ * 阶段 3：静态图层烘焙（`docs/design/watchface-precompile-and-canvas.md` §三·阶段 3）。
  *
  * 对照 `wf_render.lua:3196` `flattenStatics()`：把**连续**的、每帧都不变的图层合成
  * 到一张离屏位图上，绘制时用一次 `drawBitmap` 代替走完整路径的 N 层。老师看到
