@@ -19,6 +19,7 @@ Current version `2.4.0 (31)`. Beta: usable, still being polished.
 | | Standard | CYTJ OS custom |
 |---|---|---|
 | Branch | `main` | [`cytj-os`](https://github.com/xumidcm/Flue-next/tree/cytj-os) |
+| Package | `com.flue.launcher` | `com.dw.launcher` (both can be installed side by side) |
 | Target | Generic, adapts to vendor watch ROMs | Tuned for CYTJ OS devices |
 
 Both are developed in the open in this repository. The custom edition merges from `main`

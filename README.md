@@ -18,6 +18,7 @@
 |---|---|---|
 | 分支 | `main` | [`cytj-os`](https://github.com/xumidcm/Flue-next/tree/cytj-os) |
 | 定位 | 通用版本，适配各家手表 ROM | 面向 CYTJ OS 的定制构建 |
+| 包名 | `com.flue.launcher` | `com.dw.launcher`（两个版本可以并存安装） |
 | 差异 | 基线 | 桌面布局、动效与默认配置按 CYTJ OS 调整 |
 
 两个版本都在这个仓库里公开开发。定制版会定期从 `main` 合并，但不保证与标准版同步发布。
