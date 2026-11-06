@@ -47,8 +47,8 @@ android {
         applicationId = "com.flue.launcher"
         minSdk = 27
         targetSdk = 36
-        versionCode = 30
-        versionName = "2.3.5"
+        versionCode = 31
+        versionName = "2.4.0"
         ndk { abiFilters += listOf("armeabi-v7a", "arm64-v8a") }
 
         // Default watch-store endpoint. Derivative builds can point it elsewhere

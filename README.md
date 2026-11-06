@@ -1,4 +1,4 @@
-# Flue
+# Flue Next
 
 **Android 手表上的桌面启动器（HOME 应用）**，Kotlin + Jetpack Compose 实现。
 
@@ -6,11 +6,21 @@
 同一个进程里，手势和转场连续，而不是在几个 App 之间来回跳。
 
 [![License: GPL-3.0](https://img.shields.io/badge/license-GPL--3.0-blue.svg)](LICENSE)
-[![CI](https://github.com/xumidcm/Flue/actions/workflows/ci.yml/badge.svg)](https://github.com/xumidcm/Flue/actions/workflows/ci.yml)
+[![CI](https://github.com/xumidcm/Flue-next/actions/workflows/ci.yml/badge.svg)](https://github.com/xumidcm/Flue-next/actions/workflows/ci.yml)
 ![minSdk 27](https://img.shields.io/badge/minSdk-27-informational)
 ![Kotlin](https://img.shields.io/badge/Kotlin-2.3-7F52FF?logo=kotlin&logoColor=white)
 
-当前版本 `2.3.5 (30)`，仍是 beta，功能可用但细节还在打磨。
+当前版本 `2.4.0 (31)`，仍是 beta，功能可用但细节还在打磨。
+
+## 两个版本
+
+| | 标准版 | CYTJ OS 定制版 |
+|---|---|---|
+| 分支 | `main` | [`cytj-os`](https://github.com/xumidcm/Flue-next/tree/cytj-os) |
+| 定位 | 通用版本，适配各家手表 ROM | 面向 CYTJ OS 的定制构建 |
+| 差异 | 基线 | 桌面布局、动效与默认配置按 CYTJ OS 调整 |
+
+两个版本都在这个仓库里公开开发。定制版会定期从 `main` 合并，但不保证与标准版同步发布。
 
 ## 功能
 
@@ -56,7 +66,7 @@
 
 ## 安装
 
-1. 从 [Releases](https://github.com/xumidcm/Flue/releases) 下载 APK；
+1. 从 [Releases](https://github.com/xumidcm/Flue-next/releases) 下载对应版本的 APK；
 2. `adb install -r Flue-release.apk`，或在手表上用文件管理器点开安装；
 3. 按系统提示把 Flue 设为默认桌面（设置 → 应用 → 默认应用 → 主屏幕）；
 4. 需要通知中心就授予通知使用权，需要双击息屏就授予无障碍权限。
@@ -119,6 +129,13 @@ FLUE_SIGNING_KEY_PASSWORD
 
 也可以用 Gradle 属性 `-PFLUE_SIGNING_STORE_FILE=...` 传。四个值齐全才会启用 release 签名。
 
+### 构建 CYTJ OS 定制版
+
+```powershell
+git switch cytj-os
+.\gradlew.bat :app:assembleRelease --no-daemon --console=plain
+```
+
 ### 指向自己的表盘市场
 
 默认市场地址可以被 Gradle 属性覆盖，不需要改代码：
@@ -158,6 +175,21 @@ tools/watchface-agent-web/            表盘 Agent 的浏览器侧辅助工具
 - 提交信息用简体中文短句，说明完成的行为
 - 开发约定见 [CONTRIBUTING.md](CONTRIBUTING.md)，分支与版本约定见 [docs/GIT_WORKFLOW.md](docs/GIT_WORKFLOW.md)
 
+## 参与贡献
+
+**欢迎外部 PR。** 流程很简单：
+
+1. 从 `main` 切一个分支，一个分支只做一件事
+2. 跑通 `:app:testDebugUnitTest`，涉及 UI 的附上真机验证结果
+3. 提 PR，CI 通过后我会看
+
+以下类型的改动请先开 issue 讨论，避免白做：
+
+- 大范围重构、包名/目录迁移
+- 新增第三方依赖（要过许可证审查）
+- 修改表盘格式兼容性语义
+- 涉及权限申请的改动
+
 ## 已知限制
 
 - 天气数据走的是小米未公开接口，随时可能失效；定位请求失败时会回落到手动城市搜索
@@ -166,15 +198,15 @@ tools/watchface-agent-web/            表盘 Agent 的浏览器侧辅助工具
 - AI Agent 工作区需要 `arm64-v8a` 且首次使用要下载约 30MB 的 Ubuntu Base 镜像
 - 圆屏与方屏的布局差异只能靠真机校正，欢迎提交适配报告
 
-## 贡献与反馈
+## 反馈
 
 - Bug 与建议：用 issue 模板提交，请附设备型号与系统版本
-- 安全漏洞：请走 [私密报告](https://github.com/xumidcm/Flue/security/advisories/new)，不要开公开 issue
-- 代码贡献：见 [CONTRIBUTING.md](CONTRIBUTING.md)
+- 安全漏洞：请走 [私密报告](https://github.com/xumidcm/Flue-next/security/advisories/new)，不要开公开 issue
 
 ## 许可证
 
-以 [GPL-3.0](LICENSE) 发布。任何分发的修改版 APK 都必须同时提供完整对应源码。
+以 [GPL-3.0](LICENSE) 发布。任何分发的修改版 APK 都必须同时提供完整对应源码 ——
+包括 CYTJ OS 定制版。
 
 随项目分发的第三方组件（PRoot、FFmpegKit 等）遵循各自许可证，详见
 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。

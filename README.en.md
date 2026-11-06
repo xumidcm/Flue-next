@@ -1,4 +1,4 @@
-# Flue
+# Flue Next
 
 **An Android launcher (HOME app) for smartwatches**, written in Kotlin with Jetpack Compose.
 
@@ -7,12 +7,22 @@ notification center and control center live in one process, so gestures and tran
 continuous instead of bouncing between separate apps.
 
 [![License: GPL-3.0](https://img.shields.io/badge/license-GPL--3.0-blue.svg)](LICENSE)
-[![CI](https://github.com/xumidcm/Flue/actions/workflows/ci.yml/badge.svg)](https://github.com/xumidcm/Flue/actions/workflows/ci.yml)
+[![CI](https://github.com/xumidcm/Flue-next/actions/workflows/ci.yml/badge.svg)](https://github.com/xumidcm/Flue-next/actions/workflows/ci.yml)
 ![minSdk 27](https://img.shields.io/badge/minSdk-27-informational)
 
-Current version `2.3.5 (30)`. Beta: usable, still being polished.
+Current version `2.4.0 (31)`. Beta: usable, still being polished.
 
 中文文档见 [README.md](README.md)。
+
+## Two editions
+
+| | Standard | CYTJ OS custom |
+|---|---|---|
+| Branch | `main` | [`cytj-os`](https://github.com/xumidcm/Flue-next/tree/cytj-os) |
+| Target | Generic, adapts to vendor watch ROMs | Tuned for CYTJ OS devices |
+
+Both are developed in the open in this repository. The custom edition merges from `main`
+periodically but its releases are not kept in lockstep.
 
 ## Features
 
@@ -41,7 +51,7 @@ Current version `2.3.5 (30)`. Beta: usable, still being polished.
 
 ## Install
 
-1. Download the APK from [Releases](https://github.com/xumidcm/Flue/releases).
+1. Download the APK from [Releases](https://github.com/xumidcm/Flue-next/releases).
 2. `adb install -r Flue-release.apk`, or open it from a file manager on the watch.
 3. Set Flue as the default home app when the system asks.
 
@@ -100,6 +110,15 @@ app/src/test/               JVM + Robolectric tests (250+ files)
 docs/                       design documents and validation records
 ```
 
+## Contributing
+
+**Pull requests are welcome.** Fork, branch from `main`, keep one topic per branch, make
+`:app:testDebugUnitTest` pass, and include device verification for UI, notification or gesture
+changes. See [CONTRIBUTING.md](CONTRIBUTING.md).
+
+Please open an issue first for: large refactors, new third-party dependencies, changes to watch
+face format semantics, or anything that adds permissions.
+
 ## Known limitations
 
 - Weather uses an undocumented Xiaomi endpoint that may break at any time.
@@ -108,14 +127,15 @@ docs/                       design documents and validation records
   feature of every vendor format.
 - Round and square layouts need real-device tuning; reports are welcome.
 
-## Contributing
+## Security
 
-See [CONTRIBUTING.md](CONTRIBUTING.md). For security issues use
-[private reporting](https://github.com/xumidcm/Flue/security/advisories/new), not a public issue.
+Report vulnerabilities through
+[private reporting](https://github.com/xumidcm/Flue-next/security/advisories/new), not a public issue.
 
 ## License
 
-[GPL-3.0](LICENSE). Any distributed modified APK must ship the complete corresponding source.
+[GPL-3.0](LICENSE). Any distributed modified APK — including the CYTJ OS custom edition — must ship
+the complete corresponding source.
 
 Bundled third-party components (PRoot, FFmpegKit, and others) keep their own licenses — see
 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). Flue is not affiliated with WatchMaker, JB, or

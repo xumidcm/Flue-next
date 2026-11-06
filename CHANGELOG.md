@@ -4,9 +4,9 @@
 [语义化版本](https://semver.org/lang/zh-CN/)。2.3.x 及更早的记录见
 [docs/CHANGELOG-archive.md](docs/CHANGELOG-archive.md)。
 
-## [Unreleased]
+## [2.4.0] - 2026-11-06
 
-计划作为 `2.4.0` 发布，也是仓库公开后的第一个版本。
+仓库公开后的第一个版本。CYTJ OS 定制版同步公开在 `cytj-os` 分支。
 
 ### 变更
 
@@ -14,6 +14,7 @@
 - 发布签名不再进入版本库：`keystore.properties` 与密钥文件改为本地文件 + CI Secrets 注入
 - 表盘市场的默认地址改为构建期可覆盖：`-PflueWatchStoreBaseUrl=https://your-host/api`
 - 关于页的交流群入口改为复制群号（原来的邀请链接带一次性 `authKey`，会失效）
+- 接受外部 PR，补充贡献流程与改动前置讨论范围
 
 ### 移除
 

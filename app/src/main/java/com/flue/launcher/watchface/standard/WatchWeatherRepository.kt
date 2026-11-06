@@ -1048,7 +1048,7 @@ class WatchWeatherRepository(
         const val KEY_CHINA_LOCATION_KEY = "china_location_key"
         const val DEFAULT_SOFT_TTL_MS = 15L * 60L * 1_000L
         const val MAX_CACHE_AGE_MS = 6L * 60L * 60L * 1_000L
-        const val USER_AGENT = "FlueNext/2.0 (weather; https://github.com/xumidcm/Flue)"
+        const val USER_AGENT = "FlueNext/2.0 (weather; https://github.com/xumidcm/Flue-next)"
         private const val CURRENT_LOCATION_TIMEOUT_MS = 6_000L
         private const val SYSTEM_LOCATION_LABEL_TOLERANCE_DEGREES = 0.005
         private const val CACHE_LOCATION_TOLERANCE_DEGREES = 0.00001

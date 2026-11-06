@@ -5,7 +5,7 @@
 请**不要**在公开 issue 里描述安全问题。使用 GitHub 的私密报告渠道：
 
 **Security** 标签页 → **Report a vulnerability**
-（<https://github.com/xumidcm/Flue/security/advisories/new>）
+（<https://github.com/xumidcm/Flue-next/security/advisories/new>）
 
 报告里请尽量包含：影响版本、系统版本与设备、复现步骤、预期与实际结果。
 如果涉及用户数据，请只提供必要的最小样本。

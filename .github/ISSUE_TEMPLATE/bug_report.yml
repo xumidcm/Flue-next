@@ -9,7 +9,7 @@ body:
         没有这些信息通常无法复现。
 
         如果是**安全漏洞**，请不要在这里提交，改用
-        [私密报告](https://github.com/xumidcm/Flue/security/advisories/new)。
+        [私密报告](https://github.com/xumidcm/Flue-next/security/advisories/new)。
 
   - type: input
     id: version
