@@ -1,0 +1,36 @@
+name: 功能建议
+description: 新功能、交互改进或体验建议
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        请先搜索一下现有 issue，避免重复。描述得越具体越好 —— "希望更好用" 很难落地，
+        "副一屏上滑超过一半才触发，之前 1/3 就够了" 就能直接改。
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: 你遇到的问题
+      description: 现在的行为是什么，为什么让你不舒服
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: 你希望的样子
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: 你考虑过的替代方案（可选）
+      description: 其他手表 launcher 是怎么做的，或者你为什么排除了别的做法
+
+  - type: input
+    id: device
+    attributes:
+      label: 设备与系统（可选）
+      placeholder: OPPO Watch X，Wear OS 4
