@@ -91,20 +91,18 @@ class WatchFaceCardSelectorContractTest {
     }
 
     @Test
-    fun `selector always renders a fading dot window instead of a page count`() {
+    fun `selector renders page count synchronized with current page`() {
         val selector = source("com/example/wlauncher/ui/home/WatchFaceCardSelector.kt")
 
-        assertTrue(selector.contains("watchFacePageIndicators("))
-        assertTrue(selector.contains("indicator.alpha"))
-        assertFalse(selector.contains("items.size > 9"))
-        assertFalse(selector.contains("\${pagerState.currentPage + 1} / \${items.size}"))
+        assertTrue(selector.contains("\${pagerState.currentPage + 1} / \${items.size}"))
     }
 
     @Test
-    fun `selector lifts bottom actions above the original baseline`() {
+    fun `selector centers page counter and balances bottom actions`() {
         val selector = source("com/example/wlauncher/ui/home/WatchFaceCardSelector.kt")
 
-        assertTrue(selector.contains("offset(y = (-8).dp)"))
+        assertTrue(selector.contains("textAlign = TextAlign.Center"))
+        assertTrue(selector.contains("Arrangement.spacedBy(10.dp, Alignment.CenterHorizontally)"))
     }
 
     private fun source(relative: String): String {

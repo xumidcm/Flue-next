@@ -68,6 +68,36 @@ class NativeAppListView @JvmOverloads constructor(
     private val contentVersionGate = NativeAppListContentVersionGate()
     private var currentConfig =
         NativeAppListResolvedConfig.from(NativeAppListConfig())
+    private var lastSubmittedConfig: NativeAppListConfig? = null
+    private var transitionRasterCacheRequested = false
+
+    /** Cache GPU rasterization during a parent transform; real child changes still invalidate it. */
+    fun setTransitionRasterCacheEnabled(enabled: Boolean) {
+        transitionRasterCacheRequested = enabled && !released
+        updateTransitionRasterCache()
+    }
+
+    private fun updateTransitionRasterCache() {
+        val cache = transitionRasterCacheRequested && !released && isAttachedToWindow &&
+            isShown && windowVisibility == VISIBLE
+        val target = if (cache) LAYER_TYPE_HARDWARE else LAYER_TYPE_NONE
+        if (layerType != target) setLayerType(target, null)
+    }
+
+    override fun onAttachedToWindow() {
+        super.onAttachedToWindow()
+        updateTransitionRasterCache()
+    }
+
+    override fun onVisibilityChanged(changedView: View, visibility: Int) {
+        super.onVisibilityChanged(changedView, visibility)
+        updateTransitionRasterCache()
+    }
+
+    override fun onWindowVisibilityChanged(visibility: Int) {
+        super.onWindowVisibilityChanged(visibility)
+        updateTransitionRasterCache()
+    }
     private val nativeAdapter = NativeAppListAdapter(
         commandSink = ::dispatchCommand,
         initialConfig = currentConfig,
@@ -119,6 +149,13 @@ class NativeAppListView @JvmOverloads constructor(
         }
 
         override fun onScrollStateChanged(recyclerView: RecyclerView, newState: Int) {
+            if (newState == SCROLL_STATE_IDLE) {
+                com.flue.launcher.diagnostics.TransitionPerformance.endScene(
+                    com.flue.launcher.diagnostics.TransitionPerformance.Scene.SCROLL,
+                )
+            } else {
+                com.flue.launcher.diagnostics.TransitionPerformance.markScroll()
+            }
             removeCallbacks(restoreMotionBlur)
             if (newState != SCROLL_STATE_DRAGGING) clearGlidePressed()
             if (newState == SCROLL_STATE_IDLE) {
@@ -366,6 +403,8 @@ class NativeAppListView @JvmOverloads constructor(
     }
 
     override fun onLayout(changed: Boolean, left: Int, top: Int, right: Int, bottom: Int) {
+        val timing = com.flue.launcher.diagnostics.TransitionPerformance.start()
+        try {
         springEdgeEffects.updateViewport(bottom - top)
         updateViewportPadding(bottom - top)
         super.onLayout(changed, left, top, right, bottom)
@@ -373,6 +412,11 @@ class NativeAppListView @JvmOverloads constructor(
             dragHost.updateDrag(draggedPointerX, draggedPointerY)
         }
         applyAttachedChildVisuals()
+        } finally {
+            com.flue.launcher.diagnostics.TransitionPerformance.finish(
+                com.flue.launcher.diagnostics.TransitionPerformance.Stage.NATIVE_LAYOUT, timing,
+            )
+        }
     }
 
     override fun onSizeChanged(width: Int, height: Int, oldWidth: Int, oldHeight: Int) {
@@ -389,6 +433,8 @@ class NativeAppListView @JvmOverloads constructor(
     }
 
     override fun dispatchDraw(canvas: Canvas) {
+        val timing = com.flue.launcher.diagnostics.TransitionPerformance.start()
+        try {
         super.dispatchDraw(canvas)
         drawEdgeFadeMask(canvas)
         // 指示器画在遮罩**之后**：遮罩是贴着上下边缘的渐变，而条的两端正好伸进那两条带子，
@@ -398,6 +444,11 @@ class NativeAppListView @JvmOverloads constructor(
         // `drawEdgeFadeMaskInNativeView = false`），所以这个顺序只在遮罩被切回视图内时
         // 才真正生效；仍然按正确顺序摆着，免得哪天切回来又要重新踩一遍。
         drawScrollIndicator(canvas)
+        } finally {
+            com.flue.launcher.diagnostics.TransitionPerformance.finish(
+                com.flue.launcher.diagnostics.TransitionPerformance.Stage.NATIVE_DRAW, timing,
+            )
+        }
     }
 
     private fun drawEdgeFadeMask(canvas: Canvas) {
@@ -656,6 +707,7 @@ class NativeAppListView @JvmOverloads constructor(
     }
 
     override fun onDetachedFromWindow() {
+        if (layerType != LAYER_TYPE_NONE) setLayerType(LAYER_TYPE_NONE, null)
         // A synchronous owner update can detach the list before the folder
         // dispatch completion returns. Never leave rows blank across a later
         // re-attach; the stable-key guard prevents touching a recycled View.
@@ -1082,6 +1134,10 @@ class NativeAppListView @JvmOverloads constructor(
 
     fun setConfig(config: NativeAppListConfig) {
         if (released) return
+        // Compose can resubmit the same immutable inputs on an unrelated update.
+        // Skip normalization/allocation before touching row or layout state.
+        if (lastSubmittedConfig == config) return
+        lastSubmittedConfig = config
         val next = NativeAppListResolvedConfig.from(config)
         if (currentConfig.value == next.value) return
         val previous = currentConfig.value
@@ -1239,6 +1295,7 @@ class NativeAppListView @JvmOverloads constructor(
     }
 
     fun release() {
+        setTransitionRasterCacheEnabled(false)
         if (released) return
         completePendingFolderRemovalVisuals(accepted = false)
         cancelActiveDrag()
@@ -2500,7 +2557,14 @@ class NativeAppListView @JvmOverloads constructor(
             activeLayoutStrategy.semanticKey == LinearNativeAppListLayoutStrategy.semanticKey &&
             currentConfig.value.centerEdgeItems
         ) {
-            ((viewportHeight - currentConfig.value.rowHeightPx) / 2).coerceAtLeast(0)
+            if (currentConfig.value.edgeAlignEnabled) {
+                // 贴边对齐：LIST 不走几何接口（用 LinearLayoutManager 的
+                // paddingTop 做首末留白），所以这里直接把半屏留白换成一条贴边留白。
+                // 滚动位置 0 就是内容顶部 —— 天然首行贴顶、末行贴底，不需要再算边界。
+                currentConfig.value.edgeAlignPaddingPx.roundToInt().coerceAtLeast(0)
+            } else {
+                ((viewportHeight - currentConfig.value.rowHeightPx) / 2).coerceAtLeast(0)
+            }
         } else {
             0
         }
@@ -2697,7 +2761,14 @@ private fun hasDifferentLayoutGeometry(
         current.denseGridMinimumItemWidthPx != next.denseGridMinimumItemWidthPx ||
         current.denseGridMinimumItemHeightPx != next.denseGridMinimumItemHeightPx ||
         current.denseGridMinimumVerticalPaddingPx != next.denseGridMinimumVerticalPaddingPx ||
-        current.centerEdgeItems != next.centerEdgeItems
+        current.centerEdgeItems != next.centerEdgeItems ||
+        current.edgeAlignEnabled != next.edgeAlignEnabled ||
+        current.edgeAlignPaddingPx != next.edgeAlignPaddingPx ||
+        ((current.edgeAlignEnabled || next.edgeAlignEnabled) &&
+            next.presentation != NativeAppListPresentation.LINEAR &&
+            (current.edgeVisibilityKey() != next.edgeVisibilityKey() ||
+                current.flowCrescentBulgeFraction != next.flowCrescentBulgeFraction ||
+                current.flowCrescentDirection != next.flowCrescentDirection))
 
 private fun Int.withAlphaFraction(alpha: Float): Int =
     (this and 0x00ffffff) or ((alpha.coerceIn(0f, 1f) * 255f).roundToInt() shl 24)

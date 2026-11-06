@@ -9,7 +9,7 @@
     <string name="settings_title">Launcher Settings</string>
     <string name="internal_watchface_config_title">Built-in Watch Face Settings</string>
     <string name="flue_accessibility_label">Flue Accessibility Control</string>
-    <string name="flue_accessibility_description">This permission is used only to control double-tap screen lock and open power options. Flue does not connect to the internet and does not collect any user data.</string>
+    <string name="flue_accessibility_description">This permission is used only to control double-tap screen lock and open power options. It cannot read on-screen content and does not collect input.</string>
     <string name="flue_device_admin_description">On Android 8.1, this permission is used only for double-tap screen lock. It cannot erase device data or change the lock-screen password.</string>
 
     <!-- General -->
@@ -54,6 +54,9 @@
     <string name="settings_scroll_indicator">Scroll Indicator</string>
     <string name="settings_scroll_indicator_on">Show scroll progress along the right edge; curved on round screens</string>
     <string name="settings_scroll_indicator_off">Hide the scroll progress indicator</string>
+    <string name="settings_app_list_edge_align">App List Edge Align</string>
+    <string name="settings_app_list_edge_align_on">Move the first and last rows toward the edges, with room to stay visible on your screen</string>
+    <string name="settings_app_list_edge_align_off">First and last rows align to the screen centre</string>
     <string name="settings_md3_top_fisheye">MD3 Top Fisheye</string>
     <string name="settings_md3_top_fisheye_sub">Only affects icons above center in the grid layout</string>
     <string name="settings_fisheye_strength">Shrink Amount</string>
@@ -340,6 +343,7 @@
     <string name="search_d_folders">Drag icons together to create a folder</string>
     <string name="search_d_launch_mask">Launch overlay follows watch face colors</string>
     <string name="search_d_row_bg">Row background in list mode</string>
+    <string name="search_d_app_list_edge_align">Pin the first and last rows to the screen edges</string>
     <string name="search_d_performance">Animation toggles and icon quality</string>
     <string name="search_d_stagger">Rows enter one after another</string>
     <string name="search_d_legacy">Pre-WatchOS three-stage animation</string>
@@ -558,7 +562,7 @@
     <string name="about_author_name">柚子柚子皮</string>
     <string name="about_community_group_fmt">Group: %s</string>
     <string name="about_community_groups_fmt">Group 1: %1$s · Group 2: %2$s</string>
-    <string name="about_pick_group_title">Which group?</string>
+    <string name="about_pick_group_title">Copy the number, then search in QQ</string>
     <string name="about_pick_group_1_fmt">Group 1 · %s</string>
     <string name="about_pick_group_2_fmt">Group 2 · %s</string>
     <string name="about_join_group">Join the community for updates</string>
@@ -566,6 +570,7 @@
     <string name="about_donate_methods">WeChat / Alipay</string>
     <string name="about_open_source">Open-source projects</string>
     <string name="about_qq_copy_fmt">QQ copied: %s</string>
+    <string name="about_group_copy_fmt">Group number copied: %s — search for it in QQ to join</string>
 
     <!-- Language AI disclaimer -->
     <string name="settings_lang_ai_disclaimer_en">English and Japanese translations are AI-generated and may not be fully accurate.</string>
@@ -954,7 +959,7 @@
     <string name="watch_editor_panel_layers">Layers</string>
     <string name="watch_editor_panel_properties">Properties</string>
     <string name="watch_editor_panel_watch">Watch</string>
-    <string name="watch_editor_panel_agent">AI Generate</string>
+    <string name="watch_editor_panel_agent">AI</string>
     <string name="settings_agent_title">Agent settings</string>
     <string name="settings_agent_subtitle">Providers, models, workspaces and tool approvals</string>
     <string name="watch_editor_error_decode_image">Couldn\'t decode the image</string>
@@ -1730,4 +1735,6 @@
     <string name="watch_store_login_required">Sign in to use this</string>
     <string name="watch_store_web_view_outdated_fmt">The built-in browser is too old (%1$s); opened in the system browser instead</string>
     <string name="watch_store_web_view_render_failed">The web store failed to load; opened in the system browser instead</string>
+    <string name="settings_watchface_tap_haptics">Tap vibration</string>
+    <string name="settings_watchface_tap_haptics_sub">Vibrate when tapping interactive buttons on .watch faces</string>
 </resources>

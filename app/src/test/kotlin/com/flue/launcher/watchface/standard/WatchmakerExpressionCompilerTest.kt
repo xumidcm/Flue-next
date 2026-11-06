@@ -7,7 +7,7 @@ import org.junit.Test
 
 /**
  * 阶段 1（导入期表达式编译）的契约测试，对照
- * `plan-Claude/watchface-precompile-and-canvas.md` §五：常量折叠正确性、
+ * `docs/design/watchface-precompile-and-canvas.md` §五：常量折叠正确性、
  * `deps` 集合正确性、引号内 tag 的类型语义、含 `ScopeRef` 不得折成 `Const`。
  *
  * 另外钉住**两条路径的等价性** —— 编译路径是新加的快路，老路径仍在原地兜底。

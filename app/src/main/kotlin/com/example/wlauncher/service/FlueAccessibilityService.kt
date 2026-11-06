@@ -11,6 +11,7 @@ import android.provider.Settings
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityManager
 import com.flue.launcher.launchsession.ForegroundPackageEvidence
+import com.flue.launcher.launchsession.isSystemOverlayPackage
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -37,11 +38,16 @@ class FlueAccessibilityService : AccessibilityService() {
             pendingExternalForegroundEvidence = null
         } else {
             _lastExternalForegroundEvidence.value = null
-            pendingExternalForegroundEvidence = ForegroundPackageEvidence(
-                packageName = observedPackage,
-                observedAtElapsedMs = SystemClock.elapsedRealtime(),
-                sequence = evidenceSequence.incrementAndGet(),
-            )
+            val existing = pendingExternalForegroundEvidence
+            if (existing != null && isSystemOverlayPackage(observedPackage)) {
+                // Keep the existing app evidence instead of overwriting with transient system overlay
+            } else {
+                pendingExternalForegroundEvidence = ForegroundPackageEvidence(
+                    packageName = observedPackage,
+                    observedAtElapsedMs = SystemClock.elapsedRealtime(),
+                    sequence = evidenceSequence.incrementAndGet(),
+                )
+            }
         }
     }
 

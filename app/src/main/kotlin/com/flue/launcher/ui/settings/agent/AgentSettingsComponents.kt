@@ -75,75 +75,38 @@ internal fun AgentSettingsScreen(
     title: String,
     subtitle: String? = null,
     onBack: () -> Unit,
+    state: LazyListState = remember(stateKey) { LazyListState() },
+    listState: LazyListState = state,
     content: LazyListScope.() -> Unit,
 ) {
     val style = LauncherTheme.style
-    val state = remember(stateKey) { LazyListState() }
-    val reveal = remember(stateKey) { Animatable(0f) }
-    LaunchedEffect(stateKey) {
-        state.scrollToItem(0)
-        reveal.animateTo(1f, tween(240))
-    }
     val safe = WindowInsets.safeDrawing.asPaddingValues()
     val roundScreen = isFlueScreenRound()
-    Surface(
-        modifier = Modifier.fillMaxSize(),
-        color = style.screenBackground,
-        contentColor = style.bodyColor,
-    ) {
+
+    LaunchedEffect(stateKey) {
+        state.scrollToItem(0)
+    }
+
+    com.flue.launcher.ui.settings.CollapsibleHeaderScaffold(
+        title = title,
+        subtitle = subtitle,
+        onBack = onBack,
+        listState = listState,
+        isRound = roundScreen,
+    ) { headerPlaceholderHeight ->
         LazyColumn(
-            state = state,
+            state = listState,
             modifier = Modifier
                 .fillMaxSize()
-                .graphicsLayer {
-                    alpha = reveal.value
-                    translationY = (1f - reveal.value) * 14.dp.toPx()
-                }
-                .flueOverscroll(state),
+                .flueOverscroll(listState),
             contentPadding = PaddingValues(
                 start = if (roundScreen) 26.dp else 16.dp,
                 end = if (roundScreen) 26.dp else 16.dp,
-                top = safe.calculateTopPadding() + if (roundScreen) 24.dp else 12.dp,
+                top = headerPlaceholderHeight,
                 bottom = safe.calculateBottomPadding() + if (roundScreen) 34.dp else 24.dp,
             ),
             verticalArrangement = Arrangement.spacedBy(if (style.uiStyle == UiStyle.APPLE_WATCH) 16.dp else 12.dp),
         ) {
-            item(key = "agent_settings_header") {
-                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(12.dp),
-                    ) {
-                        AgentSettingsBackButton(onBack)
-                        if (style.uiStyle == UiStyle.MIUIX) Text(
-                            text = title,
-                            modifier = Modifier.weight(1f),
-                            color = style.titleColor,
-                            fontSize = 22.sp,
-                            fontWeight = FontWeight.Bold,
-                            maxLines = 2,
-                        )
-                    }
-                    if (style.uiStyle != UiStyle.MIUIX) Text(
-                        text = title,
-                        modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 6.dp),
-                        color = if (style.uiStyle == UiStyle.APPLE_WATCH) style.accentColor else style.titleColor,
-                        fontSize = if (style.uiStyle == UiStyle.APPLE_WATCH) 28.sp else 30.sp,
-                        fontWeight = if (style.uiStyle == UiStyle.APPLE_WATCH) FontWeight.Bold else FontWeight.Medium,
-                        textAlign = if (roundScreen || style.uiStyle == UiStyle.APPLE_WATCH) TextAlign.Center else TextAlign.Start,
-                    )
-                    if (!subtitle.isNullOrBlank()) {
-                        Text(
-                            text = subtitle,
-                            color = style.secondaryTextColor,
-                            style = MaterialTheme.typography.bodySmall,
-                            modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp),
-                            textAlign = if (roundScreen) TextAlign.Center else TextAlign.Start,
-                        )
-                    }
-                }
-            }
             content()
         }
     }

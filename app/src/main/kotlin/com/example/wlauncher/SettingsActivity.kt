@@ -88,6 +88,8 @@ import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.offset
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.lazy.LazyItemScope
@@ -103,6 +105,8 @@ import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Refresh
 import com.flue.launcher.ui.style.FlueAlertDialog
 import com.flue.launcher.ui.style.FlueButton
+import com.flue.launcher.ui.style.FlueDialogButtons
+import com.flue.launcher.ui.style.FlueFullScreenOverlay
 import com.flue.launcher.ui.style.FlueSingleChoiceDialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -149,6 +153,7 @@ import androidx.compose.ui.zIndex
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.findRootCoordinates
 import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
@@ -309,8 +314,6 @@ private const val COMMUNITY_GROUP_2_NUMBER = "318567840"
 private const val AUTHOR_QQ_NUMBER = "3513903055"
 private const val AUTHOR_BILIBILI_URL = "https://m.bilibili.com/space/1609437970"
 private const val DIAGNOSTIC_LOG_DURATION_MS = 5 * 60 * 1000L
-private const val COMMUNITY_GROUP_URL = "https://qun.qq.com/universal-share/share?ac=1&authKey=5CJC0tNLWsy3YWzGlPbqt%2F5kv%2BYZuJ8y8IVj%2B1UnIeLyR2DWR6QjWtM%2B4HXxH%2BKJ&busi_data=eyJncm91cENvZGUiOiIxMDk3MTYyMzEzIiwidG9rZW4iOiJlMGFBc1VpRXRROE1mS3J5SHgxRjFudmxXY0FuSnRQd2hOWWl6WllFMmlxNTErNWdadXJ5U1ozMmdzUSszaGNYIiwidWluIjoiMzUxMzkwMzA1NSJ9&data=YK52b80xUVwmcLWmSneKQMdVZodE4vTpsqmSb60ykXudbVCfa6AskMHxvqjhAjervNeE4exll-kQw5w-EifYOg&svctype=4&tempid=h5_group_info"
-private const val COMMUNITY_GROUP_2_URL = "https://qun.qq.com/universal-share/share?ac=1&authKey=spcEQr%2BR5%2FAmPOgZLwr7KBY8lUvLLbmtdM5S3R0%2B5XQxXstNLi9Mva0iYjSEb9EF&busi_data=eyJncm91cENvZGUiOiIzMTg1Njc4NDAiLCJ0b2tlbiI6IklKWS9Oem5rTnprYzNGRk11b2Y2enJsYndmcnBSbkxKR3VCTG5iZU5hT002dUgwY2UrVWtjNko1eENqQUc2eVYiLCJ1aW4iOiIzNTEzOTAzMDU1In0%3D&data=BznFA0OAqJXrk3P5fs7aS_sBabcZjAqFIwZhPfvGtg2uwsc1DBW5f13txNH0dG_mOJBpV3N40r1Bw6vL3wBr7g&svctype=4&tempid=h5_group_info"
 const val EXTRA_SETTINGS_DESTINATION = "settings_destination"
 const val EXTRA_SETTINGS_RETURN_TO_FACE = "settings_return_to_face"
 const val SETTINGS_DESTINATION_WATCH_FACES = "watch_faces"
@@ -624,6 +627,7 @@ private fun SettingsRootScreen(
     val appListFoldersEnabled by vm.appListFoldersEnabled.collectAsStateWithLifecycle()
     val appListScrollIndicatorEnabled by
         vm.appListScrollIndicatorEnabled.collectAsStateWithLifecycle()
+    val appListEdgeAlignEnabled by vm.appListEdgeAlignEnabled.collectAsStateWithLifecycle()
     val musicTextSwitchAnimation by vm.musicTextSwitchAnimation.collectAsStateWithLifecycle()
     val iconShadowEnabled by vm.iconShadowEnabled.collectAsStateWithLifecycle()
     val appListReturnShrinkEnabled by vm.appListReturnShrinkEnabled.collectAsStateWithLifecycle()
@@ -685,6 +689,7 @@ private fun SettingsRootScreen(
     val flueScreenRound = isFlueScreenRound()
     val showNotification by vm.showNotification.collectAsStateWithLifecycle()
     val showOngoingNotifications by vm.showOngoingNotifications.collectAsStateWithLifecycle()
+    val watchFaceTapHapticsEnabled by vm.watchFaceTapHapticsEnabled.collectAsStateWithLifecycle()
     val rotaryHapticsEnabled by vm.rotaryHapticsEnabled.collectAsStateWithLifecycle()
     val showWidgetPage by vm.showWidgetPage.collectAsStateWithLifecycle()
     val glassHighlightEnabled by vm.glassHighlightEnabled.collectAsStateWithLifecycle()
@@ -2232,6 +2237,16 @@ private fun SettingsRootScreen(
                         groupPosition = position,
                     )
                 }
+                row("watchface_tap_haptics") { position ->
+                    SettingsSwitchRow(
+                        title = stringResource(R.string.settings_watchface_tap_haptics),
+                        subtitle = stringResource(R.string.settings_watchface_tap_haptics_sub),
+                        checked = watchFaceTapHapticsEnabled,
+                        onToggle = vm::setWatchFaceTapHapticsEnabled,
+                        scale = itemFisheye(listState, "watchface_tap_haptics", screenCenterY, screenHeightPx),
+                        groupPosition = position,
+                    )
+                }
             }
             if (selectedWatchFace.isWatchmaker) {
                 // 画布调节只留这一个入口：预设、四条滑杆、跟随开关、重置全都搬进
@@ -3316,6 +3331,20 @@ private fun SettingsRootScreen(
                         checked = appListScrollIndicatorEnabled,
                         onToggle = vm::setAppListScrollIndicatorEnabled,
                         scale = itemFisheye(listState, "app_list_scroll_indicator", screenCenterY, screenHeightPx),
+                        groupPosition = position,
+                    )
+                }
+                row("app_list_edge_align") { position ->
+                    SettingsSwitchRow(
+                        title = stringResource(R.string.settings_app_list_edge_align),
+                        subtitle = if (appListEdgeAlignEnabled) {
+                            stringResource(R.string.settings_app_list_edge_align_on)
+                        } else {
+                            stringResource(R.string.settings_app_list_edge_align_off)
+                        },
+                        checked = appListEdgeAlignEnabled,
+                        onToggle = vm::setAppListEdgeAlignEnabled,
+                        scale = itemFisheye(listState, "app_list_edge_align", screenCenterY, screenHeightPx),
                         groupPosition = position,
                     )
                 }
@@ -5738,47 +5767,147 @@ private fun SettingsPageScaffold(
         ) {
             val spacedScope = com.flue.launcher.ui.style.FlueSettingsListScope(this, itemSpacing)
             spacedScope.item(SETTINGS_HEADER_ITEM_KEY) {
-                // 顶栏整体（返回按钮 + 大标题）吃弦宽缩放。缩放施加在最外层 Box，
-                // 里面的对齐/内边距全是静态值，不会被卷进布局反馈环。
-                val headerScale = itemFisheye(
-                    listState,
-                    SETTINGS_HEADER_ITEM_KEY,
-                    screenCenterY,
-                    screenHeightPx,
-                )
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .chordScaled(headerScale)
-                        .padding(bottom = 8.dp)
-                ) {
-                    HeaderBackButton(onClick = onBack)
-                    Text(
-                        text = title,
-                        color = launcherStyle.accentColor,
-                        fontSize = 26.sp,
-                        fontWeight = FontWeight.Bold,
-                        textAlign = if (settingsRoundScreen) TextAlign.Center else TextAlign.Start,
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = if (settingsRoundScreen) {
-                            Modifier
-                                .align(Alignment.Center)
-                                .fillMaxWidth()
-                                .padding(horizontal = 50.dp)
-                        } else {
-                            Modifier
-                                .align(Alignment.CenterStart)
-                                .fillMaxWidth()
-                                .padding(start = 54.dp, end = 16.dp)
-                        },
-                    )
-                }
+                // 占位 Spacer：保证滚动测量与跳转索引一致，真实标题由顶部浮动层随滚动缩放移动
+                Spacer(modifier = Modifier.fillMaxWidth().height(if (settingsRoundScreen) 56.dp else 48.dp))
             }
             with(spacedScope) {
                 content(listState, screenCenterY, screenHeightPx, emptySet())
             }
         }
+        }
+
+        // 统一可折叠标题浮动层：同一组元素随滚动变换，紧凑态 18sp，返回键视觉 80%，点击区 48dp
+        val headerPlaceholderHeight = if (settingsRoundScreen) 56.dp else 48.dp
+        val collapseDistancePx = with(density) { headerPlaceholderHeight.toPx() }
+        val collapseProgress by remember(listState) {
+            derivedStateOf {
+                if (listState.firstVisibleItemIndex > 0) 1f
+                else (listState.firstVisibleItemScrollOffset / collapseDistancePx).coerceIn(0f, 1f)
+            }
+        }
+        val topSafeInset = safeDrawingPadding.calculateTopPadding()
+        val gradientHeight = topSafeInset + 64.dp
+        val gradientAlpha = (0.75f + 0.25f * collapseProgress).coerceIn(0f, 1f)
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(gradientHeight)
+                .background(
+                    androidx.compose.ui.graphics.Brush.verticalGradient(
+                        colors = listOf(
+                            launcherStyle.screenBackground.copy(alpha = gradientAlpha),
+                            launcherStyle.screenBackground.copy(alpha = gradientAlpha * 0.9f),
+                            launcherStyle.screenBackground.copy(alpha = gradientAlpha * 0.4f),
+                            androidx.compose.ui.graphics.Color.Transparent,
+                        ),
+                    ),
+                ),
+        )
+
+        val compactTop = if (settingsRoundScreen) 6.dp else topSafeInset + 4.dp
+        val expandedTop = if (settingsRoundScreen) 22.dp else topSafeInset + 16.dp
+        val currentTop = androidx.compose.ui.unit.lerp(expandedTop, compactTop, collapseProgress)
+        val largeTitleSp = if (settingsRoundScreen) 24f else 26f
+        val compactTitleSp = 18f
+        val titleScale = 1f + (largeTitleSp / compactTitleSp - 1f) * (1f - collapseProgress)
+        val backVisualScale = 1f - 0.20f * collapseProgress
+        val horizontalSafeInset = if (settingsRoundScreen) 24.dp else 16.dp
+
+        // 圆屏展开态标题必须回到屏幕中心（老师报的「标题跑到左边」）。这里从 Row
+        // 换成 Box：返回键降级为左侧覆盖层，标题独立占满整行、两侧留同样宽度 ——
+        // 只有标题的可用框关于屏幕中线**对称**，TextAlign.Center 才真的落在表盘中心。
+        // 之前用 Row + weight(1f)，标题框被返回键挤到右边，Center 也会整体偏右。
+        //
+        // 收缩要「丝滑收进左上角」：TextAlign 是离散枚举，没法按进度插值，用阈值
+        // 切换会在滚动中点跳一下。所以文字始终保持 Center，靠 translationX 把
+        // 「居中位置 → 左对齐位置」这条位移按 collapseProgress 连续插值。
+        // 位移量 = (可用宽度 - 文字宽度) / 2，两个宽都由 onSizeChanged 实测。
+        var headerInnerWidthPx by remember { mutableFloatStateOf(0f) }
+        var headerTitleWidthPx by remember { mutableFloatStateOf(0f) }
+        val titleDriftPx = if (settingsRoundScreen) {
+            ((headerInnerWidthPx - headerTitleWidthPx) / 2f).coerceAtLeast(0f)
+        } else {
+            0f
+        }
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .offset { androidx.compose.ui.unit.IntOffset(0, with(density) { currentTop.toPx() }.toInt()) }
+                .padding(horizontal = horizontalSafeInset + leftSafeInset),
+        ) {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.CenterStart)
+                    .size(48.dp)
+                    .clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null,
+                        onClick = onBack,
+                    ),
+                contentAlignment = Alignment.Center,
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(40.dp)
+                        .graphicsLayer {
+                            scaleX = backVisualScale
+                            scaleY = backVisualScale
+                        }
+                        .clip(CircleShape)
+                        .background(launcherStyle.topBarChipColor),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(
+                        OfficialMiuixIcons.OfficialBack,
+                        contentDescription = stringResource(R.string.common_back),
+                        tint = launcherStyle.topBarTextColor,
+                        modifier = Modifier.size(20.dp),
+                    )
+                }
+            }
+
+            // 标题用「外层 Box 居中 + 内层 Text 自身宽度」两段测量：
+            // headerInnerWidthPx 是去掉返回键占位后**可用的整行宽度**，
+            // headerTitleWidthPx 是文字**实际渲染宽度**。两者之差的一半，正好是
+            // 「居中位置」到「左对齐位置」的距离，按 collapseProgress 线性插值后
+            // 写成 translationX，就是老师要的平滑收进左上角。
+            Box(
+                modifier = Modifier
+                    // Box 不再提供 Row 的 CenterVertically，这里显式垂直居中，
+                    // 否则标题会贴到 48dp 返回键的顶边。
+                    .align(if (settingsRoundScreen) Alignment.Center else Alignment.CenterStart)
+                    .fillMaxWidth()
+                    // 左侧 56dp = 返回键 48dp + 原来的 8dp 间距，别让文字压到按钮上。
+                    // 圆屏右侧再留同样宽度，标题框才关于屏幕中线对称。
+                    .padding(
+                        start = 56.dp,
+                        end = if (settingsRoundScreen) 56.dp else 0.dp,
+                    )
+                    .onSizeChanged { headerInnerWidthPx = it.width.toFloat() },
+                contentAlignment = if (settingsRoundScreen) Alignment.Center else Alignment.CenterStart,
+            ) {
+                Text(
+                    text = title,
+                    color = launcherStyle.accentColor,
+                    fontSize = 18.sp,
+                    fontWeight = FontWeight.Bold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier
+                        .onSizeChanged { headerTitleWidthPx = it.width.toFloat() }
+                        .graphicsLayer {
+                            translationX = -titleDriftPx * collapseProgress
+                            scaleX = titleScale
+                            scaleY = titleScale
+                            // 展开态从中心缩放（贴合居中观感），收缩态改为从左边缩放
+                            // （贴合左上角紧凑观感）。同样按进度插值。
+                            transformOrigin = androidx.compose.ui.graphics.TransformOrigin(
+                                if (settingsRoundScreen) 0.5f - 0.5f * collapseProgress else 0f,
+                                0.5f,
+                            )
+                        },
+                )
+            }
         }
     }
 }
@@ -6669,23 +6798,29 @@ private fun AboutCard(
     // 两个交流群的选择弹窗。做成弹窗而不是并排两张卡：关于页在 230dp 圆屏上已经很挤，
     // 多一张卡就要多滚一屏，而「进哪个群」是个二选一的一次性决定，弹窗更合适。
     var groupPickerVisible by remember { mutableStateOf(false) }
-    fun openGroup(url: String) {
+    // QQ 的邀请链接带一次性 authKey，发到群里或用久了就会失效，所以只留群号：
+    // 点一下复制，用户自己在 QQ 里搜索。和作者 QQ 用的是同一套交互。
+    fun copyGroupNumber(number: String) {
         groupPickerVisible = false
-        runCatching {
-            context.startActivity(Intent(Intent.ACTION_VIEW, android.net.Uri.parse(url)))
-        }
+        val clipboard = context.getSystemService(ClipboardManager::class.java)
+        clipboard?.setPrimaryClip(ClipData.newPlainText("QQ", number))
+        Toast.makeText(
+            context,
+            context.getString(R.string.about_group_copy_fmt, number),
+            Toast.LENGTH_SHORT,
+        ).show()
     }
     if (groupPickerVisible) {
         FlueAlertDialog(
             onDismissRequest = { groupPickerVisible = false },
             title = { Text(stringResource(R.string.about_pick_group_title)) },
             confirmButton = {
-                TextButton(onClick = { openGroup(COMMUNITY_GROUP_URL) }) {
+                TextButton(onClick = { copyGroupNumber(COMMUNITY_GROUP_NUMBER) }) {
                     Text(stringResource(R.string.about_pick_group_1_fmt, COMMUNITY_GROUP_NUMBER))
                 }
             },
             dismissButton = {
-                TextButton(onClick = { openGroup(COMMUNITY_GROUP_2_URL) }) {
+                TextButton(onClick = { copyGroupNumber(COMMUNITY_GROUP_2_NUMBER) }) {
                     Text(stringResource(R.string.about_pick_group_2_fmt, COMMUNITY_GROUP_2_NUMBER))
                 }
             },
@@ -7089,117 +7224,132 @@ private fun OverlayMaskCornerRadiusDialog(
     var localRadiusDp by remember(currentRadiusDp) {
         mutableFloatStateOf(currentRadiusDp.toFloat())
     }
-    // 全屏提示不再用外层卡片表达圆角，因此用独立样块实时预览滑杆值。
     val previewRadiusDp = localRadiusDp
         .coerceIn(0f, MAX_OVERLAY_MASK_CORNER_RADIUS_DP.toFloat())
         .dp
-    val dialogShape = RoundedCornerShape(previewRadiusDp)
     val interactionSource = remember { MutableInteractionSource() }
 
-    FlueAlertDialog(
+    // Non-scrolling sheet: scrollableContent = false ensures the horizontal slider works.
+    FlueFullScreenOverlay(
         onDismissRequest = onDismiss,
-        title = stringResource(R.string.dialog_overlay_mask_corner_title),
-        text = stringResource(R.string.dialog_overlay_mask_corner_subtitle),
-        confirmText = stringResource(R.string.action_done),
-        // This compact sheet has no scrollable body. Leaving a vertical-scroll
-        // ancestor here lets it win the pointer sequence from MIUIX's horizontal slider.
-        scrollableContent = false,
-        onConfirm = {
-            onSave(normalizeOverlayMaskCornerRadiusDp(localRadiusDp.roundToInt()))
-        },
     ) {
         Box(
-            modifier = Modifier
-                .size(76.dp)
-                .clip(dialogShape)
-                .background(dialogOnSurface.copy(alpha = 0.08f))
-                .border(2.dp, launcherStyle.accentColor.copy(alpha = 0.72f), dialogShape),
+            modifier = Modifier.fillMaxSize(),
+            contentAlignment = Alignment.Center,
         ) {
+            // 实时展示调整的圆角大小：全屏幕边缘的蓝色高亮边框指示线
             Box(
                 modifier = Modifier
-                    .size(40.dp)
-                    .align(Alignment.TopStart)
-                    .clip(RoundedCornerShape(12.dp))
-                    .background(launcherStyle.accentColor),
+                    .fillMaxSize()
+                    .border(
+                        width = 3.dp,
+                        color = Color(0xFF2196F3),
+                        shape = RoundedCornerShape(previewRadiusDp),
+                    ),
             )
-            Box(
+
+            // 中央圆角设置调整卡片
+            Column(
                 modifier = Modifier
-                    .size(40.dp)
-                    .align(Alignment.BottomEnd)
-                    .clip(RoundedCornerShape(12.dp))
-                    .background(launcherStyle.accentColor)
-                    .border(3.dp, dialogSurface, RoundedCornerShape(12.dp)),
-            )
-        }
-        Spacer(Modifier.height(20.dp))
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .clip(launcherStyle.compactShape)
-                .background(dialogOnSurface.copy(alpha = 0.055f))
-                .padding(horizontal = 8.dp, vertical = 7.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Box(
-                modifier = Modifier
-                    .size(40.dp)
-                    .clip(CircleShape)
-                    .clickable(
-                        interactionSource = interactionSource,
-                        indication = null,
-                    ) {
-                        localRadiusDp = (localRadiusDp - 1f).coerceAtLeast(0f)
-                    },
-                contentAlignment = Alignment.Center,
+                    .fillMaxWidth()
+                    .padding(horizontal = 24.dp)
+                    .clip(launcherStyle.cardShape)
+                    .background(dialogSurface)
+                    .padding(horizontal = 16.dp, vertical = 18.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
             ) {
-                Text("−", color = dialogOnSurfaceVariant, fontSize = 30.sp)
-            }
-            // 弹窗里的滑块也走抽象入口（A8 的要求）：Apple 档就是 Kyant 简化版，
-            // 颜色从风格令牌取，不再在这里写死。
-            FlueSlider(
-                value = localRadiusDp,
-                onValueChange = {
-                    localRadiusDp = it.coerceIn(
-                        0f,
-                        MAX_OVERLAY_MASK_CORNER_RADIUS_DP.toFloat(),
+                Text(
+                    text = stringResource(R.string.dialog_overlay_mask_corner_title),
+                    color = dialogOnSurface,
+                    fontSize = 20.sp,
+                    fontWeight = FontWeight.Bold,
+                    textAlign = TextAlign.Center,
+                )
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    text = stringResource(R.string.dialog_overlay_mask_corner_subtitle),
+                    color = dialogOnSurfaceVariant,
+                    fontSize = 13.sp,
+                    textAlign = TextAlign.Center,
+                )
+                Spacer(Modifier.height(16.dp))
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(launcherStyle.compactShape)
+                        .background(dialogOnSurface.copy(alpha = 0.055f))
+                        .padding(horizontal = 8.dp, vertical = 7.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(40.dp)
+                            .clip(CircleShape)
+                            .clickable(
+                                interactionSource = interactionSource,
+                                indication = null,
+                            ) {
+                                localRadiusDp = (localRadiusDp - 1f).coerceAtLeast(0f)
+                            },
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text("−", color = dialogOnSurfaceVariant, fontSize = 30.sp)
+                    }
+                    FlueSlider(
+                        value = localRadiusDp,
+                        onValueChange = {
+                            localRadiusDp = it.coerceIn(
+                                0f,
+                                MAX_OVERLAY_MASK_CORNER_RADIUS_DP.toFloat(),
+                            )
+                        },
+                        valueRange = 0f..MAX_OVERLAY_MASK_CORNER_RADIUS_DP.toFloat(),
+                        modifier = Modifier.weight(1f),
                     )
-                },
-                valueRange = 0f..MAX_OVERLAY_MASK_CORNER_RADIUS_DP.toFloat(),
-                modifier = Modifier.weight(1f),
-            )
-            Box(
-                modifier = Modifier
-                    .size(40.dp)
-                    .clip(CircleShape)
-                    .clickable(
-                        interactionSource = interactionSource,
-                        indication = null,
+                    Box(
+                        modifier = Modifier
+                            .size(40.dp)
+                            .clip(CircleShape)
+                            .clickable(
+                                interactionSource = interactionSource,
+                                indication = null,
+                            ) {
+                                localRadiusDp = (localRadiusDp + 1f)
+                                    .coerceAtMost(MAX_OVERLAY_MASK_CORNER_RADIUS_DP.toFloat())
+                            },
+                        contentAlignment = Alignment.Center,
                     ) {
-                        localRadiusDp = (localRadiusDp + 1f)
-                            .coerceAtMost(MAX_OVERLAY_MASK_CORNER_RADIUS_DP.toFloat())
+                        Text("+", color = dialogOnSurfaceVariant, fontSize = 30.sp)
+                    }
+                }
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    text = stringResource(
+                        R.string.dialog_overlay_mask_corner_value_fmt,
+                        localRadiusDp.roundToInt(),
+                    ),
+                    color = dialogOnSurface,
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    text = stringResource(R.string.dialog_overlay_mask_corner_hint),
+                    color = dialogOnSurfaceVariant,
+                    fontSize = 12.sp,
+                    textAlign = TextAlign.Center,
+                )
+                Spacer(Modifier.height(16.dp))
+                FlueDialogButtons(
+                    confirmText = stringResource(R.string.action_done),
+                    onConfirm = {
+                        onSave(normalizeOverlayMaskCornerRadiusDp(localRadiusDp.roundToInt()))
                     },
-                contentAlignment = Alignment.Center,
-            ) {
-                Text("+", color = dialogOnSurfaceVariant, fontSize = 30.sp)
+                    dismissText = stringResource(R.string.action_cancel),
+                    onDismiss = onDismiss,
+                )
             }
         }
-        Spacer(Modifier.height(8.dp))
-        Text(
-            text = stringResource(
-                R.string.dialog_overlay_mask_corner_value_fmt,
-                localRadiusDp.roundToInt(),
-            ),
-            color = dialogOnSurface,
-            fontSize = 13.sp,
-            fontWeight = FontWeight.SemiBold,
-        )
-        Spacer(Modifier.height(6.dp))
-        Text(
-            text = stringResource(R.string.dialog_overlay_mask_corner_hint),
-            color = dialogOnSurfaceVariant,
-            fontSize = 12.sp,
-            textAlign = TextAlign.Center,
-        )
     }
 }
 
@@ -7888,6 +8038,7 @@ internal fun buildSettingsSearchIndex(context: Context): List<SettingsSearchEntr
     SettingsSearchEntry("DISPLAY_SIZE", "honeycomb_cols", s(R.string.settings_honeycomb_cols), s(R.string.search_d_honeycomb_cols), listOf("fwls", "columns", "lieshu")),
     SettingsSearchEntry("DISPLAY_SIZE", "app_list_scale", s(R.string.settings_app_list_size), s(R.string.search_d_app_list_scale), listOf("lbdx", "app list size")),
     SettingsSearchEntry("DISPLAY_SIZE", "app_list_scroll_indicator", s(R.string.settings_scroll_indicator), s(R.string.settings_scroll_indicator_on), listOf("hdjdzsq", "scroll indicator", "gundong", "jindutiao", "scrollbar")),
+    SettingsSearchEntry("DISPLAY_SIZE", "app_list_edge_align", s(R.string.settings_app_list_edge_align), s(R.string.search_d_app_list_edge_align), listOf("tbdq", "edge align", "kaobian", "shouhang", "tieding", "juzhong")),
     SettingsSearchEntry("DISPLAY_SIZE", "app_list_fisheye", s(R.string.settings_fisheye), s(R.string.search_d_fisheye), listOf("yyxg", "fisheye", "yuyan")),
     SettingsSearchEntry("DISPLAY_SIZE", "app_list_fisheye_range_rows", s(R.string.settings_fisheye_range), s(R.string.search_d_fisheye_range), listOf("yysx", "fisheye range")),
     SettingsSearchEntry("DISPLAY_SIZE", "app_list_fisheye_strength", s(R.string.settings_fisheye_strength), s(R.string.search_d_fisheye_strength), listOf("yyqd", "fisheye strength")),
@@ -7910,6 +8061,7 @@ internal fun buildSettingsSearchIndex(context: Context): List<SettingsSearchEntr
     SettingsSearchEntry("WATCH_FACES", "watchface_import_archive", s(R.string.search_t_watchface_import), s(R.string.search_d_watchface_import), listOf("drbp", "import", "daoru", "watch")),
     SettingsSearchEntry("WATCH_FACES", "watchface_editor_current", s(R.string.settings_watchface_editor_current), s(R.string.search_t_watchface_editor_new), listOf("bjbp", "edit face", "bianji", "editor")),
     SettingsSearchEntry("WATCH_FACES", "watchface_refresh", s(R.string.settings_watchface_refresh), s(R.string.settings_watchface_refresh_sub), listOf("smbp", "rescan", "shuaxin", "refresh")),
+    SettingsSearchEntry("WATCH_FACE_MORE", "watchface_tap_haptics", s(R.string.settings_watchface_tap_haptics), s(R.string.settings_watchface_tap_haptics_sub), listOf("djzd", "zhendong", "tap haptics", "vibration", "振动", "震动")),
     SettingsSearchEntry("WATCH_FACE_MORE", null, s(R.string.search_t_watchface_more), s(R.string.search_d_watchface_more), listOf("bpgd", "xinlv", "riqi", "date")),
     SettingsSearchEntry("WATCH_FACE_MORE", "watchface_long_press_mode", s(R.string.settings_watchface_long_press_mode), s(R.string.settings_watchface_long_press_mode_cards_sub), listOf("chang an", "long press", "cards", "list", "kapian", "liebiao")),
     SettingsSearchEntry("WATCH_FACE_MORE", "watch_weather_header", s(R.string.settings_watch_weather), s(R.string.settings_watch_weather_sub), listOf("tq", "weather", "tianqi")),

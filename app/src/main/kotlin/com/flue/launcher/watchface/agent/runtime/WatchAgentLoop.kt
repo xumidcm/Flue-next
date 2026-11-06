@@ -239,7 +239,8 @@ class WatchAgentLoop(
         null -> null
         is JSONObject, is JSONArray -> value.toString()
         is String, is Number, is Boolean -> value
-        is com.flue.launcher.watchface.agent.tools.WatchAgentImageResult -> mapOf("path" to value.path, "mime_type" to value.image.mimeType, "image_available" to true)
+        is com.flue.launcher.watchface.agent.tools.WatchAgentImageResult -> mapOf("path" to value.path, "source" to value.source, "mime_type" to value.image.mimeType, "image_available" to true)
+        is com.flue.launcher.watchface.agent.workspace.AgentWorkspaceListing -> mapOf("files" to value.files, "warnings" to value.warnings, "truncated" to value.truncated)
         is WatchAgentGeneratedImageResult -> mapOf(
             "path" to value.path, "mime_type" to value.image.mimeType, "image_available" to true,
             "action" to value.action, "format" to value.format, "size" to value.size,

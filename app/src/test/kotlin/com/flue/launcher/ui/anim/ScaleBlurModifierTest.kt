@@ -18,16 +18,30 @@ class ScaleBlurModifierTest {
     }
 
     @Test
-    fun legacyBlurKeepsTheRealFaceEvenWhenACaptureIsAvailable() {
-        for (captured in listOf(false, true)) {
-            assertTrue(
-                shouldDrawLiveBackdropContent(
-                    overlayActive = true,
-                    capturedFrameAvailable = captured,
-                    backend = OverlayBlurBackend.LEGACY,
-                ),
-            )
-        }
+    fun switchingOverlaysRestartsTheSessionSoTheNewPageGetsAFreshSnapshot() {
+        val session = BackdropFrameSession<Any>()
+        val first = Any()
+        val second = Any()
+
+        // 进入第一个覆层：取到 first 并保留整段手势。
+        org.junit.Assert.assertSame(first, session.select(true, first))
+        org.junit.Assert.assertSame(first, session.select(true, first))
+
+        // 老师报的「快速退出进入切换其他三个页面时不刷新快照」：接连切换中间
+        // 没有回到静止态，若此时不 restart()，新覆层会一直拿到 first。
+        org.junit.Assert.assertSame(first, session.select(true, second))
+
+        // restart() 之后必须重新取帧。
+        session.restart()
+        org.junit.Assert.assertSame(second, session.select(true, second))
+        org.junit.Assert.assertSame(second, session.select(true, second))
+    }
+
+    @Test
+    fun legacyOverlayReusesItsCapturedFrameWithoutRenderingTheFaceAgain() {
+        assertFalse(shouldDrawLiveBackdropContent(true, true, OverlayBlurBackend.LEGACY))
+        assertTrue(shouldDrawLiveBackdropContent(true, false, OverlayBlurBackend.LEGACY))
+        assertTrue(shouldDrawLiveBackdropContent(false, true, OverlayBlurBackend.LEGACY))
     }
 
     @Test
@@ -107,6 +121,8 @@ class ScaleBlurModifierTest {
                 translationYPx = 0f,
             ),
         )
+        // 几何变化必须触发重录：这是历史版本的行为，改成「按固定比例烘一次」
+        // 会改变「表盘 ↔ 应用列表」的实际观感（动画很怪、画面跳跃、闪烁）。
         assertTrue(
             state.shouldRecord(
                 width = 408,
@@ -173,17 +189,75 @@ class ScaleBlurModifierTest {
     }
 
     @Test
+    fun frozenBackdropDoesNotHandTheLiveFaceBackBeforeTheGestureEnds() {
+        // 老师报的「往回滑、还没松手就闪出实时表盘」：progress 触到 0 但冻结仍在。
+        assertTrue(
+            shouldHoldFrozenBackdropAtRest(
+                freezeLiveContentWhenCaptured = true,
+                progress = 0f,
+                hardwareBlurAvailable = true,
+            ),
+        )
+        assertTrue(
+            shouldHoldFrozenBackdropAtRest(
+                freezeLiveContentWhenCaptured = true,
+                progress = 0.001f,
+                hardwareBlurAvailable = true,
+            ),
+        )
+        // 覆层真正收尾（冻结落回 false）后必须交还实时表盘，否则表盘永远是张旧帧。
+        assertFalse(
+            shouldHoldFrozenBackdropAtRest(
+                freezeLiveContentWhenCaptured = false,
+                progress = 0f,
+                hardwareBlurAvailable = true,
+            ),
+        )
+        // 已经开始下沉时不走这条捷径，几何推进由既有镜像逻辑处理。
+        assertFalse(
+            shouldHoldFrozenBackdropAtRest(
+                freezeLiveContentWhenCaptured = true,
+                progress = 0.5f,
+                hardwareBlurAvailable = true,
+            ),
+        )
+        // API 27-30 的背衬中心本来就是活的表盘，不存在硬切，不能跟着冻成静止帧。
+        assertFalse(
+            shouldHoldFrozenBackdropAtRest(
+                freezeLiveContentWhenCaptured = true,
+                progress = 0f,
+                hardwareBlurAvailable = false,
+            ),
+        )
+    }
+
+    @Test
     fun pixelCopyResultIsRejectedAfterAnOverlayHasStartedDrawing() {
         assertTrue(shouldAcceptWatchFaceCapture(captureAllowedNow = true))
         assertFalse(shouldAcceptWatchFaceCapture(captureAllowedNow = false))
     }
 
     @Test
-    fun android12FallsBackToLegacyBlurWhenAdvancedMaterialIsDisabled() {
+    fun idleFrameRefreshRunsOnlyWhereTheFrozenFrameIsVisibleInTheCentre() {
+        // API 31+：背衬中心画的就是这张帧，必须定期刷新，否则会显示几十秒前的时间。
+        assertTrue(shouldRefreshWatchFaceFrameOnIdle(31))
+        assertTrue(shouldRefreshWatchFaceFrameOnIdle(35))
+        // API 27-30：中心始终是实时表盘，刷新只会白跑一次 CPU 三遍盒模糊。
+        for (api in listOf(27, 28, 29, 30)) {
+            assertFalse("API $api 不该在空闲期重烘背衬", shouldRefreshWatchFaceFrameOnIdle(api))
+        }
+        // 刷新周期必须显著短于「一分钟前的静态帧」这个可感知阈值，且不能太密
+        // （每次刷新都会换 generation，进而在后台重烘一次背衬三联帧）。
+        assertTrue(LEGACY_BACKDROP_IDLE_REFRESH_INTERVAL_MS in 5_000L..30_000L)
+    }
+
+    @Test
+    fun disablingAdvancedMaterialNeverSelectsACpuBlurBackend() {
         assertEquals(OverlayBlurBackend.LEGACY, overlayBlurBackend(30, advancedMaterialEnabled = true))
         assertEquals(OverlayBlurBackend.SYSTEM, overlayBlurBackend(31, advancedMaterialEnabled = true))
-        assertEquals(OverlayBlurBackend.LEGACY, overlayBlurBackend(31, advancedMaterialEnabled = false))
-        assertEquals(OverlayBlurBackend.LEGACY, overlayBlurBackend(35, advancedMaterialEnabled = false))
+        for (api in listOf(27, 28, 30, 31, 35)) {
+            assertEquals("NONE", overlayBlurBackend(api, advancedMaterialEnabled = false).name)
+        }
     }
 
     @Test

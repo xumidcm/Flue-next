@@ -42,7 +42,7 @@ fun Modifier.flueLegacyBlur(
         !enabled || overlayBlurBackend(
             sdkInt = Build.VERSION.SDK_INT,
             advancedMaterialEnabled = advancedMaterialEnabled,
-        ) == OverlayBlurBackend.SYSTEM
+        ) != OverlayBlurBackend.LEGACY
     ) return this
     val blurLayer = rememberGraphicsLayer()
     return this.drawWithContent {

@@ -25,10 +25,10 @@ object WatchAgentXmlInspector {
             isNamespaceAware = true
             isCoalescing = false
             isExpandEntityReferences = false
-            setFeature("http://apache.org/xml/features/disallow-doctype-decl", true)
-            setFeature("http://xml.org/sax/features/external-general-entities", false)
-            setFeature("http://xml.org/sax/features/external-parameter-entities", false)
-            setFeature("http://apache.org/xml/features/nonvalidating/load-external-dtd", false)
+            runCatching { setFeature("http://apache.org/xml/features/disallow-doctype-decl", true) }
+            runCatching { setFeature("http://xml.org/sax/features/external-general-entities", false) }
+            runCatching { setFeature("http://xml.org/sax/features/external-parameter-entities", false) }
+            runCatching { setFeature("http://apache.org/xml/features/nonvalidating/load-external-dtd", false) }
             // Android's javax.xml stubs do not expose the Java SE
             // XMLConstants.ACCESS_EXTERNAL_* fields. Keep the standard URI
             // values here and tolerate parsers that do not implement the

@@ -79,6 +79,11 @@ internal class LayerFrameSnapshot {
     val translationX: Float get() = reader.value?.invoke()?.translationX ?: translationXState.floatValue
     val translationY: Float get() = reader.value?.invoke()?.translationY ?: translationYState.floatValue
 
+    fun sample(): LayerAnimValues = reader.value?.invoke() ?: LayerAnimValues(
+        scaleState.floatValue, blurState.floatValue, alphaState.floatValue,
+        translationXState.floatValue, translationYState.floatValue,
+    )
+
     fun update(
         scale: Float,
         blur: Float,
@@ -99,13 +104,13 @@ internal class LayerFrameSnapshot {
      * second recorded layer. Shrink or translation activates the fill, while
      * blur contributes to its visual strength once it is needed.
      */
-    fun backdropProgress(): Float {
-        val shrink = (1f - scale).coerceAtLeast(0f)
-        val movement = max(abs(translationX), abs(translationY))
+    fun backdropProgress(frame: LayerAnimValues = sample()): Float {
+        val shrink = (1f - frame.scale).coerceAtLeast(0f)
+        val movement = max(abs(frame.translationX), abs(frame.translationY))
         if (shrink <= 0.001f && movement <= 0.001f) return 0f
         return max(
             max(shrink / 0.15f, movement / 0.07f),
-            blur.coerceAtLeast(0f) / 24f,
+            frame.blur.coerceAtLeast(0f) / 24f,
         ).coerceIn(0f, 1f)
     }
 }
@@ -136,6 +141,7 @@ internal fun shouldRenderLayerBlur(
         radiusPx > 0
 
 internal enum class OverlayBlurBackend {
+    NONE,
     LEGACY,
     SYSTEM,
 }
@@ -143,12 +149,10 @@ internal enum class OverlayBlurBackend {
 internal fun overlayBlurBackend(
     sdkInt: Int,
     advancedMaterialEnabled: Boolean,
-): OverlayBlurBackend = if (
-    sdkInt >= Build.VERSION_CODES.S && advancedMaterialEnabled
-) {
-    OverlayBlurBackend.SYSTEM
-} else {
-    OverlayBlurBackend.LEGACY
+): OverlayBlurBackend = when {
+    !advancedMaterialEnabled -> OverlayBlurBackend.NONE
+    sdkInt >= Build.VERSION_CODES.S -> OverlayBlurBackend.SYSTEM
+    else -> OverlayBlurBackend.LEGACY
 }
 
 internal suspend fun animateLayerBlur(

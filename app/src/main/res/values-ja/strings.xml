@@ -9,7 +9,7 @@
     <string name="settings_title">ランチャー設定</string>
     <string name="internal_watchface_config_title">内蔵文字盤設定</string>
     <string name="flue_accessibility_label">Flue アクセシビリティ制御</string>
-    <string name="flue_accessibility_description">この権限はダブルタップ画面ロックと電源オプションの表示にのみ使用されます。Flueはインターネットに接続せず、ユーザー情報を収集しません。</string>
+    <string name="flue_accessibility_description">この権限はダブルタップ画面ロックと電源オプションの表示にのみ使用されます。画面の内容を読み取ることはなく、入力も収集しません。</string>
     <string name="flue_device_admin_description">Android 8.1 では、ダブルタップ画面ロックにのみこの権限を使用します。端末データの消去やロック画面パスワードの変更はできません。</string>
 
     <!-- 汎用 -->
@@ -54,6 +54,9 @@
     <string name="settings_scroll_indicator">スクロールインジケーター</string>
     <string name="settings_scroll_indicator_on">画面右端にスクロール位置を表示し、丸型では縁に沿って弧を描きます</string>
     <string name="settings_scroll_indicator_off">スクロールインジケーターを表示しません</string>
+    <string name="settings_app_list_edge_align">アプリ一覧の端寄せ</string>
+    <string name="settings_app_list_edge_align_on">先頭行を上端、最終行を下端に寄せ、画面の形に合わせて見える余白を確保します</string>
+    <string name="settings_app_list_edge_align_off">先頭・最終行を画面中央に揃えます</string>
     <string name="settings_md3_top_fisheye">MD3 上部魚眼</string>
     <string name="settings_md3_top_fisheye_sub">グリッドレイアウトの中央より上のアイコンのみに適用</string>
     <string name="settings_fisheye_strength">縮小の度合い</string>
@@ -339,6 +342,7 @@
     <string name="search_d_folders">アイコンをドラッグしてフォルダーを作成</string>
     <string name="search_d_launch_mask">起動オーバーレイを文字盤の色に合わせる</string>
     <string name="search_d_row_bg">リストモードの行の背景色</string>
+    <string name="search_d_app_list_edge_align">先頭と最終行を画面の端に寄せます</string>
     <string name="search_d_performance">アニメーションの切り替えとアイコン品質</string>
     <string name="search_d_stagger">行ごとに時間差で入場</string>
     <string name="search_d_legacy">watchOS 三段式以前の旧アニメーション</string>
@@ -547,7 +551,7 @@
     <string name="about_author_name">柚子柚子皮</string>
     <string name="about_community_group_fmt">グループ番号 %s</string>
     <string name="about_community_groups_fmt">1群 %1$s · 2群 %2$s</string>
-    <string name="about_pick_group_title">どちらのグループに参加しますか？</string>
+    <string name="about_pick_group_title">番号をコピーして QQ で検索</string>
     <string name="about_pick_group_1_fmt">1群 %s</string>
     <string name="about_pick_group_2_fmt">2群 %s</string>
     <string name="about_join_group">コミュニティに参加してアップデートを受け取る</string>
@@ -555,6 +559,7 @@
     <string name="about_donate_methods">WeChat / Alipay</string>
     <string name="about_open_source">オープンソースプロジェクト</string>
     <string name="about_qq_copy_fmt">QQ をコピーしました：%s</string>
+    <string name="about_group_copy_fmt">グループ番号をコピーしました：%s（QQ で検索して参加）</string>
 
     <!-- 言語の AI 翻訳免責 -->
     <string name="settings_lang_ai_disclaimer_en">English and Japanese translations are AI-generated and may not be fully accurate.</string>
@@ -952,6 +957,7 @@
     <string name="watch_editor_panel_layers">レイヤー</string>
     <string name="watch_editor_panel_properties">プロパティ</string>
     <string name="watch_editor_panel_watch">文字盤</string>
+    <string name="watch_editor_panel_agent">AI</string>
     <string name="watch_editor_error_decode_image">画像をデコードできません</string>
     <string name="watch_editor_error_preview_load">プレビューを読み込めません</string>
     <string name="watch_editor_crop_image">画像を切り抜く</string>
@@ -1716,4 +1722,6 @@
     <string name="watch_store_login_required">この機能はログインが必要です</string>
     <string name="watch_store_web_view_outdated_fmt">内蔵ブラウザのバージョンが古いため（%1$s）、システムのブラウザで開きました</string>
     <string name="watch_store_web_view_render_failed">ウェブ版の読み込みに失敗したため、システムのブラウザで開きました</string>
+    <string name="settings_watchface_tap_haptics">タップ時の振動</string>
+    <string name="settings_watchface_tap_haptics_sub">.watch 文字盤の操作ボタンをタップすると振動します</string>
 </resources>

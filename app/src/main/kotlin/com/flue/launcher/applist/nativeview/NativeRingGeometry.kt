@@ -43,6 +43,10 @@ internal class NativeRingGeometry private constructor(
     override val maximumScrollOffsetPx: Float,
 ) : NativeAppGridGeometry {
 
+    fun withScrollBounds(bounds: Pair<Float, Float>) = NativeRingGeometry(
+        viewportHeightPx, cellSizePx, columns, placements, bounds.first, bounds.second,
+    )
+
     override val itemCount: Int
         get() = placements.size
 
@@ -106,6 +110,12 @@ internal class NativeRingGeometry private constructor(
                 rightSafeInsetPx = rightSafeInsetPx,
                 columns = columns,
             ),
+            /**
+             * 贴边对齐时首末行保留的空白（像素）。[centerAligned] 为假时生效。
+             */
+            edgePaddingPx: Float = 0f,
+            /** false = 贴边对齐（首行贴顶、末行贴底），true = 既有居中。 */
+            centerAligned: Boolean = true,
         ): NativeRingGeometry {
             require(itemCount >= 0)
             require(viewportWidthPx > 0 && viewportHeightPx > 0)
@@ -145,13 +155,22 @@ internal class NativeRingGeometry private constructor(
             }
             val firstY = placements.firstOrNull()?.centerY ?: 0f
             val lastY = placements.lastOrNull()?.centerY ?: 0f
+            // 与蜂窝同一处改动：placement 不动，只把滚动上下界换成贴边位置。
+            val (minimumScroll, maximumScroll) = nativeAppListScrollBounds(
+                viewportHeightPx = viewportHeightPx,
+                firstY = firstY,
+                lastY = lastY,
+                itemHeightPx = cellSizePx,
+                edgePaddingPx = edgePaddingPx,
+                centerAligned = centerAligned,
+            )
             return NativeRingGeometry(
                 viewportHeightPx = viewportHeightPx,
                 cellSizePx = cellSizePx,
                 columns = effectiveColumns,
                 placements = placements,
-                minimumScrollOffsetPx = -lastY,
-                maximumScrollOffsetPx = -firstY,
+                minimumScrollOffsetPx = minimumScroll,
+                maximumScrollOffsetPx = maximumScroll,
             )
         }
     }

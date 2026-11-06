@@ -131,9 +131,12 @@ object AgentStreamParser {
                 }
             }
         }
-        root.obj("usage")?.let { usage ->
-            val input = usage.long("input_tokens") ?: usage.long("prompt_tokens")
-            val output = usage.long("output_tokens") ?: usage.long("completion_tokens")
+        val usageObj = root.obj("usage")
+            ?: root.obj("response")?.obj("usage")
+            ?: root.obj("message")?.obj("usage")
+        usageObj?.let { usage ->
+            val input = usage.long("input_tokens") ?: usage.long("prompt_tokens") ?: usage.long("input")
+            val output = usage.long("output_tokens") ?: usage.long("completion_tokens") ?: usage.long("output")
             if (input != null || output != null) result += AgentStreamEvent.Usage(input, output)
         }
         return result
@@ -335,7 +338,10 @@ object AgentStreamParser {
     }
 
     private fun usageFrom(json: JSONObject): AgentStreamEvent.Usage? {
-        val usage = json.optJSONObject("usage") ?: return null
+        val usage = json.optJSONObject("usage")
+            ?: json.optJSONObject("response")?.optJSONObject("usage")
+            ?: json.optJSONObject("message")?.optJSONObject("usage")
+            ?: return null
         val input = firstLong(usage, "input_tokens", "prompt_tokens", "input")
         val output = firstLong(usage, "output_tokens", "completion_tokens", "output")
         return if (input != null || output != null) AgentStreamEvent.Usage(input, output) else null
@@ -348,6 +354,7 @@ object AgentStreamParser {
     class SseDecoder(private val protocol: AiProtocol) {
         private val data = StringBuilder()
         private val output = mutableListOf<AgentStreamEvent>()
+        private var delivered = 0
 
         fun acceptLine(line: String) {
             val normalized = line.removeSuffix("\r")
@@ -363,7 +370,13 @@ object AgentStreamParser {
             return output.toList()
         }
 
-        fun snapshot(): List<AgentStreamEvent> = output.toList()
+        /** Returns only events appended since the previous drain. */
+        fun drain(): List<AgentStreamEvent> {
+            if (delivered == output.size) return emptyList()
+            val next = output.subList(delivered, output.size).toList()
+            delivered = output.size
+            return next
+        }
 
         private fun flush() {
             if (data.isEmpty()) return

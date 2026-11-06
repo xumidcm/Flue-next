@@ -24,6 +24,21 @@ class WatchFaceLuaRuntimeTest {
     }
 
     @Test
+    fun `script with more than 200 local variables compiles and runs successfully`() {
+        val file = java.io.File("D:/Flue/.tmp-watch-inspect/Teto/scripts/script.txt")
+        val script = if (file.exists()) {
+            file.readText()
+        } else {
+            // 构造包含 250 个局部变量的大型函数测试桩
+            val locals = (1..250).joinToString("\n") { "local var_test_$it = $it" }
+            "function on_second()\n$locals\nend"
+        }
+        val runtime = WatchFaceLuaRuntime.create(script)
+        assertTrue(runtime.stepMilliseconds(0.016).isSuccess)
+        assertTrue(runtime.runSnippet("var_taps = (var_taps or 0) + 1").isSuccess)
+    }
+
+    @Test
     fun `inline IIFE enables Lua runtime without global script`() {
         val layer = WatchmakerLayer(
             id = "earth",

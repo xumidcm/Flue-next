@@ -168,12 +168,11 @@ object FlueMotionProfiles {
             handoffMillis = 60,
             easing = MotionEasing.CubicBezier(0.22f, 1f, 0.36f, 1f),
         ),
-        // 老师指定：appLaunch 阻尼调到 1.05，与 appReturn 同阻尼同刚度——
-        // 进出同一条弹簧，来回手感对称；1.05 略过阻尼，收尾不回弹。
+        // 启动过程放慢约 25%：刚度除以 1.25²，保留略过阻尼、不回弹的收尾。
         appLaunch = MotionPhase(
-            durationMillis = 360,
-            handoffMillis = 110,
-            easing = MotionEasing.Spring(dampingRatio = 1.05f, stiffness = 669f),
+            durationMillis = 450,
+            handoffMillis = 140,
+            easing = MotionEasing.Spring(dampingRatio = 1.05f, stiffness = 428.16f),
         ),
         appReturn = MotionPhase(
             durationMillis = 380,

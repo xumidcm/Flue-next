@@ -61,6 +61,35 @@ internal const val LEGACY_BACKDROP_BLUR_PASSES = 3
 internal const val LEGACY_BACKDROP_BLUR_RADIUS = 6
 
 /**
+ * 空闲期刷新静止帧的间隔。
+ *
+ * 以前只有「手势 DOWN」和「换表盘」两条路会重新捕获，用户在表盘上停留多久，
+ * 那张帧就旧多久——这就是老师报的「一分钟前的静态帧」的出处。这里补一条空闲
+ * 轮询，把最坏陈旧度压到一个周期以内。
+ *
+ * **只在 API 31+ 生效**：那条路径的背衬中心画的就是这张帧，陈旧直接看得见；
+ * API 27-30 的中心始终是实时表盘（见 `flueBackdropFill` 的 legacy 分支），
+ * 只有重度模糊 + 压暗过的边缘用到它，刷新既看不出区别、又会让
+ * `rememberLegacyWatchFaceBackdropFrames` 的 cacheKey 随 generation 变化而
+ * 重跑一次 CPU 盒模糊，所以刻意不刷——老师要求的「性能不能倒退」在这条上
+ * 优先于收益。
+ *
+ * 15s 的取法（下表为 466² 手表分辨率、API 37 模拟器、120s 空闲实测）：
+ *
+ * | | 120s CPU | 占用 | missed vsync | 99th 帧 |
+ * |---|---|---|---|---|
+ * | 开刷新 | 1.93s | 1.608% | 2 | 46ms |
+ * | 关刷新 | 1.66s | 1.383% | 2 | 46ms |
+ *
+ * 净增 0.225%，即每次刷新约 34ms 的后台 CPU；掉帧指标两项完全一致，说明
+ * 开销没有渗进主线程。**注意该开销与像素量成正比**：同一份代码在 1080×2400
+ * 手机分辨率下净增 2.69%，而手表屏幕只有它的约十二分之一——所以在手表上
+ * 用手机分辨率的数字来评估会严重高估。结果是「最坏陈旧度 ≤ 15s」，
+ * 时钟读数的偏差基本不会跨分钟。
+ */
+internal const val LEGACY_BACKDROP_IDLE_REFRESH_INTERVAL_MS = 15_000L
+
+/**
  * API 27-30 的表盘背衬缓存。
  *
  * 两张模糊图都在用户开始拖动之前于 IO 线程生成。清晰层始终由真实表盘
@@ -151,17 +180,15 @@ internal fun rememberLegacyWatchFacePixelCopyFrame(
         } else {
             longArrayOf(280L, 720L)
         }
-        for (settleDelay in delays) {
-            if (settleDelay > 0L) delay(settleDelay)
-            ensureActive()
-            if (settleDelay > 0L && !latestCaptureAllowed.value) return@LaunchedEffect
+        /** 捕一张并决定是否采用；被拒/失败时返回 false，调用方继续或轮询。 */
+        suspend fun captureWatchFaceFrame(): Boolean {
             val requestEpoch = cleanWindow.epoch
             val frame = requestWindowPixelCopy(
                 window = requestedWindow,
                 requestedBounds = requestedRect,
                 windowWidth = view.rootView.width,
                 windowHeight = view.rootView.height,
-            ) ?: continue
+            ) ?: return false
             var frameOwnedByEffect = true
             try {
                 ensureActive()
@@ -169,7 +196,12 @@ internal fun rememberLegacyWatchFacePixelCopyFrame(
                 // processed, not when DOWN queued it. Accepting a late result
                 // after an overlay appeared baked that overlay into the frozen
                 // watch-face frame and produced a temporary two-layer UI.
-                if (!shouldAcceptWatchFaceCapture(latestCaptureAllowed.value) || !cleanWindow.accepts(requestEpoch)) continue
+                if (
+                    !shouldAcceptWatchFaceCapture(latestCaptureAllowed.value) ||
+                    !cleanWindow.accepts(requestEpoch)
+                ) {
+                    return false
+                }
                 val previous = captured
                 val next = LegacyWatchFaceCapturedFrame(
                     visualKey = visualKey,
@@ -186,8 +218,32 @@ internal fun rememberLegacyWatchFacePixelCopyFrame(
                 // display list may still be queued on RenderThread. Retire both
                 // consumers together after two frame callbacks.
                 previous?.let(::retireCapturedFrame)
+                return true
             } finally {
                 if (frameOwnedByEffect) recycleCapturedBitmapSafely(frame)
+            }
+        }
+        for (settleDelay in delays) {
+            if (settleDelay > 0L) delay(settleDelay)
+            ensureActive()
+            if (settleDelay > 0L && !latestCaptureAllowed.value) return@LaunchedEffect
+            captureWatchFaceFrame()
+        }
+        // 空闲期定期刷新，把「这张帧有多旧」从无限压到一个周期以内。
+        //
+        // 只跑 API 31+（见 LEGACY_BACKDROP_IDLE_REFRESH_INTERVAL_MS 的说明）。
+        // `latestCaptureAllowed` 就是 legacyCaptureAllowed，里面已经含
+        // launcherInteractive / screenState == Face / 无覆层 / 无手势等全部条件，
+        // 所以息屏、常亮、覆层在场时这里只醒一次、不捕任何像素。
+        //
+        // 手势 DOWN 会改 captureRequestToken 并重启本 effect，空闲计时随之复位，
+        // 因此这两条捕获路径不会在同一时刻抢帧：先跑完上面那轮开局捕获，再进轮询。
+        if (shouldRefreshWatchFaceFrameOnIdle(Build.VERSION.SDK_INT)) {
+            while (true) {
+                delay(LEGACY_BACKDROP_IDLE_REFRESH_INTERVAL_MS)
+                ensureActive()
+                if (!latestCaptureAllowed.value) continue
+                captureWatchFaceFrame()
             }
         }
     }
@@ -207,6 +263,18 @@ internal fun rememberLegacyWatchFacePixelCopyFrame(
 
 internal fun shouldAcceptWatchFaceCapture(captureAllowedNow: Boolean): Boolean =
     captureAllowedNow
+
+/**
+ * 空闲期是否要定期刷新静止帧。
+ *
+ * 只有 API 31+ 需要：那条路径的背衬中心画的就是这张帧，陈旧会被直接看见。
+ * API 27-30 的中心始终是实时表盘，刷新它只会让
+ * `rememberLegacyWatchFaceBackdropFrames` 的 cacheKey 随 generation 变化，
+ * 从而在后台重跑一次 CPU 三遍盒模糊——收益看不见、代价却是实打实的，
+ * 与老师「性能不能倒退」的要求冲突，所以明确排除。
+ */
+internal fun shouldRefreshWatchFaceFrameOnIdle(sdkInt: Int): Boolean =
+    sdkInt >= Build.VERSION_CODES.S
 
 private fun capturedFrameLease(bitmap: Bitmap): WatchmakerBitmapLease =
     WatchmakerBitmapLease { recycleCapturedBitmapSafely(bitmap) }
@@ -489,7 +557,7 @@ private fun legacyPathSignature(path: String): String {
 }
 
 private fun prepareLegacyBackdropFrames(
-    context: Context,
+    context: Context?,
     source: LegacyBackdropSource,
     targetWidth: Int,
     targetHeight: Int,
@@ -505,11 +573,11 @@ private fun prepareLegacyBackdropFrames(
     // A retired capture must not produce a preview tagged as real captured pixels.
     if (capturedBitmap != null && capturedCopy == null) return null
     val decoded = capturedCopy ?: when (source.kind) {
-        LegacyBackdropSourceKind.IMAGE -> source.path?.let {
-            decodeSampledBitmap(context, it, targetWidth, targetHeight)
+        LegacyBackdropSourceKind.IMAGE -> context?.let { contextValue ->
+            source.path?.let { decodeSampledBitmap(contextValue, it, targetWidth, targetHeight) }
         }
-        LegacyBackdropSourceKind.VIDEO -> source.path?.let {
-            extractVideoFrame(context, it)
+        LegacyBackdropSourceKind.VIDEO -> context?.let { contextValue ->
+            source.path?.let { extractVideoFrame(contextValue, it) }
         }
         LegacyBackdropSourceKind.GENERATED -> null
     }
@@ -542,10 +610,11 @@ private fun prepareLegacyBackdropFrames(
         stronglyBlurred.recycle()
     }
     val averageArgb = averageOpaqueColor(darkBlurred)
+    val clearImage = clearBitmap.asImageBitmap()
     return LegacyWatchFaceBackdropFrames(
-        clear = clearBitmap.asImageBitmap(),
-        lightBlurred = lightBlurred.asImageBitmap(),
-        darkBlurred = darkBlurred.asImageBitmap(),
+        clear = clearImage,
+        lightBlurred = if (prepareCpuBlur) lightBlurred.asImageBitmap() else clearImage,
+        darkBlurred = if (prepareCpuBlur) darkBlurred.asImageBitmap() else clearImage,
         viewportWidth = targetWidth,
         viewportHeight = targetHeight,
         overscanX = overscanX,
@@ -556,6 +625,39 @@ private fun prepareLegacyBackdropFrames(
         capturedGeneration = capturedGeneration,
         hasPreparedBlur = prepareCpuBlur,
     )
+}
+
+/**
+ * Test and transition helper for a real captured frame. The old production
+ * path still accepts preview/media fallbacks, but a captured bitmap must match
+ * the measured viewport exactly or it is rejected instead of being stretched.
+ */
+internal fun prepareCapturedBackdropFrames(
+    captured: LegacyWatchFaceCapturedFrame,
+    viewport: IntSize,
+    fallbackArgb: Int,
+    prepareCpuBlur: Boolean,
+): LegacyWatchFaceBackdropFrames? {
+    if (viewport.width <= 0 || viewport.height <= 0) return null
+    if (captured.bitmap.isRecycled ||
+        captured.bitmap.width != viewport.width ||
+        captured.bitmap.height != viewport.height
+    ) return null
+    return prepareLegacyBackdropFrames(
+        context = null,
+        source = LegacyBackdropSource(
+            key = "captured:${captured.visualKey}:${captured.generation}",
+            kind = LegacyBackdropSourceKind.IMAGE,
+            path = null,
+            fallbackArgb = fallbackArgb,
+            generatedMaterialStyle = false,
+        ),
+        targetWidth = viewport.width,
+        targetHeight = viewport.height,
+        capturedBitmap = captured.bitmap,
+        capturedGeneration = captured.generation,
+        prepareCpuBlur = prepareCpuBlur,
+    )?.copy(visualKey = captured.visualKey)
 }
 
 private fun createMirroredOverscan(source: Bitmap, overscanX: Int, overscanY: Int): Bitmap {

@@ -1,4 +1,4 @@
-﻿import java.io.FileInputStream
+import java.io.FileInputStream
 import java.util.Properties
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 
@@ -47,9 +47,15 @@ android {
         applicationId = "com.dw.launcher"
         minSdk = 27
         targetSdk = 36
-        versionCode = 28
-        versionName = "2.3.3"
+        versionCode = 31
+        versionName = "2.4.0"
         ndk { abiFilters += listOf("armeabi-v7a", "arm64-v8a") }
+
+        // Default watch-store endpoint. Derivative builds can point it elsewhere
+        // without touching source: -PflueWatchStoreBaseUrl=https://host/api
+        val watchStoreBaseUrl = providers.gradleProperty("flueWatchStoreBaseUrl")
+            .getOrElse("https://jbwatchface.ai-life.xyz/api")
+        buildConfigField("String", "WATCH_STORE_BASE_URL", "\"$watchStoreBaseUrl\"")
     }
 
     signingConfigs {
@@ -116,6 +122,7 @@ dependencies {
     implementation(libs.datastore.preferences)
     implementation(libs.mediarouter)
     implementation(libs.recyclerview)
+    implementation("com.github.Dimezis:BlurView:version-3.2.0")
 
     implementation(platform(libs.compose.bom))
     implementation(libs.compose.ui)

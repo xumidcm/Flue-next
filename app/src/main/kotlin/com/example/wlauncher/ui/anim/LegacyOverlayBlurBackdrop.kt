@@ -64,7 +64,7 @@ internal fun rememberLegacyOverlayBlurBackdrop(
         overlayBlurBackend(
             sdkInt = Build.VERSION.SDK_INT,
             advancedMaterialEnabled = advancedMaterialEnabled,
-        ) == OverlayBlurBackend.SYSTEM
+        ) != OverlayBlurBackend.LEGACY
     ) {
         return null
     }

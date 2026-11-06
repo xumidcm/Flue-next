@@ -156,6 +156,7 @@ private fun CanvasAdjustScreen(
     val gravityParallaxEnabled by vm.watchfaceGravityParallaxEnabled.collectAsStateWithLifecycle()
     val gravityBackdropBlurEnabled by
         vm.watchfaceGravityBackdropBlurEnabled.collectAsStateWithLifecycle()
+    val tapHapticsEnabled by vm.watchFaceTapHapticsEnabled.collectAsStateWithLifecycle()
     val textEntryAnimation by vm.watchFaceTextEntryAnimation.collectAsStateWithLifecycle()
 
     // 传进来的 id 优先；找不到（表盘刚被删）就退回当前选中的那张。
@@ -210,6 +211,7 @@ private fun CanvasAdjustScreen(
                 // 表盘在后台悄悄换成内置表盘。真正的兜底逻辑在桌面那条路径上。
                 onLoadFailure = { _, _ -> },
                 dataProvider = dataProvider,
+                tapHapticsEnabled = tapHapticsEnabled,
                 canvasSettings = draft,
                 gravityParallaxEnabled = gravityParallaxEnabled,
                 gravityBackdropBlurEnabled = gravityBackdropBlurEnabled,

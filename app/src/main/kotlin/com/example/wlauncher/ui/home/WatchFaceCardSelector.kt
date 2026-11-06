@@ -51,9 +51,13 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.graphics.BlendMode
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.input.key.Key
@@ -237,26 +241,52 @@ fun WatchFaceCardSelector(
                     modifier = Modifier.weight(1f),
                     horizontalAlignment = Alignment.CenterHorizontally,
                 ) {
-                    Text(
-                        text = headerFace?.let { localizedWatchFaceName(it) }
-                            ?: stringResource(R.string.settings_watchface_store),
+                    Box(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .then(
-                                if (animationsEnabled) {
-                                    Modifier.basicMarquee(iterations = Int.MAX_VALUE)
-                                } else {
-                                    Modifier
-                                },
-                            ),
-                        color = style.titleColor,
-                        fontSize = if (uiStyle == UiStyle.APPLE_WATCH) 20.sp else 18.sp,
-                        fontWeight = FontWeight.Bold,
-                        maxLines = 1,
-                        softWrap = false,
-                        overflow = if (animationsEnabled) TextOverflow.Clip else TextOverflow.Ellipsis,
-                        textAlign = TextAlign.Center,
-                    )
+                            .graphicsLayer {
+                                compositingStrategy = CompositingStrategy.Offscreen
+                            }
+                            .drawWithContent {
+                                drawContent()
+                                val fadeWidthPx = 20.dp.toPx()
+                                val w = size.width
+                                if (w > fadeWidthPx * 2f && fadeWidthPx > 0f) {
+                                    val stop = fadeWidthPx / w
+                                    drawRect(
+                                        brush = Brush.horizontalGradient(
+                                            0f to Color.Transparent,
+                                            stop to Color.Black,
+                                            (1f - stop) to Color.Black,
+                                            1f to Color.Transparent,
+                                        ),
+                                        blendMode = BlendMode.DstIn,
+                                    )
+                                }
+                            },
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text(
+                            text = headerFace?.let { localizedWatchFaceName(it) }
+                                ?: stringResource(R.string.settings_watchface_store),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .then(
+                                    if (animationsEnabled) {
+                                        Modifier.basicMarquee(iterations = Int.MAX_VALUE)
+                                    } else {
+                                        Modifier
+                                    },
+                                ),
+                            color = style.titleColor,
+                            fontSize = if (uiStyle == UiStyle.APPLE_WATCH) 20.sp else 18.sp,
+                            fontWeight = FontWeight.Bold,
+                            maxLines = 1,
+                            softWrap = false,
+                            overflow = if (animationsEnabled) TextOverflow.Clip else TextOverflow.Ellipsis,
+                            textAlign = TextAlign.Center,
+                        )
+                    }
                     Text(
                         text = headerFace?.let { localizedWatchFaceAuthor(it) }
                             ?: stringResource(R.string.watchface_cards_store_subtitle),
@@ -323,35 +353,27 @@ fun WatchFaceCardSelector(
                     )
                 }
             }
-            val indicators = remember(items.size, pagerState.currentPage) {
-                watchFacePageIndicators(
-                    totalPages = items.size,
-                    currentPage = pagerState.currentPage,
-                )
-            }
             Row(
-                modifier = Modifier.graphicsLayer { alpha = presentation },
-                horizontalArrangement = Arrangement.spacedBy(5.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .graphicsLayer { alpha = presentation },
+                horizontalArrangement = Arrangement.Center,
+                verticalAlignment = Alignment.CenterVertically,
             ) {
-                indicators.forEach { indicator ->
-                    Box(
-                        Modifier
-                            .size(if (indicator.page == pagerState.currentPage) 7.dp else 5.dp)
-                            .clip(CircleShape)
-                            .graphicsLayer { alpha = indicator.alpha }
-                            .background(
-                                if (indicator.page == pagerState.currentPage) style.accentColor
-                                else style.secondaryTextColor.copy(alpha = 0.42f),
-                            ),
-                    )
-                }
+                Text(
+                    text = "${pagerState.currentPage + 1} / ${items.size}",
+                    modifier = Modifier.fillMaxWidth(),
+                    color = style.secondaryTextColor,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Medium,
+                    textAlign = TextAlign.Center,
+                )
             }
             if (actionCount > 0) {
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(horizontal = 36.dp)
-                        .offset(y = (-8).dp)
                         .graphicsLayer { alpha = presentation },
                     horizontalArrangement = Arrangement.spacedBy(10.dp, Alignment.CenterHorizontally),
                 ) {
@@ -412,7 +434,7 @@ fun WatchFaceCardSelector(
             }
         }
     }
-    }
+}
 
     deleteTarget?.let { target ->
         FlueAlertDialog(

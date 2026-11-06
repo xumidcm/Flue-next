@@ -17,6 +17,9 @@ internal class NativeDenseGridLayoutManager(
     private var geometryMinimumItemWidth = Float.NaN
     private var geometryMinimumItemHeight = Float.NaN
     private var geometryMinimumVerticalPadding = Float.NaN
+    private var geometryEdgeAlignEnabled = false
+    private var geometryEdgeAlignPadding = Float.NaN
+    private var geometryEdgeVisibility: NativeEdgeVisibilityKey? = null
 
     override fun extraLayoutSpacePx(
         geometry: NativeAppGridGeometry,
@@ -34,7 +37,10 @@ internal class NativeDenseGridLayoutManager(
             geometryAspectRatio == config.denseGridItemAspectRatio &&
             geometryMinimumItemWidth == config.denseGridMinimumItemWidthPx &&
             geometryMinimumItemHeight == config.denseGridMinimumItemHeightPx &&
-            geometryMinimumVerticalPadding == config.denseGridMinimumVerticalPaddingPx
+            geometryMinimumVerticalPadding == config.denseGridMinimumVerticalPaddingPx &&
+            geometryEdgeAlignEnabled == config.edgeAlignEnabled &&
+            geometryEdgeAlignPadding == config.edgeAlignPaddingPx &&
+            geometryEdgeVisibility == config.edgeVisibilityKey()
 
     override fun rememberGeometryConfig(config: NativeAppListConfig) {
         geometryLeftInset = config.leftSafeInsetPx
@@ -46,6 +52,9 @@ internal class NativeDenseGridLayoutManager(
         geometryMinimumItemWidth = config.denseGridMinimumItemWidthPx
         geometryMinimumItemHeight = config.denseGridMinimumItemHeightPx
         geometryMinimumVerticalPadding = config.denseGridMinimumVerticalPaddingPx
+        geometryEdgeAlignEnabled = config.edgeAlignEnabled
+        geometryEdgeAlignPadding = config.edgeAlignPaddingPx
+        geometryEdgeVisibility = config.edgeVisibilityKey()
     }
 
     override fun createGeometry(
@@ -53,20 +62,33 @@ internal class NativeDenseGridLayoutManager(
         viewportWidthPx: Int,
         viewportHeightPx: Int,
         config: NativeAppListConfig,
-    ): NativeAppGridGeometry = NativeDenseGridGeometry.create(
-        itemCount = itemCount,
-        viewportWidthPx = viewportWidthPx,
-        viewportHeightPx = viewportHeightPx,
-        leftSafeInsetPx = config.leftSafeInsetPx,
-        rightSafeInsetPx = config.rightSafeInsetPx,
-        columns = config.denseGridColumns,
-        horizontalPaddingPx = config.denseGridHorizontalPaddingPx,
-        itemSpacingPx = config.denseGridItemSpacingPx,
-        itemAspectRatio = config.denseGridItemAspectRatio,
-        minimumItemHeightPx = config.denseGridMinimumItemHeightPx,
-        minimumItemWidthPx = config.denseGridMinimumItemWidthPx,
-        minimumVerticalPaddingPx = config.denseGridMinimumVerticalPaddingPx,
-    )
+    ): NativeAppGridGeometry {
+        val grid = NativeDenseGridGeometry.create(
+            itemCount = itemCount,
+            viewportWidthPx = viewportWidthPx,
+            viewportHeightPx = viewportHeightPx,
+            leftSafeInsetPx = config.leftSafeInsetPx,
+            rightSafeInsetPx = config.rightSafeInsetPx,
+            columns = config.denseGridColumns,
+            horizontalPaddingPx = config.denseGridHorizontalPaddingPx,
+            itemSpacingPx = config.denseGridItemSpacingPx,
+            itemAspectRatio = config.denseGridItemAspectRatio,
+            minimumItemHeightPx = config.denseGridMinimumItemHeightPx,
+            minimumItemWidthPx = config.denseGridMinimumItemWidthPx,
+            minimumVerticalPaddingPx = config.denseGridMinimumVerticalPaddingPx,
+            edgePaddingPx = config.edgeAlignPaddingPx,
+            centerAligned = !config.edgeAlignEnabled,
+        )
+        val settled = config.copy(entryMotionEnabled = false, entryProgress = 1f)
+        val iconSize = (minOf(grid.itemWidthPx.roundToInt(), grid.itemHeightPx.roundToInt()) -
+            2f * config.denseGridIconInnerPaddingPx).coerceAtLeast(1f)
+        val bounds = nativeVisibleEdgeBounds(grid, viewportWidthPx.toFloat(), config, iconSize) { position, y ->
+            nativeDenseGridChildVisual(
+                grid.centerX(position), y, viewportWidthPx.toFloat(), viewportHeightPx.toFloat(), settled,
+            )
+        }
+        return grid.withScrollBounds(bounds)
+    }
 
     override fun layoutChild(
         child: View,

@@ -47,7 +47,12 @@ object WatchAgentPrompt {
 
 你可以通过受控文档工具读取和修改当前表盘的 watch.xml 与 scripts/script.txt。用户明确要求调用某个工具时必须调用该工具；不得用“可能不能调用”推脱。工具能力以本轮动态注入的 capability 为准。先读取当前内容和 revision；优先局部修改；保留无关图层、未知字段、原格式版本、脚本与素材。每次写入携带刚刚读取或上一次成功写入返回的 expectedRevision。文档写入会立即作用于当前编辑器草稿并刷新预览，不需要再调用提交工具；不要把多个写入建立在同一个旧 revision 上，写入成功后必须使用返回的新 revision 再进行下一次写入。发生 stale_revision 时停止写入并重新 read_document，不能覆盖用户刚做的修改。
 
-格式标准（只保留会影响生成和校验的核心规则）：.watch 是 ZIP；watch.xml 位于包根；图片位于 images/；字体位于 fonts/；全局脚本位于 scripts/script.txt。根节点为 <Watch>，常规 WatchMaker 设计画布为 512×512，原点在画布中心 (256,256)，x 向右、y 向下，x/y 是相对中心的偏移，不是左上角绝对坐标；图层按文档顺序由底到顶。图片 path 相对于 images/，写 f315.png，不能写 images/f315.png；拒绝绝对路径、.. 跳转和目录逃逸。color 使用六位 RRGGBB，不带 #；opacity 为 0-100；alignment 使用 cc/tl/tc/tr/cl/cr/bl/bc/br；display 使用 b、d、bd。属性内特殊字符必须 XML 转义，真实多行文字要保留换行。
+硬性规范与格式标准：
+1. 画布尺寸固定为 512×512，严禁修改设计画布尺寸；原点在画布中心 (256,256)，x 向右为正、y 向下为正，x/y 是相对中心的偏移，绝对不能写左上角绝对坐标；
+2. 视频素材必须为 H.264 编码（.mp4 或 .m4v），位于 videos/ 目录；
+3. 包结构严格遵循 CloX 规范：.watch 是 ZIP 压缩包；watch.xml 位于包根；图片放置在 images/（XML 中 path 必须写相对 images/ 的文件名如 f315.png，严禁加 images/ 前缀，严禁绝对路径和目录逃逸）；字体放置在 fonts/；全局脚本只写在 scripts/script.txt；根节点为 <Watch>；
+4. 属性规范：color 为六位十六进制 RRGGBB（不带 #）；opacity 为 0-100；alignment 为 cc/tl/tc/tr/cl/cr/bl/bc/br；display 取值 b/d/bd；特殊字符必须进行 XML 转义；
+5. 变量与 Lua 规则：花括号只包一个标签名；条件表达式必须写成 `{var_x} == 1 and 100 or 0`，不得在花括号内包整段代码；不符合规则将直接报错。
 
 图层与兼容规则：保留未知属性、节点、标签、脚本和原格式版本；V2 由 build_source=studio 等格式信号识别，并保留 id、parentId、Ambient 结构，不要擅自把 V1 升级为 V2。outline=Outline 使用 o_size/o_color/o_opacity；shadow=Drop 使用 w_distance/w_angle/w_color/w_opacity；corner_type=0 是直角、1 是圆角；不确定的形状或效果先 search_knowledge。显式 tap_action/action 才登记点击区域，透明动作热区仍可点击。
 

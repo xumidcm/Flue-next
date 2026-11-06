@@ -129,6 +129,27 @@ data class NativeAppListConfig(
     val denseGridMinimumVerticalPaddingPx: Float = 8f,
     val denseGridIconInnerPaddingPx: Float = 3f,
     val centerEdgeItems: Boolean = true,
+    /**
+     * 贴边对齐：首行贴顶、末行贴底，不再把首末行都对齐到视口中心。
+     *
+     * 关掉时逐像素等于这个开关加进来之前的行为 —— 每个几何的滚动上界仍是
+     * 「首项能滚到屏心」（`maximumScrollOffsetPx = -firstY`），而
+     * [NativeAppGridLayoutManager] 恰好拿它当初始滚动位置，于是列表一打开首行就
+     * 落在屏幕正中。打开后滚动上下界改由 [nativeAppListScrollBounds] 算成贴边位置，
+     * 那条兜底路径自动跟着正确，不需要动机布局管理器。
+     *
+     * 与 [centerEdgeItems] 的分工：那个只管 LINEAR 的 padding 式下移半屏，
+     * 这个管全部五种布局的滚动边界。
+     */
+    val edgeAlignEnabled: Boolean = false,
+    /**
+     * 贴边对齐时首末行保留的空白（像素）。
+     *
+     * 全贴到 0 在圆屏上会把首行切掉一角、在方屏上会让图标上缘压在顶部渐隐带最浓的
+     * 那一段里，所以留一点。由 `nativeListDrawerConfig` 按屏形换算（圆屏给得更宽），
+     * 这里只存结果。
+     */
+    val edgeAlignPaddingPx: Float = 0f,
     val allowFolderCreation: Boolean = false,
     /**
      * 覆层（长按菜单 / 文件夹展开）在场时关掉列表拖拽。覆层是 Compose 层，
@@ -319,6 +340,7 @@ internal fun NativeAppListConfig.legalized(): NativeAppListConfig {
         denseGridMinimumVerticalPaddingPx =
             denseGridMinimumVerticalPaddingPx.nonNegativeFiniteMetric(),
         denseGridIconInnerPaddingPx = denseGridIconInnerPaddingPx.nonNegativeFiniteMetric(),
+        edgeAlignPaddingPx = edgeAlignPaddingPx.nonNegativeFiniteMetric(),
         entryAnimationToken = entryAnimationToken.coerceAtLeast(0L),
         entryProgress = entryProgress.finiteOr(1f).coerceIn(0f, 1f),
         entryStaggerStrength = entryStaggerStrength.finiteOr(0f).coerceIn(0f, 1f),
@@ -386,6 +408,15 @@ private const val MIN_POSITIVE_DRAWING_VALUE = 0.01f
 private const val MAX_APP_SCALE = 4f
 private const val MIN_FISHEYE_RANGE = 0.01f
 internal const val DEFAULT_APP_LIST_STAGGER_ENABLED = false
+/**
+ * 贴边对齐时首末行保留的空白（dp）。
+ *
+ * 方屏 8dp 与 [DEFAULT_VERTICAL_PADDING_PX] 同值，是这套几何里「最小但看得出来」的
+ * 一档留白；再小图标上缘就压在顶部渐隐带最浓的那一段里了。圆屏给到 24dp 是因为
+ * 同一个 y 在圆屏上对应的弦宽窄得多，留 8dp 会让首行两端的图标被弧切掉一角。
+ */
+internal const val APP_LIST_EDGE_ALIGN_PADDING_DP = 24f
+internal const val APP_LIST_EDGE_ALIGN_ROUND_PADDING_DP = 48f
 private const val DEFAULT_FISHEYE_RANGE = 0.4f
 private const val DEFAULT_ROW_HEIGHT_PX = 64
 private const val DEFAULT_ICON_SIZE_PX = 40
@@ -686,6 +717,44 @@ internal fun nativeSafeContentWidthPx(
     viewportWidthPx = viewportWidthPx.toFloat(),
 )
 
+/**
+ * 首末行的滚动边界：`first = minimumScrollOffsetPx`、`second = maximumScrollOffsetPx`。
+ *
+ * 五种布局的位置合成都是一样的 `screenCenterY = viewportHeight/2 + placement.centerY + scroll`，
+ * 而 [NativeAppGridLayoutManager] 拿 `maximumScrollOffsetPx` 当初始滚动位置的兜底值 ——
+ * 这正是「一进应用列表首行就停在屏幕正中」的来源。所以「贴顶」这件事可以只靠**重新定义
+ * 这两个边界**来完成，placement 本身一个字节都不用动，布局管理器也不用改。
+ *
+ * [centerAligned] 为真时沿用既有约定（首项能滚到视口中心、末项也能），也就是
+ * `first = -lastY`、`second = -firstY`；为假时首行贴顶、末行贴底，各留 [edgePaddingPx]：
+ *
+ * - 首行中心落在 `edgePaddingPx + itemHeightPx/2`；
+ * - 末行中心落在 `viewportHeightPx - edgePaddingPx - itemHeightPx/2`。
+ *
+ * 内容不足一屏时两个边界相等，夹取后不产生滚动、首行贴顶 —— 这正是这个开关的语义
+ * （「不要居中」），不是缺陷。
+ */
+internal fun nativeAppListScrollBounds(
+    viewportHeightPx: Int,
+    firstY: Float,
+    lastY: Float,
+    itemHeightPx: Float,
+    edgePaddingPx: Float,
+    centerAligned: Boolean,
+): Pair<Float, Float> {
+    if (!firstY.isFinite() || !lastY.isFinite()) return 0f to 0f
+    if (centerAligned) return -lastY to -firstY
+    if (viewportHeightPx <= 0) return -lastY to -firstY
+    val half = if (itemHeightPx.isFinite() && itemHeightPx > 0f) itemHeightPx / 2f else 0f
+    val padding = if (edgePaddingPx.isFinite() && edgePaddingPx > 0f) edgePaddingPx else 0f
+    val halfViewport = viewportHeightPx / 2f
+    // 首行贴顶：screenCenterY(0, max) = halfViewport + firstY + max = padding + half
+    val maximum = (padding + half - halfViewport) - firstY
+    // 末行贴底：screenCenterY(last, min) = h - padding - half
+    val minimum = (halfViewport - padding - half) - lastY
+    return if (minimum <= maximum) minimum to maximum else maximum to maximum
+}
+
 internal fun nativeHoneycombChildVisual(
     centerX: Float,
     centerY: Float,
@@ -752,7 +821,7 @@ internal fun nativeHoneycombChildVisual(
     val entryProgress = nativeStaggeredEntryProgress(
         config = config,
         childCenterY = centerY,
-        viewportHeight = viewportHeight.toFloat(),
+        viewportHeight = viewportHeight,
     )
     // 位移与缩放吃回弹（见 nativeEntryOvershoot），透明度只吃原始进度。
     val entryEased = nativeEntryOvershoot(entryProgress)
@@ -792,8 +861,8 @@ internal fun nativeHoneycombChildVisual(
 /**
  * 心流的月牙偏移：整行按离屏幕中线的距离往一侧平移多少像素。
  *
- * 偏移恒为 `0..bulge`（不是 ±bulge）：基准 x 已经由 [NativeFlowGeometry] 放在
- * 「峰值正好贴边」的位置，这里只负责从那条边往回收。于是任何一行都不会越过屏幕边界。
+ * 屏内偏移为 `0..bulge`：基准 x 已经由 [NativeFlowGeometry] 放在峰值贴边的位置。
+ * 中心越过上下边缘后继续沿曲线延伸，直到图标完全离屏，避免剩余半个图标竖直滑走。
  *
  * 单独一个函数、不并进子项视觉里，是因为圆屏那条路会用 [NativeDrawerGeometryAdapter]
  * **整体替换** translationX/Y（把图标收进圆内的安全轮廓）。弧要是先加进视觉里，圆屏上

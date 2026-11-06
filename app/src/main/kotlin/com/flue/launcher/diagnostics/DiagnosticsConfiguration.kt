@@ -15,6 +15,7 @@ internal fun diagnosticsConfiguration(vm: LauncherViewModel): Map<String, Any> =
     put("app_list_fisheye_strength_percent", vm.appListFisheyeStrengthPercent.value)
     put("app_list_edge_spacing_compression_enabled", vm.appListEdgeSpacingCompressionEnabled.value)
     put("app_list_left_safe_inset_percent", vm.appListLeftSafeInsetPercent.value)
+    put("app_list_edge_align_enabled", vm.appListEdgeAlignEnabled.value)
     put("app_list_flow_crescent_bulge_percent", vm.appListFlowCrescentBulgePercent.value)
     put("app_list_flow_crescent_to_right", vm.appListFlowCrescentToRight.value)
     put("blur_enabled", vm.blurEnabled.value)

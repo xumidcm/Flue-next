@@ -3,7 +3,7 @@ package com.flue.launcher.watchface.standard
 import java.util.Locale
 
 /**
- * 阶段 2：tag 分桶 + 推模型（`plan-Claude/watchface-precompile-and-canvas.md` §三）。
+ * 阶段 2：tag 分桶 + 推模型（`docs/design/watchface-precompile-and-canvas.md` §三）。
  *
  * 对照 `wf_engine.lua`：clox 把每个 tag 归到一个更新频率桶里，tag 重算后**值真的
  * 变了**才把绑定它的图层推成脏。Flue 是 Canvas 直绘的拉模型，没法只重画一个图层

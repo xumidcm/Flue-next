@@ -34,3 +34,31 @@ pr-body.md
 /honeycomb_main.txt
 /honeycomb_main_utf8.txt
 classes.jar
+
+# Session scratch: local checkouts, patches, one-off inspection output.
+# Never commit these - they may contain third-party source or large binaries.
+/.tmp-*/
+/.dsh-tmp-*/
+/*.patch
+/.tmp-transition-diff.txt
+/.tmp-backup-*.patch
+/.tmp-commit-msg.txt
+
+# Release signing: never commit keys or their passwords.
+# Provide them through keystore.properties (local), Gradle properties, or
+# the FLUE_SIGNING_* environment variables used by CI.
+keystore.properties
+keystore/
+*.jks
+*.keystore
+*.p12
+
+# Internal working notes: kept local, not part of the published tree.
+/plan-Claude/
+/docs/tasks/
+/.codex_untracked_backup_*/
+# Personal agent tooling config
+/.claude/
+
+# Launch checklist: local only
+/docs/OPEN_SOURCE_CHECKLIST.md

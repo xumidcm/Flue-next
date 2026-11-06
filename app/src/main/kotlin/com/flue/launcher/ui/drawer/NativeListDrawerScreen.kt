@@ -51,6 +51,8 @@ import com.flue.launcher.applist.nativeview.NativeDeviceShape
 import com.flue.launcher.applist.nativeview.NativeFisheyePreset
 import com.flue.launcher.applist.nativeview.quantizeNativeBlurRadiusPx
 import com.flue.launcher.applist.nativeview.selectNativeBlurTier
+import com.flue.launcher.applist.nativeview.APP_LIST_EDGE_ALIGN_PADDING_DP
+import com.flue.launcher.applist.nativeview.APP_LIST_EDGE_ALIGN_ROUND_PADDING_DP
 import com.flue.launcher.data.model.AppInfo
 import com.flue.launcher.ui.common.isFlueScreenRound
 import com.flue.launcher.ui.theme.UiStyle
@@ -125,6 +127,10 @@ fun NativeListDrawerScreen(
     blurEnabled: Boolean = true,
     edgeBlurEnabled: Boolean = false,
     suppressHeavyEffects: Boolean = false,
+    transitionBlurRadiusDp: () -> Float = { 0f },
+    transitionAlpha: () -> Float = { 1f },
+    transitionBlurVisible: Boolean = false,
+    transitionActive: Boolean = false,
     fisheyeEnabled: Boolean = true,
     fisheyeRangeRows: Int = 4,
     fisheyeStrengthPercent: Int = 100,
@@ -148,6 +154,11 @@ fun NativeListDrawerScreen(
     entryStaggerEnabled: Boolean = false,
     leftSafeInsetPercent: Int = 0,
     appListScalePercent: Int = 100,
+    /**
+     * 贴边对齐：开启后进入应用列表时首行贴顶、末行贴底，不再把首末行都对齐到
+     * 视口中心。默认关闭，关掉时逐像素等于这个开关加进来之前的行为。
+     */
+    edgeAlignEnabled: Boolean = false,
     entryProgress: Float = 1f,
     /**
      * 转场进行中时，列表自己的底色要让位给外层那块「不缩放的背板」。
@@ -259,6 +270,7 @@ fun NativeListDrawerScreen(
                 entryStaggerEnabled = entryStaggerEnabled,
                 leftSafeInsetPercent = leftSafeInsetPercent,
                 appListScalePercent = appListScalePercent,
+                edgeAlignEnabled = edgeAlignEnabled,
                 iconSizeDp = iconSize.value,
                 appleWatchIconShape = uiStyle == UiStyle.APPLE_WATCH,
                 fisheyeEnabled = fisheyeEnabled,
@@ -304,6 +316,20 @@ fun NativeListDrawerScreen(
             NativeAppListHost(
                 content = projection.content,
                 config = config,
+                transitionBlurRadiusDp = transitionBlurRadiusDp,
+                transitionAlpha = transitionAlpha,
+                transitionBlurEnabled = blurEnabled,
+                transitionBlurVisible = transitionBlurVisible,
+                transitionActive = transitionActive,
+                // Android 12 以下的覆层背景模糊。31+ 由 contentOverlayBlur* /
+                // RenderEffect 负责，这条源在那边根本不会被读取（宿主分支不挂它）。
+                //
+                // 16dp 对齐 31+ 那条路径的核半径（见上面 contentOverlayBlurBucketPx
+                // 的 `16f * density * progress`）：两边取同一个强度，换机才不会一档两样。
+                overlayBlurRadiusDp = { APP_LIST_LEGACY_OVERLAY_BLUR_RADIUS_DP },
+                overlayBlurEnabled = blurEnabled,
+                overlayBlurVisible = overlayProgress > 0.001f,
+                overlayBlurProgress = { overlayProgress },
                 onCreateFolder = { command ->
                     onCreateFolder(command)?.let(::AppItemKey)
                 },
@@ -386,6 +412,18 @@ fun NativeListDrawerScreen(
     }
 }
 
+/**
+ * Android 12 以下覆层（长按菜单 / 文件夹）背景模糊的核半径（dp）。
+ *
+ * 与 31+ 那条 RenderEffect 路径取同一个 16dp 基准（见 [nativeListDrawerConfig]
+ * 里的 `16f * density * progress`），换机才不会一档两样。
+ *
+ * 这个核在旧系统上是**一次烘焙、整段菜单存活期复用**的：菜单展开后画面静止，
+ * 淡入只动清晰/模糊两层的混合权重，不再产生逐帧卷积。所以取值可以比转场那条
+ * 路径（`LEGACY_LIST_MAX_BLUR_RADIUS_DP = 10f`，逐帧重糊）更重一点。
+ */
+private const val APP_LIST_LEGACY_OVERLAY_BLUR_RADIUS_DP = 16f
+
 internal data class NativeListDrawerConfigRequest(
     val density: Float,
     val fontScale: Float,
@@ -399,6 +437,8 @@ internal data class NativeListDrawerConfigRequest(
     val entryStaggerEnabled: Boolean = false,
     val leftSafeInsetPercent: Int,
     val appListScalePercent: Int,
+    /** 贴边对齐开关；默认关闭以保持既有观感（见 [NativeListDrawerScreen]）。 */
+    val edgeAlignEnabled: Boolean = false,
     val iconSizeDp: Float,
     val appleWatchIconShape: Boolean,
     val fisheyeEnabled: Boolean,
@@ -485,6 +525,22 @@ internal fun nativeListDrawerConfig(request: NativeListDrawerConfigRequest): Nat
         density = density,
     ).roundToInt()
     val honeycombNarrowColumns = request.honeycombNarrowColumns.coerceIn(1, 10)
+    /**
+     * 贴边对齐时首末行保留的空白。
+     *
+     * 圆屏这一档给得更宽：同一个 y 在圆屏上对应的弦宽窄得多，方屏那 8dp 在圆屏上
+     * 会让首行两端的图标被弧切掉一角。关掉开关时为 0。
+     */
+    val edgeAlignPaddingPx = if (request.edgeAlignEnabled) {
+        val baseDp = if (request.isRoundDevice) {
+            APP_LIST_EDGE_ALIGN_ROUND_PADDING_DP
+        } else {
+            APP_LIST_EDGE_ALIGN_PADDING_DP
+        }
+        baseDp * density
+    } else {
+        0f
+    }
     // 网格是均匀网格，没有蜂窝那种「窄行 / 宽行」之分，所以列数就是设置里的值，
     // 不能再 +1。以前沿用了蜂窝的 narrow+1 并把下限钳在 2，于是「网格列数」调到
     // 1 时实际渲染出 2 列 —— 设置写 1 却给 2，是老师报的那个对不上。
@@ -645,6 +701,8 @@ internal fun nativeListDrawerConfig(request: NativeListDrawerConfigRequest): Nat
         denseGridMinimumVerticalPaddingPx = denseGridMinimumVerticalPaddingPx,
         denseGridIconInnerPaddingPx = denseGridIconInnerPaddingPx,
         centerEdgeItems = request.presentation == NativeAppListPresentation.LINEAR,
+        edgeAlignEnabled = request.edgeAlignEnabled,
+        edgeAlignPaddingPx = edgeAlignPaddingPx,
         allowFolderCreation = request.allowFolderCreation,
         scrollIndicatorEnabled = request.scrollIndicatorEnabled,
         // 文件夹 / 长按菜单开着时列表不接受起拖。

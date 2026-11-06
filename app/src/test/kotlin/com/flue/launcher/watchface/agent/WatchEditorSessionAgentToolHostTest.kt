@@ -113,6 +113,46 @@ class WatchEditorSessionAgentToolHostTest {
         }
     }
 
+    @Test
+    fun `validateFace does not report invalid_xml on valid watch xml`() = runBlocking {
+        withTemporaryDirectory { root ->
+            WatchEditorSession.createBlank(File(root, "cache")).use { session ->
+                val host = WatchEditorSessionAgentToolHost(session)
+                val validation = host.validateFace(WatchAgentValidateFaceRequest())
+                assertTrue(validation.diagnostics.none { it.code == "invalid_xml" })
+            }
+        }
+    }
+
+    @Test
+    fun `importFaceResource resolves candidates and mirror sync preserves generated images`() = runBlocking {
+        withTemporaryDirectory { root ->
+            val runtimeRoot = File(root, "runtime").toPath()
+            val wsManager = com.flue.launcher.watchface.agent.workspace.WorkspaceManager(runtimeRoot)
+            val workspace = wsManager.create("test-ws", watchScope = "test-scope")
+            val faceDir = wsManager.faceMirrorDirectory(workspace.id, "test-scope")!!
+            val imgDir = faceDir.resolve("images")
+            java.nio.file.Files.createDirectories(imgDir)
+            val testImg = imgDir.resolve("bg.png")
+            java.nio.file.Files.write(testImg, byteArrayOf(137.toByte(), 80, 78, 71, 13, 10, 26, 10))
+
+            WatchEditorSession.createBlank(File(root, "cache")).use { session ->
+                val host = WatchEditorSessionAgentToolHost(
+                    session = session,
+                    workspaceManager = wsManager,
+                    watchScope = "test-scope",
+                )
+                val result = host.importFaceResource("images/bg.png") as Map<*, *>
+                assertEquals("images/bg.png", result["imported"])
+                assertEquals("bg.png", result["name"])
+                assertEquals("images", result["directory"])
+
+                host.syncFaceMirror()
+                assertTrue(java.nio.file.Files.isRegularFile(testImg))
+            }
+        }
+    }
+
     private suspend fun withTemporaryDirectory(block: suspend (File) -> Unit) {
         val root = kotlin.io.path.createTempDirectory("flue-agent-host").toFile()
         try {

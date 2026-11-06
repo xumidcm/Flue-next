@@ -52,6 +52,7 @@
     <string name="agent_clear_key">Clear key</string>
     <string name="agent_test_connection">Test connection</string>
     <string name="agent_saved">Saved</string>
+    <string name="agent_deleted">Deleted</string>
     <string name="agent_key_cleared">Key cleared</string>
     <string name="agent_save_failed">Save failed: %1$s</string>
     <string name="agent_connect_success">Connected; found %1$d models</string>

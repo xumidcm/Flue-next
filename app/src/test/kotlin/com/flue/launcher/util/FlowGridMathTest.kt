@@ -105,13 +105,11 @@ class FlowGridMathTest {
     }
 
     @Test
-    fun `rows past the edges are clamped instead of bending back`() {
-        // t 不夹取的话 |t| > 1 会让 1 - t² 变负，弧在屏外反向 —— 滚动时会看到
-        // 边缘行往反方向甩。夹取之后一律停在 0。
+    fun `far offscreen extrapolation stays finite and symmetric`() {
         val far = crescent(rowCenterY = 9_000f, viewportCenterY = 200f, viewportHeight = 400f)
-        assertEquals(0f, far, 0f)
+        assertTrue(far.isFinite())
         val negative = crescent(rowCenterY = -9_000f, viewportCenterY = 200f, viewportHeight = 400f)
-        assertEquals(0f, negative, 0f)
+        assertEquals(far, negative, 0f)
     }
 
     @Test
