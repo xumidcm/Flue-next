@@ -57,3 +57,5 @@ keystore/
 /plan-Claude/
 /docs/tasks/
 /.codex_untracked_backup_*/
+# Personal agent tooling config
+/.claude/
