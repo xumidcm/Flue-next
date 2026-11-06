@@ -71,6 +71,7 @@ import com.flue.launcher.util.RecentsVisibility
 import com.flue.launcher.watchface.WatchFaceDescriptor
 import com.flue.launcher.watchface.editor.WatchEditorSession
 import com.flue.launcher.watchface.standard.WatchmakerWatchFaceStorage
+import com.flue.launcher.watchface.store.DEFAULT_WATCH_STORE_BASE_URL
 import com.flue.launcher.watchface.store.DEFAULT_WEB_ZOOM_PERCENT
 import com.flue.launcher.watchface.store.WatchStoreUiPreferences
 import com.flue.launcher.watchface.store.WatchStoreUrlPolicy
@@ -940,7 +941,7 @@ class WatchStoreWebActivity : FlueComponentActivity() {
 
         private const val UPLOAD_CACHE_DIRECTORY = "web-uploads"
         private const val DOWNLOAD_CACHE_DIRECTORY = "web-downloads"
-        private const val DEFAULT_FALLBACK_BASE = "https://jbwatchface.ai-life.xyz/api"
+        private val DEFAULT_FALLBACK_BASE: String = DEFAULT_WATCH_STORE_BASE_URL
         private val UPLOAD_MIME_TYPES = arrayOf("application/zip", "application/octet-stream", "*/*")
 
         /** 与 `LauncherViewModel` 的通用表盘包上限一致，跨手表网络 30s 超时也够拉一个包。 */

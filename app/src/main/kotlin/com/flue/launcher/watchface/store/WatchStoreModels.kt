@@ -1,10 +1,17 @@
 package com.flue.launcher.watchface.store
 
 import androidx.compose.runtime.Immutable
+import com.flue.launcher.BuildConfig
 import java.util.Locale
 
-/** Public WatchMaker community-store endpoint used by Flue Next. */
-const val DEFAULT_WATCH_STORE_BASE_URL: String = "https://jbwatchface.ai-life.xyz/api"
+/**
+ * WatchMaker 社区市场的默认地址。
+ *
+ * 默认值指向作者维护的社区服务，但可以在构建时用
+ * `-PflueWatchStoreBaseUrl=https://your-host/api` 覆盖，派生构建不必改源码。
+ * 用户也可以在设置里改成本地记录的地址。
+ */
+val DEFAULT_WATCH_STORE_BASE_URL: String = BuildConfig.WATCH_STORE_BASE_URL
 
 enum class WatchStoreSort(val apiValue: String) {
     LATEST("latest"),

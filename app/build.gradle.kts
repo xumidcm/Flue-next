@@ -50,6 +50,12 @@ android {
         versionCode = 30
         versionName = "2.3.5"
         ndk { abiFilters += listOf("armeabi-v7a", "arm64-v8a") }
+
+        // Default watch-store endpoint. Derivative builds can point it elsewhere
+        // without touching source: -PflueWatchStoreBaseUrl=https://host/api
+        val watchStoreBaseUrl = providers.gradleProperty("flueWatchStoreBaseUrl")
+            .getOrElse("https://jbwatchface.ai-life.xyz/api")
+        buildConfigField("String", "WATCH_STORE_BASE_URL", "\"$watchStoreBaseUrl\"")
     }
 
     signingConfigs {
