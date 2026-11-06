@@ -568,7 +568,7 @@
     <string name="about_community_group_fmt">群号 %s</string>
     <!-- 两个交流群：副标题把两个都列出来，点击后再弹窗问进哪个 -->
     <string name="about_community_groups_fmt">1群 %1$s · 2群 %2$s</string>
-    <string name="about_pick_group_title">加入哪个群？</string>
+    <string name="about_pick_group_title">复制群号后在 QQ 搜索</string>
     <string name="about_pick_group_1_fmt">1群 %s</string>
     <string name="about_pick_group_2_fmt">2群 %s</string>
     <string name="about_join_group">加入交流群获取更新</string>
@@ -576,6 +576,7 @@
     <string name="about_donate_methods">微信 / 支付宝</string>
     <string name="about_open_source">开源项目</string>
     <string name="about_qq_copy_fmt">已复制 QQ：%s</string>
+    <string name="about_group_copy_fmt">已复制群号 %s，请在 QQ 中搜索加入</string>
 
     <!-- 语言页 AI 翻译免责 -->
     <string name="settings_lang_ai_disclaimer_en">English and Japanese translations are AI-generated and may not be fully accurate.</string>

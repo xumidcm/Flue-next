@@ -550,7 +550,7 @@
     <string name="about_author_name">柚子柚子皮</string>
     <string name="about_community_group_fmt">グループ番号 %s</string>
     <string name="about_community_groups_fmt">1群 %1$s · 2群 %2$s</string>
-    <string name="about_pick_group_title">どちらのグループに参加しますか？</string>
+    <string name="about_pick_group_title">番号をコピーして QQ で検索</string>
     <string name="about_pick_group_1_fmt">1群 %s</string>
     <string name="about_pick_group_2_fmt">2群 %s</string>
     <string name="about_join_group">コミュニティに参加してアップデートを受け取る</string>
@@ -558,6 +558,7 @@
     <string name="about_donate_methods">WeChat / Alipay</string>
     <string name="about_open_source">オープンソースプロジェクト</string>
     <string name="about_qq_copy_fmt">QQ をコピーしました：%s</string>
+    <string name="about_group_copy_fmt">グループ番号をコピーしました：%s（QQ で検索して参加）</string>
 
     <!-- 言語の AI 翻訳免責 -->
     <string name="settings_lang_ai_disclaimer_en">English and Japanese translations are AI-generated and may not be fully accurate.</string>

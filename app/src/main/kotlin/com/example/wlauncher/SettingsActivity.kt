@@ -314,8 +314,6 @@ private const val COMMUNITY_GROUP_2_NUMBER = "318567840"
 private const val AUTHOR_QQ_NUMBER = "3513903055"
 private const val AUTHOR_BILIBILI_URL = "https://m.bilibili.com/space/1609437970"
 private const val DIAGNOSTIC_LOG_DURATION_MS = 5 * 60 * 1000L
-private const val COMMUNITY_GROUP_URL = "https://qun.qq.com/universal-share/share?ac=1&authKey=5CJC0tNLWsy3YWzGlPbqt%2F5kv%2BYZuJ8y8IVj%2B1UnIeLyR2DWR6QjWtM%2B4HXxH%2BKJ&busi_data=eyJncm91cENvZGUiOiIxMDk3MTYyMzEzIiwidG9rZW4iOiJlMGFBc1VpRXRROE1mS3J5SHgxRjFudmxXY0FuSnRQd2hOWWl6WllFMmlxNTErNWdadXJ5U1ozMmdzUSszaGNYIiwidWluIjoiMzUxMzkwMzA1NSJ9&data=YK52b80xUVwmcLWmSneKQMdVZodE4vTpsqmSb60ykXudbVCfa6AskMHxvqjhAjervNeE4exll-kQw5w-EifYOg&svctype=4&tempid=h5_group_info"
-private const val COMMUNITY_GROUP_2_URL = "https://qun.qq.com/universal-share/share?ac=1&authKey=spcEQr%2BR5%2FAmPOgZLwr7KBY8lUvLLbmtdM5S3R0%2B5XQxXstNLi9Mva0iYjSEb9EF&busi_data=eyJncm91cENvZGUiOiIzMTg1Njc4NDAiLCJ0b2tlbiI6IklKWS9Oem5rTnprYzNGRk11b2Y2enJsYndmcnBSbkxKR3VCTG5iZU5hT002dUgwY2UrVWtjNko1eENqQUc2eVYiLCJ1aW4iOiIzNTEzOTAzMDU1In0%3D&data=BznFA0OAqJXrk3P5fs7aS_sBabcZjAqFIwZhPfvGtg2uwsc1DBW5f13txNH0dG_mOJBpV3N40r1Bw6vL3wBr7g&svctype=4&tempid=h5_group_info"
 const val EXTRA_SETTINGS_DESTINATION = "settings_destination"
 const val EXTRA_SETTINGS_RETURN_TO_FACE = "settings_return_to_face"
 const val SETTINGS_DESTINATION_WATCH_FACES = "watch_faces"
@@ -6800,23 +6798,29 @@ private fun AboutCard(
     // 两个交流群的选择弹窗。做成弹窗而不是并排两张卡：关于页在 230dp 圆屏上已经很挤，
     // 多一张卡就要多滚一屏，而「进哪个群」是个二选一的一次性决定，弹窗更合适。
     var groupPickerVisible by remember { mutableStateOf(false) }
-    fun openGroup(url: String) {
+    // QQ 的邀请链接带一次性 authKey，发到群里或用久了就会失效，所以只留群号：
+    // 点一下复制，用户自己在 QQ 里搜索。和作者 QQ 用的是同一套交互。
+    fun copyGroupNumber(number: String) {
         groupPickerVisible = false
-        runCatching {
-            context.startActivity(Intent(Intent.ACTION_VIEW, android.net.Uri.parse(url)))
-        }
+        val clipboard = context.getSystemService(ClipboardManager::class.java)
+        clipboard?.setPrimaryClip(ClipData.newPlainText("QQ", number))
+        Toast.makeText(
+            context,
+            context.getString(R.string.about_group_copy_fmt, number),
+            Toast.LENGTH_SHORT,
+        ).show()
     }
     if (groupPickerVisible) {
         FlueAlertDialog(
             onDismissRequest = { groupPickerVisible = false },
             title = { Text(stringResource(R.string.about_pick_group_title)) },
             confirmButton = {
-                TextButton(onClick = { openGroup(COMMUNITY_GROUP_URL) }) {
+                TextButton(onClick = { copyGroupNumber(COMMUNITY_GROUP_NUMBER) }) {
                     Text(stringResource(R.string.about_pick_group_1_fmt, COMMUNITY_GROUP_NUMBER))
                 }
             },
             dismissButton = {
-                TextButton(onClick = { openGroup(COMMUNITY_GROUP_2_URL) }) {
+                TextButton(onClick = { copyGroupNumber(COMMUNITY_GROUP_2_NUMBER) }) {
                     Text(stringResource(R.string.about_pick_group_2_fmt, COMMUNITY_GROUP_2_NUMBER))
                 }
             },

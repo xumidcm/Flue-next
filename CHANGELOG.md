@@ -13,6 +13,7 @@
 - 仓库以 GPL-3.0 开源，补充 `LICENSE`、`THIRD_PARTY_NOTICES.md`、`CONTRIBUTING.md`、`SECURITY.md`
 - 发布签名不再进入版本库：`keystore.properties` 与密钥文件改为本地文件 + CI Secrets 注入
 - 表盘市场的默认地址改为构建期可覆盖：`-PflueWatchStoreBaseUrl=https://your-host/api`
+- 关于页的交流群入口改为复制群号（原来的邀请链接带一次性 `authKey`，会失效）
 
 ### 移除
 

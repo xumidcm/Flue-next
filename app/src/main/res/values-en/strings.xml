@@ -561,7 +561,7 @@
     <string name="about_author_name">柚子柚子皮</string>
     <string name="about_community_group_fmt">Group: %s</string>
     <string name="about_community_groups_fmt">Group 1: %1$s · Group 2: %2$s</string>
-    <string name="about_pick_group_title">Which group?</string>
+    <string name="about_pick_group_title">Copy the number, then search in QQ</string>
     <string name="about_pick_group_1_fmt">Group 1 · %s</string>
     <string name="about_pick_group_2_fmt">Group 2 · %s</string>
     <string name="about_join_group">Join the community for updates</string>
@@ -569,6 +569,7 @@
     <string name="about_donate_methods">WeChat / Alipay</string>
     <string name="about_open_source">Open-source projects</string>
     <string name="about_qq_copy_fmt">QQ copied: %s</string>
+    <string name="about_group_copy_fmt">Group number copied: %s — search for it in QQ to join</string>
 
     <!-- Language AI disclaimer -->
     <string name="settings_lang_ai_disclaimer_en">English and Japanese translations are AI-generated and may not be fully accurate.</string>
