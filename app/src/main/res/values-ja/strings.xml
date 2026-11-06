@@ -9,7 +9,7 @@
     <string name="settings_title">ランチャー設定</string>
     <string name="internal_watchface_config_title">内蔵文字盤設定</string>
     <string name="flue_accessibility_label">Flue アクセシビリティ制御</string>
-    <string name="flue_accessibility_description">この権限はダブルタップ画面ロックと電源オプションの表示にのみ使用されます。Flueはインターネットに接続せず、ユーザー情報を収集しません。</string>
+    <string name="flue_accessibility_description">この権限はダブルタップ画面ロックと電源オプションの表示にのみ使用されます。画面の内容を読み取ることはなく、入力も収集しません。</string>
     <string name="flue_device_admin_description">Android 8.1 では、ダブルタップ画面ロックにのみこの権限を使用します。端末データの消去やロック画面パスワードの変更はできません。</string>
 
     <!-- 汎用 -->

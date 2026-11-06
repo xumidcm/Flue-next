@@ -9,7 +9,7 @@
     <string name="settings_title">Launcher Settings</string>
     <string name="internal_watchface_config_title">Built-in Watch Face Settings</string>
     <string name="flue_accessibility_label">Flue Accessibility Control</string>
-    <string name="flue_accessibility_description">This permission is used only to control double-tap screen lock and open power options. Flue does not connect to the internet and does not collect any user data.</string>
+    <string name="flue_accessibility_description">This permission is used only to control double-tap screen lock and open power options. It cannot read on-screen content and does not collect input.</string>
     <string name="flue_device_admin_description">On Android 8.1, this permission is used only for double-tap screen lock. It cannot erase device data or change the lock-screen password.</string>
 
     <!-- General -->

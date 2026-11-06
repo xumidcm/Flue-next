@@ -9,7 +9,7 @@
     <string name="settings_title">桌面设置</string>
     <string name="internal_watchface_config_title">内置表盘设置</string>
     <string name="flue_accessibility_label">Flue 辅助控制</string>
-    <string name="flue_accessibility_description">该权限仅用于控制双击息屏与打开电源选项。Flue并不联网，不会窃取用户任何信息。</string>
+    <string name="flue_accessibility_description">该权限仅用于控制双击息屏与打开电源选项，不会读取屏幕内容，也不会收集输入。</string>
     <string name="flue_device_admin_description">Android 8.1 仅使用此权限执行双击息屏，不会擦除设备数据或更改锁屏密码。</string>
 
     <!-- 通用 -->
